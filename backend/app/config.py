@@ -1,0 +1,52 @@
+"""ForgeSight 后端配置。所有环境相关取值只允许来自 .env，禁止硬编码。"""
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    business_db_url: str
+    platform_db_url: str
+    admin_db_url: str = ""
+
+    llm_base_url: str = "https://api.deepseek.com"
+    llm_api_key: str = ""
+    llm_model: str = "deepseek-chat"
+    llm_timeout_seconds: int = 60
+    llm_proxy_url: str = ""
+
+    agent_max_llm_calls: int = 12
+    agent_max_retry_calls: int = 3
+    agent_max_input_tokens: int = 120000
+    agent_max_output_tokens: int = 16000
+    agent_max_total_tokens: int = 136000
+    agent_max_estimated_cost: float = 10.0
+    agent_max_duration_seconds: int = 300
+    agent_worker_enabled: bool = True
+    agent_worker_poll_seconds: float = 0.75
+    agent_worker_lease_seconds: int = 60
+
+    sql_max_rows: int = 10000
+    sql_timeout_seconds: int = 30
+    sql_explain_enabled: bool = True
+    sql_explain_max_estimated_rows: int = 500000
+    sql_explain_max_cost: float = 100000.0
+
+    feishu_webhook_url: str = ""
+    feishu_webhook_secret: str = ""
+    public_app_url: str = "http://127.0.0.1:3001"
+
+    cors_origins: str = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:3001,http://127.0.0.1:3001,"
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:5174,http://127.0.0.1:5174"
+    )
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+
+settings = Settings()

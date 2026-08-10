@@ -1,0 +1,115 @@
+"""阶段 5F：复杂指代与合并澄清。"""
+
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+from app.agent.intent import build_intent_plan, build_request_route, classify_request_kind
+
+
+def test_obvious_smalltalk_is_routed_away_from_analysis():
+    assert classify_request_kind("你好") == "conversation"
+    assert classify_request_kind("谢谢你") == "conversation"
+    assert classify_request_kind("你能做什么？") == "conversation"
+    assert classify_request_kind("明年下雨吗") == "conversation"
+    assert classify_request_kind("分析最近 7 天的工序良率") == "analysis"
+    assert classify_request_kind("什么是工序良率") == "analysis"
+
+
+def test_mixed_request_keeps_only_business_segments_for_analysis():
+    route = build_request_route("你好；请统计最近 7 天的产量趋势；谢谢你")
+
+    assert route["kind"] == "mixed"
+    assert route["analysisQuestion"] == "请统计最近 7 天的产量趋势"
+    assert [item["kind"] for item in route["segments"]] == ["conversation", "analysis", "conversation"]
+    assert route["conversationResponse"] == "你好。"
+
+
+def test_dependent_reference_is_bound_to_previous_task():
+    plan = build_intent_plan("先找良率最低的工序，再分析它的缺陷类型")
+
+    assert plan["clarification"] is None
+    assert len(plan["tasks"]) == 2
+    assert plan["tasks"][1]["mode"] == "dependent"
+    assert plan["tasks"][1]["dependsOn"] == [plan["tasks"][0]["id"]]
+    assert "上一步结果中的对象" in plan["tasks"][1]["normalizedQuestion"]
+
+
+def test_vague_follow_up_merges_object_and_time_clarification():
+    history = [
+        {"role": "user", "content": "比较设备停机时长和各工序良率"},
+        {"role": "assistant", "content": "分析完成"},
+    ]
+    plan = build_intent_plan("看看它最近怎么样", history)
+
+    assert plan["tasks"] == []
+    assert [field["id"] for field in plan["clarification"]["fields"]] == ["object", "timeRange"]
+    object_values = {item["value"] for item in plan["clarification"]["fields"][0]["options"]}
+    assert {"设备", "工序"}.issubset(object_values)
+
+
+def test_merged_clarification_answers_resolve_to_one_executable_task():
+    history = [{"role": "user", "content": "比较设备停机时长和各工序良率"}]
+    plan = build_intent_plan(
+        "看看它最近怎么样",
+        history,
+        {"object": "设备", "timeRange": "最近 30 天"},
+    )
+
+    assert plan["clarification"] is None
+    assert len(plan["tasks"]) == 1
+    assert "设备" in plan["tasks"][0]["normalizedQuestion"]
+    assert "最近 30 天" in plan["tasks"][0]["normalizedQuestion"]
+
+
+def test_current_month_is_time_not_an_object_reference():
+    history = [{"role": "user", "content": "查看不良数量最高的 4 个产品"}]
+
+    plan = build_intent_plan("使用折线图展示这个月的不良品数量", history)
+
+    assert plan["clarification"] is None
+    task = plan["tasks"][0]
+    assert task["normalizedQuestion"] == "使用折线图展示这个月的不良品数量"
+    assert task["analysisType"] == "trend"
+    assert task["requestedChart"] == "line"
+    assert task["timeConstraint"] == {
+        "kind": "current_month",
+        "label": "本月至今",
+        "timeGrain": "day",
+    }
+    assert task["groupBy"] == []
+
+
+def test_current_and_previous_month_resolve_to_two_explicit_periods():
+    task = build_intent_plan("这个月和上个月的良率比较")["tasks"][0]
+    constraint = task["timeConstraint"]
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    current_start = today.replace(day=1)
+    previous_start = (current_start - timedelta(days=1)).replace(day=1)
+
+    assert constraint["kind"] == "current_vs_previous_month"
+    assert constraint["referenceDate"] == today.isoformat()
+    assert constraint["comparisonBasis"] == "本月至今对比上月整月"
+    assert constraint["periods"] == [
+        {
+            "key": "current",
+            "label": f"{current_start:%Y-%m}（本月至今）",
+            "startInclusive": current_start.isoformat(),
+            "endExclusive": (today + timedelta(days=1)).isoformat(),
+        },
+        {
+            "key": "previous",
+            "label": f"{previous_start:%Y-%m}（上月）",
+            "startInclusive": previous_start.isoformat(),
+            "endExclusive": current_start.isoformat(),
+        },
+    ]
+
+
+def test_extracts_combo_and_heatmap_chart_preferences():
+    combo = build_intent_plan("用双轴图比较各产线产量和不良率")["tasks"][0]
+    heatmap = build_intent_plan("用热力图展示工序和缺陷类型的分布")["tasks"][0]
+
+    assert combo["requestedChart"] == "combo"
+    assert combo["analysisType"] == "comparison"
+    assert heatmap["requestedChart"] == "heatmap"
+    assert heatmap["analysisType"] == "comparison"

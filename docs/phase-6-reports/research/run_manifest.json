@@ -1,0 +1,11 @@
+{
+  "query": "制造业周报由谁制作、通常包含什么，以及 ForgeSight 阶段六如何设计",
+  "mode": "standard",
+  "date": "2026-07-23",
+  "assumptions": [
+    "ForgeSight 仅区分业务人员端和管理员端",
+    "阶段六复用阶段五 Agent、Artifact、SSE、证据链与重试能力",
+    "机器学习建模报告不在本阶段范围"
+  ],
+  "source_policy": "优先使用标准组织及产品厂商官方文档"
+}

@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Production and test output
+dist/
+build/
+coverage/
+.vite/
+.cache/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Logs and runtime files
+*.log
+logs/
+*.pid
+*.pid.lock
+
+# Local tool configuration
+.claude/
+.codex/
+
+# Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak

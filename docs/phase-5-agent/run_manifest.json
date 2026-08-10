@@ -1,0 +1,13 @@
+{
+  "research_task": "ForgeSight phase 5 agent closed-loop architecture, frontend state protocol and checkpoint branching design",
+  "created_at": "2026-07-22T15:00:00+08:00",
+  "scope": {
+    "included": ["DataFoundry local architecture audit", "LangGraph", "AG-UI", "DB-GPT", "ForgeSight frontend-new and backend contract alignment"],
+    "excluded": ["machine learning modeling", "stage 6 report orchestration", "multi-agent execution"]
+  },
+  "outputs": ["PHASE5_AGENT_ANALYSIS_DESIGN.md", "sources.jsonl", "evidence.jsonl", "claims.jsonl"],
+  "primary_sources_only": true,
+  "reference_repositories_root": "D:/aaa/a-外包/agent-architecture-references",
+  "architecture_decision": "Use LangGraph with PostgreSQL checkpointing for internal orchestration; keep ForgeSight domain events, artifacts, security, source isolation and frontend contracts application-owned.",
+  "intent_scope": ["single", "compound", "multi_parallel", "multi_sequential", "follow_up", "active clarification"]
+}

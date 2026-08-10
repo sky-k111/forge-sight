@@ -1,0 +1,9 @@
+{"claim_id":"C01","claim":"制造报告的业务所有者应是生产、质量、设备等业务负责人，管理员只负责治理。","support":["oracle-supervisor-report","oracle-production-supervision"],"status":"supported"}
+{"claim_id":"C02","claim":"报告需同时包含 KPI、偏差、异常、解释、行动和证据，而不只是图表。","support":["oracle-supervisor-report","sap-advanced-analytics","siemens-opcenter"],"status":"supported"}
+{"claim_id":"C03","claim":"指标应冻结公式、时间行为、单位、维度、目标和适用角色。","support":["iso-22400-1","iso-22400-2","tableau-pulse"],"status":"supported"}
+{"claim_id":"C04","claim":"定时生成、刷新感知、分发、权限、日志和失败管理是周期报告的基础能力。","support":["powerbi-subscription","tableau-subscription","quickbi-subscription"],"status":"supported"}
+{"claim_id":"C05","claim":"AI 应负责摘要和归纳，但数字必须来自结构化查询和可追溯证据。","support":["powerbi-copilot-summary","tableau-pulse","quickbi-ai-interpretation"],"status":"supported"}
+{"claim_id":"C06","claim":"ForgeSight 应复用阶段五问析能力，以章节为单位编排报告。","support":["local-phase5-design"],"status":"local_design"}
+{"claim_id":"C07","claim":"一份报告默认绑定单个数据源，并在切换数据源时重新验证模板覆盖。","support":["local-knowledge-architecture","iso-22400-2"],"status":"design_recommendation"}
+{"claim_id":"C08","claim":"已发布报告必须版本冻结，不能被后续口径或数据刷新静默覆盖。","support":["powerbi-subscription","tableau-pulse"],"status":"design_recommendation"}
+{"claim_id":"C09","claim":"第一版外部推送采用飞书群自定义机器人，并将 Webhook 与签名密钥限制在服务端。","support":["feishu-custom-bot"],"status":"implemented_design"}

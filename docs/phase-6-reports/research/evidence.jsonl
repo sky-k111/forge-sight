@@ -1,0 +1,16 @@
+{"source_id":"oracle-supervisor-report","locator":"lines 31-34","evidence":"生产主管记录交接说明、生成班次报告，并可用生成式 AI 形成班次摘要。"}
+{"source_id":"oracle-supervisor-report","locator":"lines 20-25, 32-35","evidence":"报告涉及计划、完成、拒收、报废、产出、良率、异常和 OEE。"}
+{"source_id":"oracle-production-supervision","locator":"overview","evidence":"生产主管需要报告班次活动，并向相关人员完成交接和问题跟进。"}
+{"source_id":"iso-22400-1","locator":"abstract","evidence":"ISO 22400 提供制造运营 KPI 的定义、构成、交换和使用框架。"}
+{"source_id":"iso-22400-2","locator":"abstract","evidence":"KPI 描述包括公式、元素、时间行为、单位、用户组和生产方法。"}
+{"source_id":"sap-dm-insights","locator":"product overview","evidence":"制造分析覆盖工厂、产线、工作中心和资源层级，并区分实时与历史分析。"}
+{"source_id":"sap-advanced-analytics","locator":"product overview","evidence":"OEE 分析围绕可用性、性能和质量损失进行贡献者下钻。"}
+{"source_id":"siemens-opcenter","locator":"product overview","evidence":"制造数据被聚合成带上下文的信息，用于质量、吞吐、OEE 和资源优化。"}
+{"source_id":"powerbi-subscription","locator":"subscription options","evidence":"支持周期或刷新后发送快照、链接及 PDF/PPT，并受权限和敏感度策略约束。"}
+{"source_id":"powerbi-copilot-summary","locator":"subscription summary","evidence":"Copilot 摘要会随订阅周期和数据变化，并与报告附件或链接共同发送。"}
+{"source_id":"tableau-pulse","locator":"lines 6-44","evidence":"指标定义是单一真相源，摘要呈现趋势、异常和变化并支持继续探索。"}
+{"source_id":"tableau-subscription","locator":"subscription schedule","evidence":"支持按计划或数据刷新发送视图/工作簿的图像或 PDF 快照。"}
+{"source_id":"quickbi-subscription","locator":"lines 28-56","evidence":"支持定时将截图、链接、Excel/PDF 推送至邮件、钉钉、企微、飞书或 Webhook。"}
+{"source_id":"quickbi-ai-interpretation","locator":"lines 73-102","evidence":"AI 解读可配置范围、知识库、分析思路、模型、触发周期和推送渠道。"}
+{"source_id":"ibm-maximo","locator":"lines 131-168","evidence":"设备管理报告覆盖资产健康、工单趋势、维护历史、成本、合规和导出。"}
+{"source_id":"feishu-custom-bot","locator":"创建机器人、消息卡片与安全设置章节","evidence":"飞书群自定义机器人通过 Webhook 接收外部通知，支持交互式卡片，并可使用关键词、IP 白名单和安全密钥保护。"}

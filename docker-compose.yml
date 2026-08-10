@@ -1,0 +1,39 @@
+# ForgeSight 本地开发数据库（MySQL 业务库 + PostgreSQL 平台库）
+# 密码为本地开发用默认值，与 backend/.env 保持一致；部署环境请修改。
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: forgesight-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-forgesight_root}
+    ports:
+      # 3306 已被本机旧项目 mysql:5.7 容器占用，改用 3307
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-forgesight_root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  postgres:
+    # PG16 满足项目 PostgreSQL 14+ 要求；本机已有该镜像（educanvas-db 在用），免下载
+    image: pgvector/pgvector:pg16
+    container_name: forgesight-postgres
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forgesight_app}
+    ports:
+      # 5432 已被本机 educanvas-db (pg16) 容器映射占用，改用 5433
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  mysql_data:
+  postgres_data:
