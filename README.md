@@ -116,6 +116,18 @@ npm run dev    # http://127.0.0.1:5173
 
 浏览器打开 http://127.0.0.1:5173 即可使用；后端接口文档见 http://127.0.0.1:8000/docs。
 
+### 6. 一键启动（推荐）
+
+```bash
+.\fs.bat                  # 或 .\scripts\forge-sight.ps1：数据库 + 后端 + 前端 三个窗口
+.\fs.bat -Backend         # 只启后端
+.\fs.bat -Frontend        # 只启前端
+.\fs.bat -SkipDb          # 数据库已在运行，跳过
+.\fs.bat -Stop            # 停止后端与前端（数据库容器保留）
+```
+
+首次运行会自动安装前端依赖；若 docker 容器名被旧项目占用，脚本会自动回退直接启动已有容器（数据保留）。
+
 > 认证说明：系统为**渐进式认证**——未登录时直接以演示模式使用（数据归属 `local-test-user`）；登录后数据按用户隔离。启动时自动创建种子管理员 **`admin` / `admin123`**（生产请在 `backend/.env` 配置 `AUTH_ADMIN_PASSWORD` 修改），注册用户默认 `business` 角色。
 
 ## 📁 项目结构
