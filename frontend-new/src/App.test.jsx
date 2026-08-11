@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { vi } from "vitest";
 import App from "./App";
 import { businessObjects, businessRules, businessTopics, metrics } from "./mocks/data";
@@ -37,6 +37,7 @@ let analysisRuns;
 beforeEach(() => {
   window.history.replaceState({}, "", "/workspace/overview");
   window.sessionStorage.clear();
+  window.localStorage.clear();
   analysisRuns = { "run-real": makeAnalysisSnapshot() };
   // 资源中心与安全审计已接真实后端，测试环境统一打桩 /api/*，避免依赖本机服务
   vi.stubGlobal("fetch", vi.fn((url, options) => {
@@ -59,6 +60,23 @@ beforeEach(() => {
       if (/最近良率/.test(question)) snapshot = {
         ...snapshot, status: "waiting_user", assistantMessage: null,
         interaction: { id: `${id}-interaction`, prompt: { question: "请选择本次良率统计口径。", options: [{ label: "本月至今 · 按工序统计", value: "M-001" }], allowCustom: true } },
+      };
+      if (/识别高不良|预测|建模/.test(question)) snapshot = {
+        ...makeAnalysisSnapshot({ id, question, status: "modeling-proposal" }),
+        proposal: {
+          title: "工序产量表·分类预测模型",
+          taskType: "classification",
+          taskTypeLabel: "分类预测",
+          goal: question,
+          dataset: "工序产量表",
+          datasetSql: "SELECT `工序`, `产线`, `停机时长`, `计划数量`, `high_defect_risk` FROM `mes_process_output` LIMIT 10000",
+          sampleCount: 2752,
+          target: "high_defect_risk",
+          targetLabel: "高风险标记",
+          metric: "AUC / F1 / Precision / Recall",
+          features: ["工序", "产线", "停机时长", "计划数量"],
+          candidates: ["logistic", "tree", "forest"],
+        },
       };
       analysisRuns[id] = snapshot;
       return okJson({ runId: id, sessionId: "ses-real", status: "queued" });
@@ -114,6 +132,94 @@ beforeEach(() => {
     if (u.includes("/api/knowledge/objects")) return okJson(businessObjects);
     if (u.includes("/api/knowledge/rules")) return okJson(businessRules);
     if (u.includes("/api/knowledge/metrics")) return okJson(metrics);
+    // 智能建模与模型治理已接真实后端，测试统一打桩 /api/v1/modeling/*
+    if (u.includes("/api/v1/modeling/algorithms")) {
+      return okJson({
+        items: [
+          { id: "linear", name: "线性回归", type: "数值预测", scene: "预测产量、停机时长", accent: "blue", family: "regression" },
+          { id: "tree", name: "决策树", type: "分类/回归", scene: "可解释规则与阈值分析", accent: "teal", family: "tree" },
+          { id: "forest", name: "随机森林", type: "分类/回归", scene: "稳健的集成预测与重要性", accent: "violet", family: "forest" },
+          { id: "logistic", name: "逻辑回归", type: "二分类", scene: "风险识别、是否判定", accent: "amber", family: "logistic" },
+          { id: "kmeans", name: "KMeans 聚类", type: "聚类", scene: "样本分组与模式发现", accent: "rose", family: "clustering" },
+          { id: "isolation", name: "Isolation Forest", type: "异常检测", scene: "离群点与异常识别", accent: "indigo", family: "anomaly" },
+        ],
+      });
+    }
+    if (u.includes("/api/v1/modeling/tasks") && method === "POST") {
+      const body = JSON.parse(options?.body ?? "{}");
+      return okJson({
+        id: "mt-proposal", title: body.title ?? "建模任务", source: "agent", sourceLabel: "Agent 创建", owner: body.ownerId ?? "local-test-user",
+        taskType: body.taskType ?? "classification", taskTypeLabel: "分类预测", status: "draft", statusLabel: "待训练", tone: "gray",
+        updatedAt: "2026-07-16T10:32:00", goal: body.goal ?? "",
+        dataset: body.datasetName ?? "", datasetLabel: body.datasetName ?? "", sampleCount: null, sampleSummary: "",
+        targetLabel: body.targetLabel ?? "", targetField: body.targetField ?? "",
+        features: body.features ?? [], candidates: body.candidates ?? [],
+        selectedModel: null, selectedModelName: null, metric: null, runId: body.runId ?? null,
+      });
+    }
+    if (/\/api\/v1\/modeling\/tasks\/[^/]+\/evaluation$/.test(u) && method === "GET") {
+      return okJson({
+        models: [
+          { algorithm: "logistic", name: "逻辑回归", family: "classification", metrics: { auc: 0.958, f1: 0.872, precision: 82.9, recall: 91.8 }, featureImportance: [] },
+          { algorithm: "tree", name: "决策树", family: "classification", metrics: { auc: 0.931, f1: 0.85, precision: 80.2, recall: 89.4 }, featureImportance: [{ name: "停机时长", importance: 42.3 }, { name: "工序", importance: 31.1 }] },
+          { algorithm: "forest", name: "随机森林", family: "classification", metrics: { auc: 0.986, f1: 0.892, precision: 82.9, recall: 96.5 }, featureImportance: [{ name: "工序", importance: 38.0 }, { name: "停机时长", importance: 35.2 }, { name: "产线", importance: 26.8 }] },
+        ],
+        recommendedModel: "forest",
+        data: { sampleCount: 2752, trainCount: 2200, testCount: 552, features: ["工序", "产线", "停机时长", "计划数量"], targetField: "high_defect_risk", missingPolicy: "中位数填充", encodedFeatures: ["工序", "产线"] },
+      });
+    }
+    if (u.includes("/api/v1/modeling/tasks") && method === "GET") {
+      return okJson({
+        items: [{
+          id: "mt-demo", title: "高风险生产记录识别", source: "agent", sourceLabel: "Agent 创建", owner: "local-test-user",
+          taskType: "classification", taskTypeLabel: "分类预测", status: "trained", statusLabel: "训练完成", tone: "green",
+          updatedAt: "2026-07-16T10:32:00", goal: "识别高不良风险的生产记录",
+          dataset: "工序产量表", datasetLabel: "工序产量表", sampleCount: 2752, sampleSummary: "高风险样本 851 个",
+          targetLabel: "高风险标记", targetField: "high_defect_risk",
+          features: ["工序", "产线", "停机时长", "计划数量"], candidates: ["logistic", "tree", "forest"],
+          selectedModel: "forest", selectedModelName: "随机森林", metric: "AUC 0.986", runId: null,
+        }],
+      });
+    }
+    if (u.includes("/api/v1/model-governance/models")) {
+      return okJson({
+        items: [{
+          id: "mdl-1", taskId: "mt-demo", name: "高风险生产记录识别模型", version: "1", algorithm: "forest", algorithmName: "随机森林",
+          owner: "local-test-user", dataset: "工序产量表", metric: "AUC 0.986", metrics: { auc: 0.986 },
+          status: "pending", statusLabel: "待复核", tone: "gray", calls: 0, updatedAt: "2026-07-16T10:32:00",
+        }],
+      });
+    }
+    if (u.endsWith("/api/auth/login") && method === "POST") {
+      const body = JSON.parse(options?.body ?? "{}");
+      const isAdmin = body.username === "admin";
+      return okJson({
+        token: "token-demo",
+        user: {
+          id: isAdmin ? "u-admin" : "u-1",
+          username: body.username,
+          displayName: isAdmin ? "林涛" : "张三",
+          role: isAdmin ? "admin" : "business",
+          title: isAdmin ? "系统管理员" : "业务人员",
+        },
+      });
+    }
+    if (u.endsWith("/api/auth/register") && method === "POST") {
+      const body = JSON.parse(options?.body ?? "{}");
+      return okJson({
+        token: "token-demo",
+        user: {
+          id: "u-reg", username: body.username, displayName: body.displayName || body.username,
+          role: "business", title: "业务人员",
+        },
+      });
+    }
+    if (u.endsWith("/api/auth/me") && method === "GET") {
+      const cached = window.localStorage.getItem("forgesight:auth-user");
+      if (cached) return okJson({ user: JSON.parse(cached) });
+      return Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({ detail: "请先登录" }) });
+    }
+    if (u.endsWith("/api/auth/logout") && method === "POST") return okJson({ ok: true });
     return okJson([]);
   }));
 });
@@ -350,6 +456,20 @@ describe("ForgeSight application routes", () => {
     expect(screen.getByText("指定算法")).toBeTruthy();
   });
 
+  test("creates a modeling task from the agent proposal and stores the workspace draft", async () => {
+    window.history.replaceState({}, "", "/workspace/analysis");
+    render(<App />);
+    await screen.findByText(/2,752/, {}, { timeout: 3000 });
+    const textarea = screen.getByPlaceholderText(/用业务语言/);
+    fireEvent.change(textarea, { target: { value: "识别高不良风险的生产记录" } });
+    fireEvent.submit(textarea.closest("form"));
+    expect(await screen.findByText("AGENT 建模方案", {}, { timeout: 3000 })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "确认并创建任务" }));
+    expect(await screen.findByText("已进入任务台", {}, { timeout: 3000 })).toBeTruthy();
+    const draft = JSON.parse(window.sessionStorage.getItem("forgesight:modeling-draft") ?? "null");
+    expect(draft?.taskId).toBe("mt-proposal");
+  });
+
   test("opens model governance from the administrator workspace", async () => {
     window.history.replaceState({}, "", "/admin/models");
     render(<App />);
@@ -544,4 +664,141 @@ describe("ForgeSight application routes", () => {
     expect(await screen.findByText("已拦截本次请求", {}, { timeout: 3000 })).toBeTruthy();
     expect(screen.getByText(/仅支持只读分析/)).toBeTruthy();
   }, 10000);
+});
+
+describe("用户注册登录（渐进式认证）", () => {
+  test("renders the login page on /login", async () => {
+    window.history.replaceState({}, "", "/login");
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "ForgeSight 企业数据底座" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "登录" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "登录" })).toBeTruthy();
+    expect(screen.getByPlaceholderText(/3-30 位字母/)).toBeTruthy();
+    expect(window.localStorage.getItem("forgesight:auth-token")).toBeNull();
+  });
+
+  test("logs in, persists token, and lands on the business workspace", async () => {
+    window.history.replaceState({}, "", "/login");
+    render(<App />);
+
+    fireEvent.change(await screen.findByPlaceholderText(/3-30 位字母/), { target: { value: "zhangsan" } });
+    fireEvent.change(screen.getByPlaceholderText("至少 6 位"), { target: { value: "pass1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/workspace/overview"));
+    expect(window.localStorage.getItem("forgesight:auth-token")).toBe("token-demo");
+    expect(JSON.parse(window.localStorage.getItem("forgesight:auth-user")).username).toBe("zhangsan");
+    // 等待业务工作台真正渲染（AppShell 挂载），而非 LoginPage 上的「当前已登录」提示文本
+    expect(await screen.findByRole("heading", { name: "分析总览" })).toBeTruthy();
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/analysis/sessions?userId=zhangsan"),
+        expect.any(Object),
+      );
+    });
+  });
+
+  test("registers a business account and lands on the business workspace", async () => {
+    window.history.replaceState({}, "", "/login");
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "注册" }));
+    fireEvent.change(await screen.findByPlaceholderText(/3-30 位字母/), { target: { value: "lisi" } });
+    fireEvent.change(screen.getByPlaceholderText("至少 6 位"), { target: { value: "pass1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "注册并登录" }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/workspace/overview"));
+    expect(JSON.parse(window.localStorage.getItem("forgesight:auth-user")).role).toBe("business");
+  });
+
+  test("blocks a business user from /admin/* and redirects to the workspace", async () => {
+    window.localStorage.setItem(
+      "forgesight:auth-user",
+      JSON.stringify({ id: "u-1", username: "zhangsan", displayName: "张三", role: "business", title: "业务人员" }),
+    );
+    window.localStorage.setItem("forgesight:auth-token", "token-demo");
+    window.history.replaceState({}, "", "/admin/overview");
+    render(<App />);
+
+    await waitFor(() => expect(window.location.pathname).toBe("/workspace/overview"));
+    expect(await screen.findByRole("heading", { name: "分析总览" })).toBeTruthy();
+    const manageTab = screen.getByRole("button", { name: "管理" });
+    expect(manageTab.disabled).to.be.true;
+  });
+
+  test("lets an admin into the management workspace and shows the real identity", async () => {
+    window.localStorage.setItem(
+      "forgesight:auth-user",
+      JSON.stringify({ id: "u-admin", username: "admin", displayName: "林涛", role: "admin", title: "系统管理员" }),
+    );
+    window.localStorage.setItem("forgesight:auth-token", "token-demo");
+    window.history.replaceState({}, "", "/admin/overview");
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "治理总览" })).toBeTruthy();
+    expect(await screen.findByText("林涛")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "管理" }).disabled).to.be.false;
+  });
+
+  test("logs out, clears the token, and returns to the login page", async () => {
+    window.localStorage.setItem(
+      "forgesight:auth-user",
+      JSON.stringify({ id: "u-1", username: "zhangsan", displayName: "张三", role: "business", title: "业务人员" }),
+    );
+    window.localStorage.setItem("forgesight:auth-token", "token-demo");
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "退出登录" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/login"));
+    expect(window.localStorage.getItem("forgesight:auth-token")).toBeNull();
+    expect(window.localStorage.getItem("forgesight:auth-user")).toBeNull();
+  });
+});
+
+describe("历史会话", () => {
+  const inMain = () => within(screen.getByRole("main"));
+
+  test("renders the session history page with filters and session rows", async () => {
+    window.history.replaceState({}, "", "/workspace/sessions");
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "历史会话" })).toBeTruthy();
+    // mock 返回的会话缺少 displayTitle/runCount/latestRunStatus，页面应容错展示
+    const row = await inMain().findByRole("button", { name: /制造业务问析/ });
+    expect(within(row).getByText("华东制造数据底座")).toBeTruthy(); // 数据源名同时出现在筛选下拉里，需限定在会话行内
+    expect(within(row).getByText("未开始")).toBeTruthy();
+    expect(within(row).getByText("0 次分析")).toBeTruthy();
+    expect(inMain().getByText("0 次分析")).toBeTruthy();
+    expect(inMain().getByLabelText("数据源")).toBeTruthy();
+    expect(inMain().getByLabelText("状态")).toBeTruthy();
+  });
+
+  test("opens a historical session and resumes it in the analysis page", async () => {
+    window.history.replaceState({}, "", "/workspace/sessions");
+    render(<App />);
+
+    fireEvent.click(await inMain().findByRole("button", { name: /制造业务问析/ }));
+    await waitFor(() => expect(window.location.pathname).toBe("/workspace/analysis"));
+    // AnalysisPage 为 lazy 加载，输入框出现在异步挂载完成后，需用 findBy 等待
+    expect(await screen.findByPlaceholderText("用业务语言描述你想分析的问题…")).toBeTruthy();
+    // 恢复机制生效：load() 已读取并消费会话 id（移除即证明恢复流程已启动），且按该 id 请求了会话详情
+    expect(window.sessionStorage.getItem("forgesight:analysis-session-id")).toBeNull();
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/analysis/sessions/ses-real"),
+        expect.any(Object),
+      );
+    });
+  });
+
+  test("filters sessions by status", async () => {
+    window.history.replaceState({}, "", "/workspace/sessions");
+    render(<App />);
+
+    await inMain().findByText("制造业务问析");
+    fireEvent.change(inMain().getByLabelText("状态"), { target: { value: "succeeded" } });
+    expect(inMain().queryByText("制造业务问析")).toBeNull();
+    expect(inMain().getByText(/没有符合条件的会话/)).toBeTruthy();
+  });
 });

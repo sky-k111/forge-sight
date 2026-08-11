@@ -624,3 +624,101 @@ class LlmModelPrice(Base):
     effective_from: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     effective_to: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class ModelingTask(Base):
+    """建模任务：目标、取数 SQL、特征与候选算法；训练产物登记在 GovernedModel。"""
+
+    __tablename__ = "modeling_task"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    title: Mapped[str] = mapped_column(String(120), comment="任务名，如 质量风险识别")
+    source: Mapped[str] = mapped_column(String(10), default="agent", comment="agent / manual")
+    source_id: Mapped[int] = mapped_column(Integer, default=1, index=True, comment="数据源")
+    owner_id: Mapped[str] = mapped_column(String(64), default="local-test-user", index=True)
+    goal: Mapped[str] = mapped_column(Text, comment="业务目标")
+    task_type: Mapped[str] = mapped_column(String(20), index=True, comment="regression/classification/clustering/anomaly")
+    dataset_name: Mapped[str] = mapped_column(String(100), default="", comment="数据集语义展示名")
+    dataset_sql: Mapped[str] = mapped_column(Text, comment="取数 SQL（已过白名单校验与审计）")
+    target_field: Mapped[str] = mapped_column(String(64), default="", comment="标签列；聚类/异常检测为空")
+    target_label: Mapped[str] = mapped_column(String(100), default="", comment="标签语义描述，如 不良率是否 ≥ 4%")
+    features_json: Mapped[list] = mapped_column(JSON_TYPE, default=list, comment="特征列名")
+    candidates_json: Mapped[list] = mapped_column(JSON_TYPE, default=list, comment="候选算法 id")
+    selected_model: Mapped[str | None] = mapped_column(String(30), nullable=True, comment="效果面板推荐模型算法 id")
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True, comment="draft/training/trained/failed")
+    error_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True, comment="训练失败原因")
+    run_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True, comment="提案来源 Agent Run")
+    modeling_proposal_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict, comment="Agent 原始提案快照")
+    sample_count: Mapped[int] = mapped_column(Integer, default=0, comment="训练样本量")
+    metric: Mapped[str] = mapped_column(String(100), default="", comment="展示摘要，如 AUC 0.986")
+    trained_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class GovernedModel(Base):
+    """模型注册表：训练产物登记与治理（复核/发布/下线）的生命周期。"""
+
+    __tablename__ = "governed_model"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(40), index=True, comment="来源任务")
+    name: Mapped[str] = mapped_column(String(120), comment="模型名")
+    version: Mapped[int] = mapped_column(Integer, default=1, comment="同名模型按版本递增")
+    algorithm: Mapped[str] = mapped_column(String(30), comment="linear/tree/forest/logistic/kmeans/isolation")
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True, comment="pending/reviewing/published/rejected/retired")
+    owner_id: Mapped[str] = mapped_column(String(64), default="local-test-user")
+    metrics_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict, comment="主模型指标摘要")
+    features_json: Mapped[list] = mapped_column(JSON_TYPE, default=list)
+    model_path: Mapped[str] = mapped_column(Text, default="", comment="模型文件路径（joblib）")
+    feature_names_json: Mapped[list] = mapped_column(JSON_TYPE, default=list, comment="推理时对齐 X 的列序")
+    feature_encoders_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict, comment="类别列 LabelEncoder 映射")
+    feature_importance_json: Mapped[list] = mapped_column(JSON_TYPE, default=list, comment="[{name, importance}]")
+    call_count: Mapped[int] = mapped_column(Integer, default=0, comment="推理调用次数")
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ModelingEvaluation(Base):
+    """建模任务最近一次训练的评估结果快照；重训覆盖旧值。"""
+
+    __tablename__ = "modeling_evaluation"
+    __table_args__ = (UniqueConstraint("task_id", name="uq_modeling_eval_task"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(40), index=True)
+    result_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ModelingInferenceLog(Base):
+    """模型每次推理请求的输入输出留痕，用于审计与复核。"""
+
+    __tablename__ = "modeling_inference_log"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(40), index=True)
+    model_id: Mapped[str] = mapped_column(String(40), index=True)
+    input_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    output_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class PlatformUser(Base):
+    """平台用户（登录名统一小写）。表在平台库 forge_sight_app；业务库红线不受影响。"""
+
+    __tablename__ = "platform_user"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    username: Mapped[str] = mapped_column(String(50), unique=True, index=True, comment="登录名（统一小写）")
+    password_hash: Mapped[str] = mapped_column(String(256), comment="scrypt: 算法$n$r$p$salt_hex$hash_hex")
+    display_name: Mapped[str] = mapped_column(String(50), default="", comment="展示名")
+    role: Mapped[str] = mapped_column(String(20), default="business", comment="business / admin")
+    title: Mapped[str] = mapped_column(String(100), default="", comment="岗位展示，如 业务人员")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="停用后无法登录")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

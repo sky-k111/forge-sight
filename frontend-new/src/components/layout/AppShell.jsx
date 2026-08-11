@@ -7,6 +7,8 @@ import { pageMeta, roleMenus } from "../../app/navigation";
 import cn from "../../lib/cn";
 import { pageFromPath, roleFromPath, routeByPage } from "../../app/routeConfig";
 import { createSession, deleteSession, listSessions } from "../../api/analysis";
+import { fetchMe, logout as apiLogout } from "../../api/auth";
+import { AUTH_EXPIRED_EVENT, getCachedUser, getToken, setSession } from "../../lib/auth";
 
 const users = {
   business: { name: "王敏", title: "生产部 · 业务分析", initials: "王" },
@@ -24,6 +26,15 @@ export default function AppShell() {
   const navigate = useNavigate();
   const role = roleFromPath(location.pathname);
   const page = pageFromPath(location.pathname) ?? (role === "admin" ? "admin-overview" : "overview");
+  const cachedUser = getCachedUser();
+  const user = cachedUser
+    ? {
+        name: cachedUser.displayName || cachedUser.username,
+        title: cachedUser.title || (cachedUser.role === "admin" ? "系统管理员" : "业务人员"),
+        initials: (cachedUser.displayName || cachedUser.username).charAt(0),
+      }
+    : users[role];
+  const canSwitchAdmin = !cachedUser || cachedUser.role === "admin";
   const [collapsed, setCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
   const [evidenceOpen, setEvidenceOpen] = useState(true);
@@ -78,6 +89,33 @@ export default function AppShell() {
       document.documentElement.removeAttribute("data-theme");
     };
   }, [darkMode]);
+
+  // 已登录时刷新用户缓存（失败静默降级演示模式）；无 token 时两个 effect 均不触发
+  useEffect(() => {
+    if (!getToken()) return;
+    let cancelled = false;
+    fetchMe()
+      .then((freshUser) => {
+        if (!cancelled) setSession(getToken(), freshUser);
+      })
+      .catch(() => {
+        // token 失效时 _http 已清理会话并广播事件
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const onAuthExpired = () => navigate("/login", { replace: true });
+    window.addEventListener(AUTH_EXPIRED_EVENT, onAuthExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onAuthExpired);
+  }, [navigate]);
+
+  const handleLogout = async () => {
+    await apiLogout();
+    navigate("/login", { replace: true });
+  };
 
   const navigatePage = (nextPage) => {
     const allowedPages = new Set(
@@ -150,7 +188,7 @@ export default function AppShell() {
       <Sidebar
         role={role}
         page={page}
-        user={users[role]}
+        user={user}
         collapsed={collapsed}
         darkMode={darkMode}
         width={sidebarWidth}
@@ -162,6 +200,7 @@ export default function AppShell() {
         onDeleteSession={deleteTask}
         onToggleDarkMode={() => setDarkMode((value) => !value)}
         onRetrySessions={() => refreshSessions()}
+        onLogout={handleLogout}
         onSelectSession={(session) => {
           setActiveSessionId(session.id);
           window.sessionStorage.setItem(ANALYSIS_SESSION_KEY, session.id);
@@ -188,8 +227,9 @@ export default function AppShell() {
         <Topbar
           role={role}
           page={page}
-          user={users[role]}
+          user={user}
           evidenceOpen={evidenceOpen}
+          canSwitchAdmin={canSwitchAdmin}
           onOpenNavigation={() => setMobileNavOpen(true)}
           onToggleEvidence={() => setEvidenceOpen((value) => !value)}
           onRoleChange={switchRole}
@@ -204,7 +244,7 @@ export default function AppShell() {
   );
 }
 
-function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessionsError, activeSessionId, onNavigate, onCreateTask, onDeleteSession, onSelectSession, onRetrySessions, onToggleDarkMode, onToggle, onResizeStart, onResizeKeyDown, onResizeReset, mobileOpen, expandedItems, onToggleItem }) {
+function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessionsError, activeSessionId, onNavigate, onCreateTask, onDeleteSession, onSelectSession, onRetrySessions, onToggleDarkMode, onLogout, onToggle, onResizeStart, onResizeKeyDown, onResizeReset, mobileOpen, expandedItems, onToggleItem }) {
   const [searchText, setSearchText] = useState("");
   const [openSessionMenuId, setOpenSessionMenuId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
@@ -429,6 +469,15 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
             </div>
             <button
               type="button"
+              aria-label="退出登录"
+              title="退出登录"
+              onClick={onLogout}
+              className="grid h-8 w-8 shrink-0 cursor-pointer place-items-center rounded-control border border-line bg-surface text-muted transition-colors hover:border-line-strong hover:bg-surface-2 hover:text-ink"
+            >
+              <Icon name="logout" size={15} />
+            </button>
+            <button
+              type="button"
               aria-label="暗夜模式"
               aria-pressed={darkMode}
               title="暗夜模式"
@@ -566,7 +615,7 @@ function QueueItem({ dotClass, title, caption, count, onClick }) {
   );
 }
 
-function Topbar({ role, page, user, evidenceOpen, onToggleEvidence, onRoleChange, onOpenNavigation }) {
+function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, onToggleEvidence, onRoleChange, onOpenNavigation }) {
   const meta = pageMeta[page] ?? pageMeta.overview;
   return (
     <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-line bg-surface/95 px-3 backdrop-blur md:gap-5 md:px-6">
@@ -600,9 +649,12 @@ function Topbar({ role, page, user, evidenceOpen, onToggleEvidence, onRoleChange
           </button>
           <button
             type="button"
+            disabled={!canSwitchAdmin}
+            title={canSwitchAdmin ? undefined : "当前账号无管理权限"}
             className={cn(
-              "flex h-7 cursor-pointer items-center gap-1.5 rounded-tag px-2.5 text-xs font-medium transition-colors",
+              "flex h-7 items-center gap-1.5 rounded-tag px-2.5 text-xs font-medium transition-colors",
               role === "admin" ? "bg-surface text-ink shadow-card" : "text-muted hover:text-ink",
+              !canSwitchAdmin && "cursor-not-allowed opacity-55 hover:text-muted",
             )}
             onClick={() => onRoleChange("admin")}
           >

@@ -40,3 +40,6 @@ tmp/
 temp/
 *.tmp
 *.bak
+
+# Modeling artifacts (joblib model files)
+modeling_artifacts/

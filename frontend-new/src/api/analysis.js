@@ -4,8 +4,9 @@ import {
   deleteAnalysisSession,
   listAnalysisSessions,
 } from "../features/analysis/api";
+import { currentUserId } from "../lib/auth";
 
-const USER_ID = "local-test-user";
+const USER_ID = currentUserId;
 const ACTIVE_SOURCE_KEY = "forgesight:active-source-id";
 const ANALYSIS_PATH = "/workspace/analysis";
 
@@ -30,7 +31,7 @@ async function resolveSourceId(sourceId) {
   return selected.id;
 }
 
-export async function listSessions(userId = USER_ID) {
+export async function listSessions(userId = USER_ID()) {
   const sessions = await listAnalysisSessions(userId);
   return sessions.map(normalizeSession);
 }
@@ -38,7 +39,7 @@ export async function listSessions(userId = USER_ID) {
 export async function createSession({
   title = "未命名分析",
   sourceId,
-  userId = USER_ID,
+  userId = USER_ID(),
 } = {}) {
   const selectedSourceId = await resolveSourceId(sourceId);
   const created = await createAnalysisSession({
@@ -49,6 +50,6 @@ export async function createSession({
   return normalizeSession(created);
 }
 
-export function deleteSession(sessionId, userId = USER_ID) {
+export function deleteSession(sessionId, userId = USER_ID()) {
   return deleteAnalysisSession(sessionId, userId);
 }

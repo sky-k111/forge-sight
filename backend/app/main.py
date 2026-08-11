@@ -7,7 +7,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api import analysis, datasources, gateway, knowledge, overview, reports, resources, retrieval, security
+from app.api import (
+    analysis,
+    auth,
+    datasources,
+    gateway,
+    knowledge,
+    model_governance,
+    modeling,
+    overview,
+    reports,
+    resources,
+    retrieval,
+    security,
+)
 from app.config import settings
 from app.db import models  # noqa: F401 - 注册 ORM 模型供 create_all 使用
 from app.db.platform import Base, platform_engine
@@ -31,6 +44,9 @@ def create_platform_tables():
             scan_default_source(auto_register=True)
     seed_knowledge()
     seed_report_templates()
+    from app.auth.service import seed_admin
+
+    seed_admin()
     if settings.agent_worker_enabled:
         try:
             from app.agent.checkpointer import initialize_checkpointer
@@ -70,6 +86,7 @@ app.add_middleware(
 )
 
 app.include_router(security.router)
+app.include_router(auth.router)
 app.include_router(gateway.router)
 app.include_router(resources.router)
 app.include_router(datasources.router)
@@ -78,6 +95,8 @@ app.include_router(retrieval.router)
 app.include_router(analysis.router)
 app.include_router(overview.router)
 app.include_router(reports.router)
+app.include_router(modeling.router)
+app.include_router(model_governance.router)
 
 
 @app.get("/health")

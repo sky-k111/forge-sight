@@ -1,4 +1,6 @@
 // 真实后端 HTTP 访问层。默认连接当前联调后端 8000，可用 VITE_API_BASE 覆盖。
+import { AUTH_EXPIRED_EVENT, clearSession, getToken } from "../lib/auth";
+
 const BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
 
 export function apiUrl(path) {
@@ -7,11 +9,24 @@ export function apiUrl(path) {
 
 async function request(path, options = {}) {
   const { headers: optionHeaders, ...requestOptions } = options;
+  const token = getToken();
   const response = await fetch(apiUrl(path), {
     ...requestOptions,
-    headers: { "Content-Type": "application/json", ...(optionHeaders ?? {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(optionHeaders ?? {}),
+    },
   });
   if (!response.ok) {
+    // 仅当本次请求带过 token 时清理会话；演示模式（无 token）下的 401 不动任何状态。
+    // /api/auth/me 的 401 是挂载探测的正常路径，由 fetchMe 静默处理，不广播登出事件。
+    if (response.status === 401 && token) {
+      clearSession();
+      if (typeof window !== "undefined" && !path.startsWith("/api/auth/me")) {
+        window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+      }
+    }
     let detail = `HTTP ${response.status}`;
     try {
       const body = await response.json();

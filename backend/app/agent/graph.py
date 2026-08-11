@@ -36,6 +36,76 @@ class GraphDependencies:
     explain_sql: Callable[[str, int], Any] | None = None
 
 
+# ---- 建模提案：确定性规则（无 LLM 调用），产出 ModelingProposalCard 需要的全部字段 ----
+
+MODELING_TASK_TYPE_LABELS = {
+    "classification": "二分类",
+    "regression": "回归预测",
+    "clustering": "聚类",
+    "anomaly": "异常检测",
+}
+MODELING_METRIC_LABELS = {
+    "classification": "AUC / F1",
+    "regression": "R² / MAE",
+    "clustering": "轮廓系数",
+    "anomaly": "异常占比",
+}
+MODELING_RECOMMENDED_CANDIDATES = {
+    "classification": ["logistic", "tree", "forest"],
+    "regression": ["linear", "tree", "forest"],
+    "clustering": ["kmeans"],
+    "anomaly": ["isolation"],
+}
+_CLASSIFICATION_TARGET_HINTS = ("风险", "是否", "合格", "不良", "缺陷", "异常", "等级", "标记", "标签")
+_REGRESSION_TARGET_HINTS = ("时长", "产量", "数量", "金额", "成本", "温度", "值", "费用", "天数")
+_MODELING_SKIP_COLUMN_TOKENS = (
+    "id", "日期", "时间", "date", "time", "created", "updated", "序号", "备注", "说明",
+)
+MODELING_SAMPLE_LIMIT = 10000
+
+
+def _detect_modeling_task_type(question: str) -> str:
+    """建模问题 → 任务类型：聚类/异常优先，其次分类判定，兜底回归预测。"""
+    if any(term in question for term in ("聚类", "分群", "分组归类")):
+        return "clustering"
+    if any(term in question for term in ("异常", "离群")):
+        return "anomaly"
+    if any(term in question for term in ("识别", "判断", "是否", "风险", "合格", "不良", "预警", "分类")):
+        return "classification"
+    return "regression"
+
+
+def _pick_modeling_target(question: str, fields: list[dict], task_type: str) -> tuple[str, str]:
+    """按问题关键词匹配字段中文名/物理名；返回 (字段名, 中文名)，未命中返回 ('', '')。"""
+    hints = _CLASSIFICATION_TARGET_HINTS if task_type == "classification" else _REGRESSION_TARGET_HINTS
+    best_name = ""
+    best_semantic = ""
+    best_hits = 0
+    for field in fields:
+        name = str(field.get("name") or "")
+        semantic = str(field.get("semanticName") or "")
+        hits = sum(1 for hint in hints if hint in semantic or hint in name)
+        if hits > best_hits:
+            best_hits = hits
+            best_name = name
+            best_semantic = semantic
+    return best_name, best_semantic
+
+
+def _modeling_features(fields: list[dict], target_field: str) -> list[str]:
+    """特征列：排除主键/时间/id 类列与目标列，保留建模可用列（上限 20）。"""
+    features: list[str] = []
+    for field in fields:
+        name = str(field.get("name") or "")
+        lowered = name.lower()
+        if name == target_field or field.get("isPrimary"):
+            continue
+        if any(token in lowered for token in _MODELING_SKIP_COLUMN_TOKENS):
+            continue
+        features.append(name)
+    return features[:20]
+
+
 def _safe_identifier(value: str) -> str:
     candidate = str(value or "").strip()
     return candidate if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", candidate) else ""
@@ -760,6 +830,62 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             "error": None,
         }
 
+    def propose_modeling(state: AnalysisState) -> dict:
+        """确定性建模提案：任务类型/目标列/特征/候选算法 + 白名单取数 SQL。
+
+        无 LLM 调用：SQL 由已登记字段拼接并过 validate_sql 兜底，COUNT 只读统计样本量。
+        """
+        context = state.get("semantic_context") or {}
+        question = (state.get("task") or {}).get("normalizedQuestion") or state["user_question"]
+        tables = context.get("tables") or []
+        if not tables:
+            return {"error": {"code": "MODELING_CONTEXT_EMPTY", "message": "未定位到可用于建模的数据表"}}
+        allowed = set(context.get("executionPolicy", {}).get("allowedTables", []))
+        table = tables[0]
+        task_type = _detect_modeling_task_type(question)
+        fields = table.get("fields") or []
+        target_field, target_label = _pick_modeling_target(question, fields, task_type)
+        if task_type in ("classification", "regression") and not target_field:
+            return {
+                "error": {
+                    "code": "MODELING_TARGET_MISSING",
+                    "message": "未能从已登记字段中识别预测目标列，可前往智能建模人工补充目标字段后创建任务",
+                }
+            }
+        features = _modeling_features(fields, target_field)
+        if not features:
+            return {"error": {"code": "MODELING_NO_FEATURES", "message": "该表没有可用于建模的特征列"}}
+        select_columns = [*features, target_field] if target_field else features
+        quoted = ", ".join(f"`{column}`" for column in select_columns)
+        sql = f"SELECT {quoted} FROM `{table['name']}` LIMIT {MODELING_SAMPLE_LIMIT}"
+        check = deps.validate_sql(sql, allowed)
+        if not check.ok:
+            return {"error": {"code": "MODELING_SQL_REJECTED", "message": f"取数 SQL 未通过白名单校验：{check.reason}"}}
+        sample_count = None
+        count_result = deps.execute_sql(
+            f"SELECT COUNT(*) AS n FROM `{table['name']}`", state["source_id"]
+        )
+        if count_result.ok and count_result.rows:
+            try:
+                sample_count = int(count_result.rows[0][0])
+            except (TypeError, ValueError):
+                sample_count = None
+        proposal = {
+            "title": f"{table.get('semanticName') or table['name']}·{MODELING_TASK_TYPE_LABELS[task_type]}模型",
+            "taskType": task_type,
+            "taskTypeLabel": MODELING_TASK_TYPE_LABELS[task_type],
+            "goal": question,
+            "dataset": table.get("semanticName") or table["name"],
+            "datasetSql": sql,
+            "sampleCount": sample_count,
+            "target": target_field,
+            "targetLabel": target_label,
+            "metric": MODELING_METRIC_LABELS[task_type],
+            "features": features,
+            "candidates": MODELING_RECOMMENDED_CANDIDATES[task_type],
+        }
+        return {"modeling_proposal": proposal, "error": None}
+
     def generate_query(state: AnalysisState) -> dict:
         repair = ""
         if state.get("error") and state.get("retry_count", 0) > 0:
@@ -1016,7 +1142,11 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         return END if state.get("blocked") else "plan_tasks"
 
     def after_context(state: AnalysisState) -> str:
-        return END if state.get("error") else "generate_query"
+        if state.get("error"):
+            return END
+        if (state.get("task") or {}).get("analysisType") == "modeling":
+            return "propose_modeling"
+        return "generate_query"
 
     def after_generate(state: AnalysisState) -> str:
         return END if state.get("error") else "validate_query"
@@ -1044,6 +1174,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
     graph.add_node("plan_tasks", plan_tasks)
     graph.add_node("activate_task", activate_task)
     graph.add_node("retrieve_context", retrieve_context)
+    graph.add_node("propose_modeling", propose_modeling)
     graph.add_node("generate_query", generate_query)
     graph.add_node("validate_query", validate_query)
     graph.add_node("execute_query", execute_query)

@@ -254,6 +254,11 @@ def get_run(run_id: str) -> dict:
         result["artifacts"] = [_artifact_dict(item) for item in artifacts]
         result["checkpoints"] = [_checkpoint_dict(item) for item in checkpoints]
         result["interaction"] = _interaction_dict(interaction) if interaction else None
+        proposal_artifact = next(
+            (item for item in reversed(artifacts) if item.type == "modeling-proposal"),
+            None,
+        )
+        result["proposal"] = proposal_artifact.content_json if proposal_artifact else None
         return result
 
 

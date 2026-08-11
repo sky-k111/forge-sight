@@ -1,6 +1,7 @@
 export const routeByPage = {
   overview: "/workspace/overview",
   analysis: "/workspace/analysis",
+  sessions: "/workspace/sessions",
   modeling: "/workspace/modeling",
   reports: "/workspace/reports",
   "admin-overview": "/admin/overview",

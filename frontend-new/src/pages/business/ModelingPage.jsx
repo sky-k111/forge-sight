@@ -1,19 +1,44 @@
 import { useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { listAlgorithms, listModelingTasks } from "../../api/modeling";
+import { getModelingEvaluation, getModelingTask, listAlgorithms, listModelingTasks, trainModelingTask } from "../../api/modeling";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
 import { Button, Card, ErrorNotice, PageFrame, RouteSkeleton, StatusPill } from "../../components/ui";
+import { RankBarChart } from "../../components/charts";
+
+const MODELING_DRAFT_KEY = "forgesight:modeling-draft";
 
 const accentTones = {
   blue: "bg-primary-soft text-primary",
   teal: "bg-teal-soft text-teal",
   violet: "bg-violet/8 text-violet",
   amber: "bg-amber-soft text-amber",
-  red: "bg-red-soft text-red",
+  rose: "bg-red-soft text-red",
+  indigo: "bg-violet/8 text-violet",
 };
 
 const steps = ["理解建模目标", "准备训练数据", "训练候选模型", "评估与对比", "生成解释"];
+
+// 各算法族的指标展示顺序与百分号单位
+const METRIC_KEYS = {
+  classification: [["auc", "AUC"], ["f1", "F1 Score"], ["precision", "Precision"], ["recall", "Recall"]],
+  regression: [["r2", "R²"], ["mae", "MAE"], ["rmse", "RMSE"]],
+  clustering: [["silhouette", "轮廓系数"]],
+  anomaly: [["anomalyRate", "异常占比"]],
+};
+const PERCENT_KEYS = new Set(["accuracy", "precision", "recall", "anomalyRate"]);
+
+function formatMetric(key, value) {
+  if (value == null || value === "") return "—";
+  if (PERCENT_KEYS.has(key)) return `${value}%`;
+  return String(value);
+}
+
+function metricLine(model) {
+  const keys = METRIC_KEYS[model.family] ?? [];
+  const parts = keys.map(([key, label]) => `${label} ${formatMetric(key, model.metrics?.[key])}`);
+  return parts.length ? parts.join(" · ") : "暂无指标";
+}
 
 export default function ModelingPage() {
   const { navigatePage } = useOutletContext();
@@ -25,21 +50,37 @@ export default function ModelingPage() {
   const [candidateIds, setCandidateIds] = useState([]);
   const [manualModelId, setManualModelId] = useState("logistic");
   const [openPanel, setOpenPanel] = useState(null);
-  const [trainingStep, setTrainingStep] = useState(steps.length);
-  const [trainedTaskId, setTrainedTaskId] = useState(null);
+  const [training, setTraining] = useState({ active: false, step: steps.length });
+  const [results, setResults] = useState(null);
+  const [trainError, setTrainError] = useState(null);
   const timerRef = useRef(null);
+
+  const loadEvaluation = (taskId) => {
+    setResults(null);
+    getModelingEvaluation(taskId).then(setResults).catch(() => setResults(null));
+  };
 
   const load = () => {
     setError(null);
     setCatalog(null);
     setTasks(null);
+    setResults(null);
     Promise.all([listAlgorithms(), listModelingTasks()]).then(([algorithmItems, taskItems]) => {
-      const first = taskItems[0];
+      let draftTaskId = null;
+      try {
+        const draft = JSON.parse(window.sessionStorage.getItem(MODELING_DRAFT_KEY) ?? "null");
+        if (draft?.taskId) draftTaskId = draft.taskId;
+      } catch {
+        // 忽略损坏的草稿
+      }
+      const first = taskItems.find((item) => item.id === draftTaskId) ?? taskItems[0];
       setCatalog(algorithmItems);
       setTasks(taskItems);
       setSelectedTaskId(first?.id ?? null);
       setCandidateIds(first?.candidates ?? []);
       setManualModelId(first?.selectedModel ?? first?.candidates?.[0] ?? "logistic");
+      if (draftTaskId) window.sessionStorage.removeItem(MODELING_DRAFT_KEY);
+      if (first?.status === "trained") loadEvaluation(first.id);
     }).catch(setError);
   };
 
@@ -50,34 +91,55 @@ export default function ModelingPage() {
   if (!catalog || !tasks) return <RouteSkeleton />;
 
   const task = tasks.find((item) => item.id === selectedTaskId) ?? tasks[0];
-  const running = trainingStep < steps.length;
-  const hasResult = task.status === "done" || trainedTaskId === task.id;
+  const running = training.active;
+  const hasResult = task.status === "trained";
+  const hasFailed = task.status === "failed";
   const selectedModel = catalog.find((item) => item.id === (strategy === "auto" ? task.selectedModel : manualModelId));
 
   const selectTask = (taskId) => {
     const nextTask = tasks.find((item) => item.id === taskId) ?? tasks[0];
-    window.clearInterval(timerRef.current);
     setSelectedTaskId(nextTask.id);
     setCandidateIds(nextTask.candidates);
     setManualModelId(nextTask.selectedModel ?? nextTask.candidates[0]);
     setStrategy("auto");
-    setOpenPanel(nextTask.status === "review" ? "plan" : null);
-    setTrainingStep(steps.length);
+    setTrainError(null);
+    setOpenPanel(nextTask.status === "trained" ? null : "plan");
+    setTraining({ active: false, step: steps.length });
+    if (nextTask.status === "trained") loadEvaluation(nextTask.id);
   };
 
-  const train = () => {
+  const refreshTask = (taskId) => {
+    getModelingTask(taskId).then((fresh) => {
+      setTasks((current) => current.map((item) => item.id === fresh.id ? fresh : item));
+    }).catch(() => {});
+  };
+
+  const train = async () => {
     if (running) return;
+    setTrainError(null);
     setOpenPanel("training");
-    setTrainingStep(0);
+    setTraining({ active: true, step: 0 });
     window.clearInterval(timerRef.current);
-    timerRef.current = window.setInterval(() => setTrainingStep((current) => {
-      const next = Math.min(current + 1, steps.length);
-      if (next === steps.length) {
-        window.clearInterval(timerRef.current);
-        setTrainedTaskId(task.id);
-      }
-      return next;
-    }), 600);
+    timerRef.current = window.setInterval(() => {
+      setTraining((current) => (current.active && current.step < steps.length - 1 ? { ...current, step: current.step + 1 } : current));
+    }, 160);
+    try {
+      const response = await trainModelingTask(task.id, {
+        strategy,
+        candidateIds,
+        manualModelId: strategy === "manual" ? manualModelId : null,
+      });
+      setTasks((current) => current.map((item) => item.id === response.task.id ? response.task : item));
+      setResults(response.results);
+      setOpenPanel("evaluation");
+    } catch (err) {
+      setTrainError(err.message || "训练失败，请重试。");
+      setOpenPanel("training");
+      refreshTask(task.id);
+    } finally {
+      window.clearInterval(timerRef.current);
+      setTraining({ active: false, step: steps.length });
+    }
   };
 
   const toggleCandidate = (modelId) => {
@@ -121,11 +183,15 @@ export default function ModelingPage() {
 
       <TaskOutcome
         task={task}
+        results={results}
         hasResult={hasResult}
+        hasFailed={hasFailed}
         running={running}
+        trainError={trainError}
         onUse={() => navigatePage("analysis")}
         onConfirm={train}
         onReviewPlan={() => setOpenPanel("plan")}
+        onRetry={train}
       />
 
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
@@ -136,8 +202,8 @@ export default function ModelingPage() {
           </div>
           <div className="grid sm:grid-cols-2">
             <SummaryItem label="要解决的问题" value={task.goal} wide />
-            <SummaryItem label="使用数据" value={task.dataset} caption={`${task.sampleCount.toLocaleString()} 个样本 · ${task.sampleSummary}`} />
-            <SummaryItem label="预测目标" value={task.targetLabel} caption={task.targetField} mono />
+            <SummaryItem label="使用数据" value={task.dataset} caption={task.sampleCount ? `${task.sampleCount.toLocaleString()} 个样本 · ${task.sampleSummary}` : "待训练时完成抽样统计"} />
+            <SummaryItem label="预测目标" value={task.targetLabel || task.targetField || "未指定"} caption={task.targetField} mono />
             <SummaryItem label="当前方案" value={hasResult ? task.selectedModelName : "Agent 智能推荐"} caption={hasResult ? task.metric : `${task.candidates.length} 个候选模型待比较`} />
           </div>
         </Card>
@@ -146,7 +212,7 @@ export default function ModelingPage() {
           <span className="text-[11px] font-semibold tracking-wide text-faint">接下来</span>
           <h3 className="mt-1.5 text-base font-semibold text-ink">{hasResult ? "用新数据进行分析" : running ? "等待训练完成" : "确认 Agent 的理解"}</h3>
           <p className="mt-2 text-xs leading-relaxed text-muted">
-            {hasResult ? "模型已经完成评估。使用时，Agent 会查询最新生产记录并返回风险概率和主要影响因素。" : running ? "训练完成后会自动生成效果摘要，你不需要停留在本页面等待。" : "确认预测目标和数据范围无误后，再开始训练。算法细节可交给系统推荐。"}
+            {hasResult ? "模型已经完成评估。使用时，Agent 会查询最新生产记录并返回风险概率和主要影响因素。" : running ? "训练与评估由后端同步执行，完成后会自动生成效果摘要。" : "确认预测目标和数据范围无误后，再开始训练。算法细节可交给系统推荐。"}
           </p>
           {hasResult ? (
             <Button variant="primary" className="mt-4 w-full" onClick={() => navigatePage("analysis")}><Icon name="analysis" size={15} />使用模型分析</Button>
@@ -184,21 +250,21 @@ export default function ModelingPage() {
         <DisclosureRow
           icon="clock"
           title="训练过程"
-          summary={running ? `正在执行第 ${trainingStep + 1} 步` : "5 个步骤 · 数据检查、训练、评估与解释"}
+          summary={running ? `正在执行第 ${training.step + 1} 步` : "5 个步骤 · 数据检查、训练、评估与解释"}
           open={openPanel === "training"}
           onClick={() => togglePanel("training")}
           bordered
         />
         {openPanel === "training" && (
           <div className="border-t border-line bg-surface-2 px-5 py-5">
-            <TrainingPipeline task={task} catalog={catalog} candidateIds={candidateIds} strategy={strategy} manualModelId={manualModelId} trainingStep={trainingStep} />
+            <TrainingPipeline task={task} catalog={catalog} candidateIds={candidateIds} strategy={strategy} manualModelId={manualModelId} trainingStep={training.step} running={running} trainError={trainError} />
           </div>
         )}
 
         <DisclosureRow
           icon="chart"
           title="效果与解释"
-          summary={hasResult ? `${task.selectedModelName} · ${task.metric} · Recall 96.5%` : "训练完成后查看效果摘要"}
+          summary={hasResult ? `${task.selectedModelName} · ${task.metric}` : "训练完成后查看效果摘要"}
           open={openPanel === "evaluation"}
           onClick={() => hasResult && togglePanel("evaluation")}
           disabled={!hasResult}
@@ -206,7 +272,7 @@ export default function ModelingPage() {
         />
         {openPanel === "evaluation" && hasResult && (
           <div className="border-t border-line">
-            <ModelResults selectedModelName={selectedModel?.name ?? task.selectedModelName} />
+            <ModelResults selectedModelName={selectedModel?.name ?? task.selectedModelName} results={results} />
           </div>
         )}
       </Card>
@@ -214,8 +280,14 @@ export default function ModelingPage() {
   );
 }
 
-function TaskOutcome({ task, hasResult, running, onUse, onConfirm, onReviewPlan }) {
-  const state = hasResult ? {
+function TaskOutcome({ task, results, hasResult, hasFailed, running, trainError, onUse, onConfirm, onReviewPlan, onRetry }) {
+  const state = hasFailed ? {
+    eyebrow: "训练未完成",
+    title: "模型训练失败，可以重新发起",
+    description: trainError || "训练过程中发生错误。可检查建模方案后重新发起训练。",
+    icon: "warning",
+    tone: "text-red bg-red-soft border-red/20",
+  } : hasResult ? {
     eyebrow: "模型已完成评估",
     title: "可以开始识别高风险生产记录",
     description: "系统会把模型作为 Agent 工具使用。你只需提出业务问题，无需选择算法或手动整理数据。",
@@ -235,6 +307,9 @@ function TaskOutcome({ task, hasResult, running, onUse, onConfirm, onReviewPlan 
     tone: "text-amber bg-amber-soft border-amber/20",
   };
 
+  const metricPill = hasResult ? task.metric : null;
+  const testCount = results?.data?.testCount;
+
   return (
     <section className="goal-banner goal-banner--neutral rounded-panel border border-line bg-surface px-5 py-5 text-ink shadow-card">
       <div className="flex flex-wrap items-center gap-4">
@@ -245,15 +320,14 @@ function TaskOutcome({ task, hasResult, running, onUse, onConfirm, onReviewPlan 
           <p className="mt-1 text-xs leading-relaxed text-muted">{state.description}</p>
         </div>
         <div className="flex gap-2">
-          {hasResult ? <><Button variant="secondary" onClick={onReviewPlan}>评估新版本</Button><Button variant="primary" onClick={onUse}><Icon name="analysis" size={15} />使用模型分析</Button></> : running ? <Button variant="secondary" disabled><Icon name="refresh" size={15} />训练中</Button> : <Button variant="primary" onClick={onConfirm}><Icon name="play" size={15} />确认并开始训练</Button>}
+          {hasFailed ? <><Button variant="secondary" onClick={onReviewPlan}>检查建模方案</Button><Button variant="primary" onClick={onRetry}><Icon name="play" size={15} />重新训练</Button></> : hasResult ? <><Button variant="secondary" onClick={onReviewPlan}>评估新版本</Button><Button variant="primary" onClick={onUse}><Icon name="analysis" size={15} />使用模型分析</Button></> : running ? <Button variant="secondary" disabled><Icon name="refresh" size={15} />训练中</Button> : <Button variant="primary" onClick={onConfirm}><Icon name="play" size={15} />确认并开始训练</Button>}
         </div>
       </div>
       {hasResult && (
         <div className="mt-5 flex flex-wrap items-center gap-x-8 gap-y-3 border-t border-line pt-4">
           <InlineMetric label="推荐模型" value={task.selectedModelName} />
-          <InlineMetric label="AUC" value="0.986" />
-          <InlineMetric label="召回率" value="96.5%" />
-          <span className="text-[10px] text-faint">最近评估：今天 10:21</span>
+          {metricPill && <InlineMetric label="效果摘要" value={metricPill} />}
+          {testCount != null && <InlineMetric label="测试集" value={`${testCount.toLocaleString()} 条`} />}
         </div>
       )}
     </section>
@@ -319,10 +393,10 @@ function PlanDetails({ task, catalog, strategy, setStrategy, candidateIds, toggl
         <div className="rounded-card border border-line bg-surface p-4">
           <h4 className="text-xs font-semibold text-ink">Agent 已确认</h4>
           <div className="mt-3 grid gap-3">
-            <PlanFact label="预测目标" value={task.targetLabel} />
-            <PlanFact label="训练数据" value={`${task.dataset} · ${task.sampleCount.toLocaleString()} 条`} />
-            <PlanFact label="输入信息" value={task.features.join("、")} />
-            <div className="flex items-start gap-2 rounded-control border border-teal/25 bg-teal-soft px-2.5 py-2 text-[10px] leading-relaxed text-muted"><span className="mt-0.5 text-teal"><Icon name="shield" size={13} /></span>未发现结果字段泄漏，数据可以用于训练。</div>
+            <PlanFact label="预测目标" value={task.targetLabel || task.targetField || "未指定"} />
+            <PlanFact label="训练数据" value={`${task.dataset} · ${task.sampleCount ? `${task.sampleCount.toLocaleString()} 条` : "待抽样"}`} />
+            <PlanFact label="输入信息" value={task.features.length ? task.features.join("、") : "全部业务字段"} />
+            <div className="flex items-start gap-2 rounded-control border border-teal/25 bg-teal-soft px-2.5 py-2 text-[10px] leading-relaxed text-muted"><span className="mt-0.5 text-teal"><Icon name="shield" size={13} /></span>训练前会检查缺失值、类别比例与结果泄漏，数据源保持只读。</div>
           </div>
           <Button variant="primary" className="mt-4 w-full" onClick={onTrain} disabled={running || (strategy === "auto" && candidateIds.length === 0)}><Icon name="play" size={14} />{hasResult ? "训练候选新版本" : "确认并开始训练"}</Button>
         </div>
@@ -339,12 +413,13 @@ function PlanFact({ label, value }) {
   return <div><span className="block text-[10px] text-faint">{label}</span><strong className="mt-0.5 block text-[11px] font-semibold leading-relaxed text-ink-2">{value}</strong></div>;
 }
 
-function TrainingPipeline({ task, catalog, candidateIds, strategy, manualModelId, trainingStep }) {
+function TrainingPipeline({ task, catalog, candidateIds, strategy, manualModelId, trainingStep, running, trainError }) {
   const candidateNames = strategy === "auto" ? catalog.filter((model) => candidateIds.includes(model.id)).map((model) => model.name).join(" / ") : catalog.find((model) => model.id === manualModelId)?.name;
-  const summaries = [task.taskTypeLabel, `${task.sampleCount.toLocaleString()} 条 · 训练集 ${Math.round(task.sampleCount * 0.8).toLocaleString()} 条`, candidateNames || "等待选择模型", "AUC / F1 / Precision / Recall", "特征重要性 · 适用边界"];
+  const summaries = [task.taskTypeLabel, `${task.sampleCount ? task.sampleCount.toLocaleString() : "—"} 条 · 训练集 ${task.sampleCount ? Math.round(task.sampleCount * 0.8).toLocaleString() : "—"} 条`, candidateNames || "等待选择模型", "AUC / F1 / Precision / Recall", "特征重要性 · 适用边界"];
   return (
     <div className="mx-auto max-w-5xl">
-      <div className="mb-4 flex items-center justify-between"><div><h4 className="text-sm font-semibold text-ink">训练记录</h4><p className="mt-1 text-[10px] text-muted">过程由系统执行，展开仅用于核查。</p></div><StatusPill tone={trainingStep < steps.length ? "blue" : "green"}>{trainingStep < steps.length ? "执行中" : "已完成"}</StatusPill></div>
+      <div className="mb-4 flex items-center justify-between"><div><h4 className="text-sm font-semibold text-ink">训练记录</h4><p className="mt-1 text-[10px] text-muted">过程由后端同步执行，展开仅用于核查。</p></div><StatusPill tone={running ? "blue" : trainError ? "red" : "green"}>{running ? "执行中" : trainError ? "失败" : "已完成"}</StatusPill></div>
+      {trainError && <div className="mb-4 flex items-start gap-2 rounded-control border border-red/25 bg-red-soft px-3 py-2.5 text-[11px] leading-relaxed text-red"><span className="mt-0.5"><Icon name="warning" size={14} /></span><span>{trainError}</span></div>}
       <div className="grid gap-2 sm:grid-cols-5">
         {steps.map((step, index) => (
           <div key={step} className="modeling-step flex gap-2 sm:flex-col">
@@ -358,22 +433,69 @@ function TrainingPipeline({ task, catalog, candidateIds, strategy, manualModelId
   );
 }
 
-function ModelResults({ selectedModelName }) {
-  const candidates = [
-    { name: "逻辑回归", auc: "0.958", recall: "91.8%" },
-    { name: "决策树", auc: "0.931", recall: "89.4%" },
-    { name: "随机森林", auc: "0.986", recall: "96.5%" },
-  ];
-  const features = [["工序标准良率", 100], ["L04 产线", 55], ["L01 产线", 54], ["功能测试工序", 38], ["停机时长", 35]];
+function ModelResults({ selectedModelName, results }) {
+  const models = results?.models ?? [];
+  const recommended = results?.recommendedModel;
+  const recommendedModel = models.find((model) => model.algorithm === recommended) ?? models[0];
+  const metricKeys = METRIC_KEYS[recommendedModel?.family] ?? [];
+  const importance = recommendedModel?.featureImportance ?? [];
+  const data = results?.data;
+
   return (
     <div className="bg-surface-2 px-5 py-5">
       <div className="mx-auto max-w-5xl">
-        <div className="flex flex-wrap items-end justify-between gap-3"><div><span className="text-[10px] font-semibold text-faint">分层测试集 · 552 条</span><h4 className="mt-1 text-sm font-semibold text-ink">{selectedModelName}完整评估</h4></div><StatusPill tone="blue">系统推荐</StatusPill></div>
-        <div className="mt-4 flex flex-wrap gap-x-9 gap-y-3 rounded-card border border-line bg-surface px-4 py-3"><InlineMetric label="AUC" value="0.986" /><InlineMetric label="F1 Score" value="0.892" /><InlineMetric label="Precision" value="82.9%" /><InlineMetric label="Recall" value="96.5%" /></div>
-        <div className="mt-4 grid gap-5 lg:grid-cols-2">
-          <div><h5 className="text-xs font-semibold text-ink">候选模型对比</h5><div className="mt-2 grid gap-1.5">{candidates.map((item) => <div key={item.name} className={cn("grid grid-cols-[minmax(100px,1fr)_70px_80px] items-center gap-2 rounded-control border px-3 py-2 text-[10px]", item.name === "随机森林" ? "border-primary/25 bg-primary-soft" : "border-line bg-surface")}><strong className="truncate text-xs text-ink">{item.name}</strong><span className="font-mono text-ink-2">AUC {item.auc}</span><span className="font-mono text-ink-2">Recall {item.recall}</span></div>)}</div></div>
-          <div><h5 className="text-xs font-semibold text-ink">主要影响因素</h5><div className="mt-3 grid gap-2">{features.map(([label, value]) => <div key={label} className="grid grid-cols-[110px_minmax(0,1fr)_34px] items-center gap-2 text-[10px]"><span className="truncate text-muted">{label}</span><div className="h-1.5 overflow-hidden rounded-full bg-surface-3"><i className="block h-full rounded-full bg-primary" style={{ width: `${value}%` }} /></div><small className="text-right font-mono text-faint">{value}%</small></div>)}</div></div>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <span className="text-[10px] font-semibold text-faint">分层测试集 · {data?.testCount != null ? `${data.testCount.toLocaleString()} 条` : "训练时自动划分"}</span>
+            <h4 className="mt-1 text-sm font-semibold text-ink">{selectedModelName}完整评估</h4>
+          </div>
+          <StatusPill tone="blue">系统推荐</StatusPill>
         </div>
+        {recommendedModel ? (
+          <div className="mt-4 flex flex-wrap gap-x-9 gap-y-3 rounded-card border border-line bg-surface px-4 py-3">
+            {metricKeys.map(([key, label]) => <InlineMetric key={key} label={label} value={formatMetric(key, recommendedModel.metrics?.[key])} />)}
+          </div>
+        ) : (
+          <p className="mt-4 text-xs text-muted">评估数据尚未生成，训练完成后自动显示指标。</p>
+        )}
+        <div className="mt-4 grid gap-5 lg:grid-cols-2">
+          <div>
+            <h5 className="text-xs font-semibold text-ink">候选模型对比</h5>
+            <div className="mt-2 grid gap-1.5">
+              {models.map((item) => (
+                <div key={item.algorithm} className={cn("grid grid-cols-[minmax(100px,1fr)_minmax(150px,1.4fr)] items-center gap-2 rounded-control border px-3 py-2 text-[10px]", item.algorithm === recommended ? "border-primary/25 bg-primary-soft" : "border-line bg-surface")}>
+                  <strong className="truncate text-xs text-ink">{item.name}</strong>
+                  <span className="truncate font-mono text-[10px] text-ink-2">{metricLine(item)}</span>
+                </div>
+              ))}
+              {!models.length && <p className="text-[11px] text-muted">暂无候选对比数据。</p>}
+            </div>
+          </div>
+          <div>
+            <h5 className="text-xs font-semibold text-ink">主要影响因素</h5>
+            {importance.length ? (
+              <div className="mt-3">
+                <RankBarChart
+                  data={importance.map((item) => ({ name: item.name, importance: item.importance }))}
+                  xKey="name"
+                  bars={[{ key: "importance", name: "重要性" }]}
+                  height={200}
+                  yTickFormatter={(value) => `${value}%`}
+                />
+              </div>
+            ) : (
+              <p className="mt-3 text-[11px] leading-relaxed text-muted">该算法族（聚类 / 异常检测）不提供原生特征重要性，请以指标与业务边界判断。</p>
+            )}
+          </div>
+        </div>
+        {data && (
+          <div className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-[10px] text-faint">
+            <span>训练集 {data.trainCount?.toLocaleString()} 条</span>
+            <span>输入特征 {data.features?.length} 个</span>
+            {data.missingPolicy && <span>缺失值策略：{data.missingPolicy}</span>}
+            <span>编码特征 {data.encodedFeatures?.length ?? 0} 列</span>
+          </div>
+        )}
         <div className="mt-4 flex items-start gap-2 rounded-control border border-amber/25 bg-amber-soft px-3 py-2.5 text-[11px] leading-relaxed text-muted"><span className="mt-0.5 text-amber"><Icon name="shield" size={14} /></span>模型用于风险筛查，不代表产线或工序直接导致质量问题；发布前仍需管理员复核适用边界。</div>
       </div>
     </div>

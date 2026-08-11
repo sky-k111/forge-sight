@@ -159,6 +159,18 @@ def split_questions(question: str) -> list[str]:
     if not normalized:
         return []
 
+    # 编号章节优先（如报告生成的长问题 "1. …。2. …。"）：按章节整体拆分。
+    # 章节内的格式约束句（“统计范围固定为…”“除非章节明确要求比较…”“请给出图表”）
+    # 不是独立分析动作，拆开会导致碎片任务在语义检索阶段必然 no_match。
+    numbered = [
+        part.strip()
+        for part in re.split(r"\s+(?=\d+\.\s)", normalized)
+        if part.strip()
+    ]
+    numbered_parts = [part for part in numbered if re.match(r"^\d+\.\s", part)]
+    if len(numbered_parts) >= 2:
+        return numbered_parts
+
     coarse = [part.strip(" ，,。；;？?") for part in re.split(r"[；;？?\n]+", normalized) if part.strip()]
     result: list[str] = []
     for part in coarse:
@@ -182,6 +194,12 @@ def classify_analysis_type(text: str) -> str:
         return "comparison"
     if any(term in text for term in ("异常", "离群")):
         return "anomaly"
+    # 建模意图：训练/预测类问题与普通问析分流，走确定性建模提案（含聚类分群）
+    if any(term in text for term in (
+        "预测", "建模", "训练模型", "机器学习", "识别高风险", "识别高不良",
+        "判断是否", "是否合格", "是否达标", "聚类", "分群", "模型",
+    )):
+        return "modeling"
     return "query"
 
 

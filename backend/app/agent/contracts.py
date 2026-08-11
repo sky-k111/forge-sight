@@ -15,6 +15,7 @@ class RunStatus(StrEnum):
     BLOCKED = "blocked"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    MODELING_PROPOSAL = "modeling-proposal"  # 建模提案待用户确认，非终态
 
 
 class SessionCreate(BaseModel):

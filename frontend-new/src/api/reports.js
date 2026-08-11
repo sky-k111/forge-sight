@@ -1,6 +1,7 @@
 import { apiUrl, httpGet, httpPost } from "./_http";
+import { currentUserId } from "../lib/auth";
 
-const USER_ID = "local-test-user";
+const USER_ID = currentUserId;
 
 export async function listReportTemplates(sourceId) {
   const suffix = sourceId ? `?sourceId=${encodeURIComponent(sourceId)}` : "";
@@ -11,7 +12,7 @@ export function getTemplateCoverage(templateId, sourceId) {
   return httpGet(`/api/v1/report-templates/${templateId}/coverage?sourceId=${encodeURIComponent(sourceId)}`);
 }
 
-export async function listReports({ ownerId = USER_ID, sourceId, status } = {}) {
+export async function listReports({ ownerId = USER_ID(), sourceId, status } = {}) {
   const params = new URLSearchParams({ ownerId });
   if (sourceId) params.set("sourceId", sourceId);
   if (status) params.set("status", status);
@@ -25,19 +26,19 @@ export function getReport(id) {
 export function createReport(payload) {
   return httpPost("/api/v1/reports", {
     ...payload,
-    ownerId: payload.ownerId ?? USER_ID,
+    ownerId: payload.ownerId ?? USER_ID(),
   });
 }
 
-export function submitReportReview(id, userId = USER_ID) {
+export function submitReportReview(id, userId = USER_ID()) {
   return httpPost(`/api/v1/reports/${id}/submit-review`, { userId });
 }
 
-export function approveReport(id, userId = USER_ID) {
+export function approveReport(id, userId = USER_ID()) {
   return httpPost(`/api/v1/reports/${id}/approve`, { userId });
 }
 
-export function publishReport(id, { userId = USER_ID, pushToFeishu = false } = {}) {
+export function publishReport(id, { userId = USER_ID(), pushToFeishu = false } = {}) {
   return httpPost(`/api/v1/reports/${id}/publish`, { userId, pushToFeishu });
 }
 
@@ -49,14 +50,14 @@ export function getReportIntegrations() {
   return httpGet("/api/v1/report-integrations");
 }
 
-export async function listReportSubscriptions(ownerId = USER_ID) {
+export async function listReportSubscriptions(ownerId = USER_ID()) {
   return (await httpGet(`/api/v1/report-subscriptions?ownerId=${encodeURIComponent(ownerId)}`)).items;
 }
 
 export function createReportSubscription(payload) {
   return httpPost("/api/v1/report-subscriptions", {
     ...payload,
-    ownerId: payload.ownerId ?? USER_ID,
+    ownerId: payload.ownerId ?? USER_ID(),
   });
 }
 

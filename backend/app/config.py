@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     feishu_webhook_secret: str = ""
     public_app_url: str = "http://127.0.0.1:3001"
 
+    modeling_storage_dir: str = "modeling_artifacts"
+
+    # —— 认证 ——
+    auth_token_secret: str = "dev-insecure-secret-change-me"  # 生产必须从 .env 覆盖
+    auth_token_ttl_seconds: int = 7 * 24 * 3600               # token 有效期 7 天
+    auth_admin_username: str = "admin"                        # 种子管理员登录名
+    auth_admin_password: str = "admin123"                     # 仅演示默认值，生产必改
+    auth_admin_display_name: str = "系统管理员"
+
     cors_origins: str = (
         "http://localhost:3000,http://127.0.0.1:3000,"
         "http://localhost:3001,http://127.0.0.1:3001,"

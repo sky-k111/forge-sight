@@ -10,6 +10,7 @@ export const roleMenus = {
           icon: "analysis",
           children: [
             { id: "analysis", label: "智能问析", icon: "question" },
+            { id: "sessions", label: "历史会话", icon: "history" },
             { id: "modeling", label: "智能建模", icon: "model" },
             { id: "reports", label: "报告中心", icon: "report" },
           ],
@@ -49,6 +50,7 @@ export const roleMenus = {
 export const pageMeta = {
   overview: { eyebrow: "业务人员工作区", title: "分析总览", subtitle: "数据更新至 2026-07-15 · 3 项异常待关注" },
   analysis: { eyebrow: "业务人员工作区", title: "智能问析", subtitle: "自然语言查询、分析过程与执行结果" },
+  sessions: { eyebrow: "业务人员工作区", title: "历史会话", subtitle: "全部历史问答会话，点击继续分析" },
   modeling: { eyebrow: "业务人员工作区", title: "智能建模", subtitle: "Agent 自动建模与人工复核" },
   reports: { eyebrow: "业务人员工作区", title: "报告中心", subtitle: "4 份报告 · 1 份待复核" },
   "admin-overview": { eyebrow: "管理员工作区", title: "治理总览", subtitle: "3 类治理事项待处理 · 最后巡检 10:36" },

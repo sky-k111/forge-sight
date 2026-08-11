@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.agent.intent import build_intent_plan, build_request_route, classify_request_kind
+from app.agent.intent import build_intent_plan, build_request_route, classify_analysis_type, classify_request_kind
 
 
 def test_obvious_smalltalk_is_routed_away_from_analysis():
@@ -113,3 +113,14 @@ def test_extracts_combo_and_heatmap_chart_preferences():
     assert combo["analysisType"] == "comparison"
     assert heatmap["requestedChart"] == "heatmap"
     assert heatmap["analysisType"] == "comparison"
+
+
+def test_modeling_intent_beats_default_query_but_not_trend():
+    assert classify_analysis_type("识别高不良风险的生产记录") == "modeling"
+    assert classify_analysis_type("判断设备是否合格") == "modeling"
+    assert classify_analysis_type("预测设备停机时长") == "modeling"
+    assert classify_analysis_type("聚类分析各产线") == "modeling"
+    # 趋势/对比类问析优先，不落入建模；含"异常"的常规问析仍归 anomaly
+    assert classify_analysis_type("分析各产线产量趋势") == "trend"
+    assert classify_analysis_type("对比两条产线良率差异") == "comparison"
+    assert classify_analysis_type("识别生产记录的异常点") == "anomaly"

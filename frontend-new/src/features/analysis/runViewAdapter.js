@@ -1,5 +1,6 @@
 const STATUS_MAP = {
   waiting_user: "clarifying",
+  modeling_proposal: "modeling-proposal",
 };
 
 const STEP_ARTIFACT = {
@@ -8,6 +9,7 @@ const STEP_ARTIFACT = {
   "query.validate": "validation",
   "query.execute": "result",
   "result.explain": "conclusion",
+  "modeling.propose": "modeling-proposal",
 };
 
 function latestSteps(steps = [], tasks = []) {

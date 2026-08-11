@@ -9,6 +9,7 @@ sqlglot>=25
 openai>=1.40
 scikit-learn>=1.5
 pandas>=2.2
+joblib>=1.5
 httpx>=0.27
 pytest>=8.2
 langgraph>=0.6

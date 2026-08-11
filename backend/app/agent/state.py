@@ -29,4 +29,5 @@ class AnalysisState(TypedDict, total=False):
     validation: dict[str, Any]
     execution: dict[str, Any]
     conclusion: str
+    modeling_proposal: dict[str, Any] | None
     error: dict[str, Any] | None

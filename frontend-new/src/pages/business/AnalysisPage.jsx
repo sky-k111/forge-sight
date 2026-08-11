@@ -5,6 +5,7 @@ import cn from "../../lib/cn";
 import { Button, Card, ErrorNotice, StatusPill } from "../../components/ui";
 import { ChartLegend, ComboMetricChart, CorrelationScatterChart, MatrixHeatmapChart, RankBarChart, ShareDonutChart, TrendLineChart } from "../../components/charts";
 import { listSources } from "../../api/datasources";
+import { createModelingTask } from "../../api/modeling";
 import {
   createAnalysisBranch,
   createAnalysisSession,
@@ -19,8 +20,9 @@ import { initialAnalysisRuntime, reduceAnalysisEvent } from "../../features/anal
 import { adaptAnalysisRun } from "../../features/analysis/runViewAdapter";
 import AnalysisAdjustmentPanel from "../../features/analysis/AnalysisAdjustmentPanel";
 import { buildTracePath, getTraceFitTransform } from "./traceGraphLayout";
+import { currentUserId } from "../../lib/auth";
 
-const USER_ID = "local-test-user";
+const USER_ID = currentUserId;
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "blocked", "cancelled"]);
 const EVIDENCE_PANEL_MIN_WIDTH = 320;
 const EVIDENCE_PANEL_DEFAULT_WIDTH = 400;
@@ -28,6 +30,7 @@ const EVIDENCE_PANEL_COLLAPSED_WIDTH = 56;
 const EVIDENCE_PANEL_WIDTH_KEY = "forgesight:analysis-evidence-width";
 const ACTIVE_SOURCE_KEY = "forgesight:active-source-id";
 const ANALYSIS_DRAFT_KEY = "forgesight:analysis-draft";
+const MODELING_DRAFT_KEY = "forgesight:modeling-draft";
 const ANALYSIS_SESSION_KEY = "forgesight:analysis-session-id";
 const ANALYSIS_SESSION_SELECTED_EVENT = "forgesight:analysis-session-selected";
 
@@ -175,11 +178,11 @@ export default function AnalysisPage() {
       if (!source) throw new Error("尚未配置可用数据源");
       window.sessionStorage.setItem(ACTIVE_SOURCE_KEY, String(source.id));
       setActiveSource(source);
-      const sessions = await listAnalysisSessions(USER_ID);
+      const sessions = await listAnalysisSessions(USER_ID());
       const preferredSessionId = window.sessionStorage.getItem(ANALYSIS_SESSION_KEY);
       const selected = sessions.find((item) => item.id === preferredSessionId && item.sourceId === source.id)
         ?? sessions.find((item) => item.sourceId === source.id)
-        ?? await createAnalysisSession({ title: "制造业务问析", sourceId: source.id, userId: USER_ID });
+        ?? await createAnalysisSession({ title: "制造业务问析", sourceId: source.id, userId: USER_ID() });
       window.sessionStorage.removeItem(ANALYSIS_SESSION_KEY);
       setActiveSession(selected);
       refreshSessions?.(selected.id);
@@ -321,7 +324,7 @@ export default function AnalysisPage() {
     try {
       const branch = await createAnalysisBranch(checkpoint.id, {
         title: `${activeSession?.title ?? "制造业务问析"} · 调整方案`,
-        userId: USER_ID,
+        userId: USER_ID(),
         instruction,
         adjustments,
         reuseArtifacts,
@@ -736,7 +739,7 @@ function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClari
     const completed = livePlan.filter((step) => step.status === "succeeded").length;
     return <RunningAnalysis completed={Math.min(completed, livePlan.length - 1)} plan={livePlan} />;
   }
-  if (run.status === "modeling-proposal") return <ModelingProposalCard proposal={run.proposal} onOpenModeling={onOpenModeling} />;
+  if (run.status === "modeling-proposal") return <ModelingProposalCard proposal={run.proposal} runId={run.id} onOpenModeling={onOpenModeling} />;
   if (run.result?.kind === "conversation") return <AssistantConversationMessage text={run.conclusion.text} />;
   return <RunFlow run={run} animate={animate} onComplete={onComplete} onOpenEvidence={onOpenEvidence} onFollowUp={onFollowUp} />;
 }
@@ -938,9 +941,39 @@ function FailedRunCard({ run, onOpenEvidence }) {
   );
 }
 
-function ModelingProposalCard({ proposal, onOpenModeling }) {
+function ModelingProposalCard({ proposal, runId, onOpenModeling }) {
   const [confirmed, setConfirmed] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [createError, setCreateError] = useState(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+
+  const confirm = async () => {
+    if (confirming) return;
+    setConfirming(true);
+    setCreateError(null);
+    try {
+      const task = await createModelingTask({
+        title: proposal.title,
+        goal: proposal.goal,
+        taskType: proposal.taskType,
+        datasetName: proposal.dataset,
+        datasetSql: proposal.datasetSql,
+        targetField: proposal.target,
+        targetLabel: proposal.targetLabel,
+        features: proposal.features ?? [],
+        candidates: proposal.candidates ?? [],
+        runId,
+        sourceId: 1,
+      });
+      window.sessionStorage.setItem(MODELING_DRAFT_KEY, JSON.stringify({ taskId: task.id }));
+      setConfirmed(true);
+    } catch (error) {
+      setCreateError(error.message || "创建建模任务失败，请重试。");
+    } finally {
+      setConfirming(false);
+    }
+  };
+
   return (
     <Card className="motion-soft-rise mt-1.5 overflow-hidden">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-4 py-3.5">
@@ -962,8 +995,9 @@ function ModelingProposalCard({ proposal, onOpenModeling }) {
         {detailsOpen && <div className="mt-3 flex items-start gap-2 rounded-control border border-teal/25 bg-teal-soft px-3 py-2.5 text-[11px] leading-relaxed text-muted"><span className="mt-0.5 text-teal"><Icon name="shield" size={14} /></span><span>开始训练前将检查缺失值、类别比例、时间穿越和结果泄漏字段；训练代码在隔离 Python 环境运行，数据源保持只读。</span></div>}
         <div className="mt-3.5 flex flex-wrap justify-end gap-2">
           <Button variant="ghost" onClick={() => setDetailsOpen((value) => !value)}>{detailsOpen ? "收起检查项" : "查看检查项"}</Button>
-          {!confirmed ? <><Button variant="secondary" onClick={onOpenModeling}>调整方案</Button><Button variant="primary" onClick={() => setConfirmed(true)}><Icon name="play" size={14} />确认并创建任务</Button></> : <Button variant="primary" onClick={onOpenModeling}>在智能建模中查看 <Icon name="arrow" size={14} /></Button>}
+          {!confirmed ? <><Button variant="secondary" onClick={onOpenModeling}>调整方案</Button><Button variant="primary" onClick={confirm} disabled={confirming}><Icon name="play" size={14} />{confirming ? "创建中…" : "确认并创建任务"}</Button></> : <Button variant="primary" onClick={onOpenModeling}>在智能建模中查看 <Icon name="arrow" size={14} /></Button>}
         </div>
+        {createError && <p className="mt-2 text-right text-[11px] leading-relaxed text-red">{createError}</p>}
       </div>
     </Card>
   );

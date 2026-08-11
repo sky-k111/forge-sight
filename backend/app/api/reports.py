@@ -1,8 +1,9 @@
 """阶段六报告中心 API。"""
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
 
+from app.auth.deps import effective_user_id, optional_user
 from app.reports import service
 from app.reports.contracts import ReportCreate, ReportPublish, ReportReviewAction, SubscriptionCreate
 
@@ -35,14 +36,21 @@ def list_reports(
     ownerId: str = Query(default="local-test-user", min_length=1, max_length=64),
     statusValue: str | None = Query(default=None, alias="status"),
     sourceId: int | None = Query(default=None),
+    user: dict | None = Depends(optional_user),
 ):
-    return {"items": service.list_reports(owner_id=ownerId, status=statusValue, source_id=sourceId)}
+    return {
+        "items": service.list_reports(
+            owner_id=effective_user_id(ownerId, user), status=statusValue, source_id=sourceId
+        )
+    }
 
 
 @router.post("/reports", status_code=status.HTTP_202_ACCEPTED)
-def create_report(payload: ReportCreate):
+def create_report(payload: ReportCreate, user: dict | None = Depends(optional_user)):
     try:
-        return service.create_report(payload)
+        return service.create_report(
+            payload.model_copy(update={"ownerId": effective_user_id(payload.ownerId, user)})
+        )
     except Exception as exc:
         _raise(exc)
 

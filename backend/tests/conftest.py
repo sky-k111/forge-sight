@@ -133,3 +133,55 @@ def analysis_session(monkeypatch):
         )
         session.commit()
     return session_factory
+
+
+@pytest.fixture()
+def modeling_session(monkeypatch, tmp_path):
+    """建模服务隔离环境：SQLite 平台库 + 假取数 + 临时模型目录。"""
+    import numpy as np
+    import pandas as pd
+
+    from app.config import settings
+    from app.gateway.executor import ExecutionResult
+    from app.modeling import service as modeling_service
+
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(modeling_service, "PlatformSession", session_factory)
+    monkeypatch.setattr(modeling_service, "write_audit", lambda **_kwargs: None)
+    monkeypatch.setattr(settings, "modeling_storage_dir", str(tmp_path))
+
+    def _make_rows(n=240):
+        rng = np.random.default_rng(7)
+        df = pd.DataFrame(
+            {
+                "工序": rng.choice(["SMT贴片", "AOI检测", "功能测试"], size=n),
+                "产线": rng.choice(["L01", "L04"], size=n),
+                "停机时长": rng.integers(0, 600, size=n).astype(float),
+                "计划数量": rng.integers(100, 5000, size=n).astype(float),
+            }
+        )
+        df["high_defect_risk"] = (
+            (df["停机时长"] > 300).astype(int)
+            | rng.choice([0, 1], size=n, p=[0.85, 0.15])
+        ).astype(int)
+        return df
+
+    def fake_execute_readonly(sql, action="", user_name="", source=None):
+        df = _make_rows()
+        return ExecutionResult(
+            ok=True,
+            columns=list(df.columns),
+            rows=df.values.tolist(),
+            row_count=len(df),
+            truncated=False,
+            tables=["mes_process_output"],
+        )
+
+    monkeypatch.setattr(modeling_service, "execute_readonly", fake_execute_readonly)
+    return session_factory

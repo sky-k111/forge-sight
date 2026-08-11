@@ -828,3 +828,124 @@ def test_clarification_resumes_same_run_and_checkpoint_can_branch(analysis_sessi
     assert len(adjusted_session["messages"]) == 1
     assert adjusted_session["messages"][0]["metadata"]["branchAdjustment"]["metric"] == "最终合格率"
     assert adjusted_session["branchContext"]["adjustments"]["groupBy"] == "产线"
+
+
+# ---- 建模提案链路（analysisType=modeling → propose_modeling 确定性节点） ----
+
+def _modeling_context():
+    return {
+        "question": "识别高不良风险的生产记录",
+        "source": {"id": 1, "name": "测试数据源", "type": "mysql"},
+        "metrics": [],
+        "tables": [
+            {
+                "name": "mes_process_output",
+                "semanticName": "工序产量事实表",
+                "fields": [
+                    {"name": "stat_date", "semanticName": "统计日期", "dataType": "date", "isPrimary": True},
+                    {"name": "工序", "semanticName": "工序", "dataType": "varchar"},
+                    {"name": "产线", "semanticName": "产线", "dataType": "varchar"},
+                    {"name": "停机时长", "semanticName": "停机时长", "dataType": "decimal"},
+                    {"name": "计划数量", "semanticName": "计划数量", "dataType": "decimal"},
+                    {"name": "high_defect_risk", "semanticName": "高风险标记", "dataType": "tinyint"},
+                ],
+            }
+        ],
+        "relations": [],
+        "businessRules": [],
+        "executionPolicy": {"allowedTables": ["mes_process_output"]},
+        "coverage": {"status": "ready"},
+    }
+
+
+def _modeling_deps(validate_ok=True):
+    def execute(sql, _source_id):
+        if "COUNT(*)" in sql.upper():
+            return ExecutionResult(ok=True, columns=["n"], rows=[[200]], row_count=1, tables=["mes_process_output"])
+        return ExecutionResult(ok=True, columns=["工序"], rows=[["SMT贴片"]], row_count=1, tables=["mes_process_output"])
+
+    def validate(sql, _allowed):
+        if not validate_ok:
+            return SqlCheckResult(ok=False, reason="SQL 包含未注册表 forbidden_table")
+        return SqlCheckResult(ok=True, tables=["mes_process_output"], checks=["只读通过"])
+
+    return GraphDependencies(
+        retrieve_context=lambda _q, _s: _modeling_context(),
+        generate_text=lambda *_args: (_ for _ in ()).throw(AssertionError("建模提案不应调用 LLM")),
+        validate_sql=validate,
+        execute_sql=execute,
+    )
+
+
+def _invoke_modeling(graph, question):
+    return graph.invoke(
+        {
+            "session_id": "ses-modeling",
+            "run_id": "run-modeling",
+            "source_id": 1,
+            "user_question": question,
+            "retry_count": 0,
+            "attempted_sqls": [],
+        },
+        config={"configurable": {"thread_id": "ses-modeling"}},
+    )
+
+
+def test_modeling_question_proposes_classification_task_without_llm():
+    graph = build_analysis_graph(_modeling_deps(), checkpointer=InMemorySaver())
+    result = _invoke_modeling(graph, "识别高不良风险的生产记录")
+
+    proposal = result["modeling_proposal"]
+    assert result["error"] is None
+    assert proposal["taskType"] == "classification"
+    assert proposal["taskTypeLabel"] == "二分类"
+    assert proposal["target"] == "high_defect_risk"
+    assert proposal["targetLabel"] == "高风险标记"
+    assert proposal["candidates"] == ["logistic", "tree", "forest"]
+    assert proposal["metric"] == "AUC / F1"
+    assert proposal["sampleCount"] == 200
+    # 特征排除主键/日期列；SQL 由白名单字段拼接并带 LIMIT
+    assert proposal["features"] == ["工序", "产线", "停机时长", "计划数量"]
+    assert "SELECT `工序`, `产线`, `停机时长`, `计划数量`, `high_defect_risk`" in proposal["datasetSql"]
+    assert "LIMIT 10000" in proposal["datasetSql"]
+    assert proposal["dataset"] == "工序产量事实表"
+
+
+def test_regression_modeling_proposal_targets_duration():
+    graph = build_analysis_graph(_modeling_deps(), checkpointer=InMemorySaver())
+    result = _invoke_modeling(graph, "预测设备停机时长")
+
+    proposal = result["modeling_proposal"]
+    assert proposal["taskType"] == "regression"
+    assert proposal["target"] == "停机时长"
+    assert proposal["candidates"] == ["linear", "tree", "forest"]
+    assert proposal["metric"] == "R² / MAE"
+
+
+def test_modeling_proposal_sql_must_pass_whitelist():
+    graph = build_analysis_graph(_modeling_deps(validate_ok=False), checkpointer=InMemorySaver())
+    result = _invoke_modeling(graph, "识别高不良风险的生产记录")
+
+    assert result.get("modeling_proposal") is None
+    assert result["error"]["code"] == "MODELING_SQL_REJECTED"
+
+
+def test_runner_persists_modeling_proposal_run(analysis_session):
+    deps = _modeling_deps()
+    created = service.create_session("建模提案测试", 1, "u-modeling")
+    run_id = service.create_run(created["id"], "识别高不良风险的生产记录", "modeling-idem")["runId"]
+
+    runner.execute_run(run_id, checkpointer=InMemorySaver(), dependencies=deps)
+
+    snapshot = service.get_run(run_id)
+    assert snapshot["status"] == "modeling-proposal"
+    assert snapshot["proposal"]["taskType"] == "classification"
+    assert snapshot["proposal"]["sampleCount"] == 200
+    assert "二分类模型" in snapshot["assistantMessage"]["content"]
+    step_keys = [step["stepKey"] for step in snapshot["steps"]]
+    assert "modeling.propose" in step_keys
+    assert "query.generate" not in step_keys
+    # 证据链：modeling-proposal artifact 已落库
+    assert any(item["type"] == "modeling-proposal" for item in snapshot["artifacts"])
+    # 任务状态同步为提案态（非终态，不出现 succeeded）
+    assert snapshot["tasks"][0]["status"] == "modeling-proposal"

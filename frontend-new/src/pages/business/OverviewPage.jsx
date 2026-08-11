@@ -5,11 +5,12 @@ import cn from "../../lib/cn";
 import { Button, Card, EmptyState, ErrorNotice, PageFrame, RouteSkeleton, StatusPill } from "../../components/ui";
 import { listSources } from "../../api/datasources";
 import { getBusinessOverview } from "../../api/overview";
+import { currentUserId } from "../../lib/auth";
 
 const ACTIVE_SOURCE_KEY = "forgesight:active-source-id";
 const ANALYSIS_DRAFT_KEY = "forgesight:analysis-draft";
 const ANALYSIS_SESSION_KEY = "forgesight:analysis-session-id";
-const USER_ID = "local-test-user";
+const USER_ID = currentUserId;
 
 const topicTones = {
   blue: "bg-primary",
@@ -65,7 +66,7 @@ export default function OverviewPage() {
         ?? availableSources.find((item) => item.isDefault)
         ?? availableSources[0];
       if (!preferred) throw new Error("尚未配置可用数据源");
-      const overview = await getBusinessOverview(preferred.id, USER_ID);
+      const overview = await getBusinessOverview(preferred.id, USER_ID());
       setSources(availableSources);
       setSourceId(preferred.id);
       window.sessionStorage.setItem(ACTIVE_SOURCE_KEY, String(preferred.id));
@@ -87,7 +88,7 @@ export default function OverviewPage() {
     setError(null);
     setData(null);
     try {
-      setData(await getBusinessOverview(nextSource.id, USER_ID));
+      setData(await getBusinessOverview(nextSource.id, USER_ID()));
     } catch (requestError) {
       setError(requestError);
     }

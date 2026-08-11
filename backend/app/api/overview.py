@@ -6,9 +6,10 @@
 
 from collections import Counter, defaultdict
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 
+from app.auth.deps import effective_user_id, optional_user
 from app.db.models import (
     AnalysisMessage,
     AnalysisRun,
@@ -87,6 +88,7 @@ def _capability(source: DataSource, table_count: int, metric_count: int) -> dict
 def get_business_overview(
     sourceId: int | None = Query(default=None),
     userId: str = Query(default="local-test-user", min_length=1, max_length=64),
+    user: dict | None = Depends(optional_user),
 ):
     with PlatformSession() as session:
         source = _source_or_default(session, sourceId)
@@ -134,7 +136,9 @@ def get_business_overview(
 
         latest_scan = max((item.scanned_at for item in tables if item.scanned_at), default=None)
         update_dates = [item.data_updated for item in tables if item.data_updated]
-        session_scope = session.query(AnalysisSession).filter_by(source_id=source.id, user_id=userId)
+        session_scope = session.query(AnalysisSession).filter_by(
+            source_id=source.id, user_id=effective_user_id(userId, user)
+        )
         session_count = session_scope.count()
         sessions = (
             session_scope

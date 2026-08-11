@@ -1,10 +1,11 @@
 import { apiUrl, httpDelete, httpGet, httpPost, httpRequest } from "../../api/_http";
+import { currentUserId } from "../../lib/auth";
 
-export function createAnalysisSession({ title, sourceId, userId = "local-test-user" }) {
+export function createAnalysisSession({ title, sourceId, userId = currentUserId() }) {
   return httpPost("/api/analysis/sessions", { title, sourceId, userId });
 }
 
-export function listAnalysisSessions(userId = "local-test-user") {
+export function listAnalysisSessions(userId = currentUserId()) {
   return httpGet(`/api/analysis/sessions?userId=${encodeURIComponent(userId)}`);
 }
 
@@ -12,7 +13,7 @@ export function getAnalysisSession(sessionId) {
   return httpGet(`/api/analysis/sessions/${sessionId}`);
 }
 
-export function deleteAnalysisSession(sessionId, userId = "local-test-user") {
+export function deleteAnalysisSession(sessionId, userId = currentUserId()) {
   return httpDelete(`/api/analysis/sessions/${sessionId}?userId=${encodeURIComponent(userId)}`);
 }
 
@@ -52,7 +53,7 @@ export function createAnalysisBranch(
   checkpointId,
   {
     title,
-    userId = "local-test-user",
+    userId = currentUserId(),
     instruction,
     adjustments = {},
     reuseArtifacts = "auto",
@@ -75,6 +76,7 @@ const EVENT_TYPES = [
   "context.compiled", "sql.generated", "sql.validation.completed", "sql.execution.started", "sql.execution.completed",
   "artifact.created", "message.delta", "message.completed", "checkpoint.created", "branch.created", "state.snapshot",
   "llm.call.started", "llm.usage.recorded", "run.budget.warning", "run.budget.exceeded", "heartbeat",
+  "modeling.proposed", "run.modeling_proposed",
 ];
 
 export function subscribeAnalysisRun(runId, { onEvent, onError, includeAdmin = false } = {}) {

@@ -4,11 +4,12 @@ import asyncio
 import json
 import time
 
-from fastapi import APIRouter, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from app.agent import service, usage
 from app.agent.contracts import BranchCreate, ClarificationResponse, RunCreate, SessionCreate
+from app.auth.deps import effective_user_id, optional_user
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
@@ -18,16 +19,21 @@ def _not_found(exc: Exception) -> HTTPException:
 
 
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
-def create_session(payload: SessionCreate):
+def create_session(payload: SessionCreate, user: dict | None = Depends(optional_user)):
     try:
-        return service.create_session(payload.title, payload.sourceId, payload.userId)
+        return service.create_session(
+            payload.title, payload.sourceId, effective_user_id(payload.userId, user)
+        )
     except service.AnalysisNotFound as exc:
         raise _not_found(exc) from exc
 
 
 @router.get("/sessions")
-def list_sessions(userId: str = Query(default="local-test-user", min_length=1, max_length=64)):
-    return service.list_sessions(userId)
+def list_sessions(
+    userId: str = Query(default="local-test-user", min_length=1, max_length=64),
+    user: dict | None = Depends(optional_user),
+):
+    return service.list_sessions(effective_user_id(userId, user))
 
 
 @router.get("/sessions/{session_id}")
@@ -42,9 +48,10 @@ def get_session(session_id: str):
 def delete_session(
     session_id: str,
     userId: str = Query(default="local-test-user", min_length=1, max_length=64),
+    user: dict | None = Depends(optional_user),
 ):
     try:
-        return service.delete_session(session_id, userId)
+        return service.delete_session(session_id, effective_user_id(userId, user))
     except service.AnalysisNotFound as exc:
         raise _not_found(exc) from exc
 
@@ -98,11 +105,15 @@ def get_checkpoints(run_id: str):
 
 
 @router.post("/checkpoints/{checkpoint_id}/branches", status_code=status.HTTP_201_CREATED)
-def create_branch(checkpoint_id: str, payload: BranchCreate):
+def create_branch(
+    checkpoint_id: str,
+    payload: BranchCreate,
+    user: dict | None = Depends(optional_user),
+):
     try:
         return service.create_branch(
             checkpoint_id,
-            payload.userId,
+            effective_user_id(payload.userId, user),
             payload.title,
             instruction=payload.instruction,
             adjustments=payload.adjustments,

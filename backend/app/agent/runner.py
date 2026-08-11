@@ -12,6 +12,7 @@ from langgraph.types import Command
 from sqlalchemy import func
 
 from app.agent import usage
+from app.agent.contracts import RunStatus
 from app.agent.event_store import append_event
 from app.agent.graph import GraphDependencies, build_analysis_graph
 from app.agent.ids import new_id
@@ -44,6 +45,7 @@ NODE_META = {
     "intent_guard": ("intent.guard", 1, "检查只读分析边界"),
     "plan_tasks": ("intent.parse", 2, "理解并拆解业务问题"),
     "retrieve_context": ("context.retrieve", 3, "定位数据资源"),
+    "propose_modeling": ("modeling.propose", 4, "生成建模方案"),
     "generate_query": ("query.generate", 4, "生成只读 SQL"),
     "validate_query": ("query.validate", 5, "安全与语义校验"),
     "execute_query": ("query.execute", 6, "执行并检查结果"),
@@ -290,6 +292,7 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
 
         artifact_map = {
             "retrieve_context": ("context", update.get("semantic_context")),
+            "propose_modeling": ("modeling-proposal", update.get("modeling_proposal")),
             "generate_query": (
                 "sql",
                 {
@@ -313,7 +316,7 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
             step.output_refs_json = [artifact_id]
 
         event_type = {
-            "succeeded": "step.completed",
+            "succeeded": "modeling.proposed" if node == "propose_modeling" else "step.completed",
             "failed": "step.failed",
             "blocked": "step.blocked",
             "waiting_user": "clarification.requested",
@@ -460,6 +463,33 @@ def _finish_run(run_id: str, state: dict) -> None:
             run.status = "failed"
             run.error_code = state["error"].get("code", "ANALYSIS_FAILED")
             event_type = "run.failed"
+        elif state.get("modeling_proposal"):
+            # 建模提案待确认：非终态，用户可在会话中确认或调整后创建训练任务
+            run.status = RunStatus.MODELING_PROPOSAL.value
+            run.error_code = None
+            event_type = "run.modeling_proposed"
+            proposal = state["modeling_proposal"]
+            sequence_no = (
+                session.query(func.coalesce(func.max(AnalysisMessage.sequence_no), 0))
+                .filter_by(session_id=run.session_id)
+                .scalar()
+                + 1
+            )
+            content = (
+                f"已生成建模方案：{proposal.get('dataset')}·{proposal.get('taskTypeLabel')}模型，"
+                f"预测目标「{proposal.get('targetLabel') or proposal.get('target')}」。"
+                "确认后将在智能建模中创建任务，训练前可继续调整特征与候选算法。"
+            )
+            session.add(
+                AnalysisMessage(
+                    id=new_id("msg"),
+                    session_id=run.session_id,
+                    run_id=run.id,
+                    role="assistant",
+                    content=content,
+                    sequence_no=sequence_no,
+                )
+            )
         else:
             run.status = "succeeded"
             run.error_code = None
