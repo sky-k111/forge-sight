@@ -1,3 +1,7 @@
+import { conciseFindingTitle, parseAnalysisNarrative } from "../../lib/narrative";
+
+export { parseAnalysisNarrative } from "../../lib/narrative";
+
 const STATUS_MAP = {
   waiting_user: "clarifying",
   modeling_proposal: "modeling-proposal",
@@ -144,30 +148,6 @@ function confidenceWithResultGuard(confidence, tasks, execution) {
     cappedByIncompleteResult: true,
     completenessIssues: [issue],
   };
-}
-
-export function parseAnalysisNarrative(value = "") {
-  const normalized = String(value)
-    .replace(/\*\*(.*?)\*\*/g, "$1")
-    .replace(/^[\s]*(?:你好[！!,，。:]?\s*)+/i, "")
-    .replace(/\s+-\s+/g, "\n- ")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\s*\n\s*/g, "\n")
-    .trim();
-  const lines = normalized.split("\n").map((line) => line.replace(/^[-•]\s*/, "").trim()).filter(Boolean);
-  const bulletLines = normalized.split("\n").filter((line) => /^\s*[-•]\s+/.test(line));
-  const summary = lines.filter((line) => !bulletLines.some((bullet) => bullet.includes(line))).join(" ")
-    .replace(/以下是基于现有数据的简要结论[:：]?\s*$/u, "")
-    .trim();
-  const highlights = bulletLines.map((line, index) => {
-    const text = line.replace(/^\s*[-•]\s*/, "").trim();
-    const separator = text.search(/[:：]/);
-    if (separator > 0 && separator < 28) {
-      return { title: text.slice(0, separator), text: text.slice(separator + 1).trim() };
-    }
-    return { title: `发现 ${index + 1}`, text };
-  });
-  return { summary, highlights };
 }
 
 function chartTitleFor(snapshot, xKey, numeric) {
@@ -562,7 +542,16 @@ export function adaptAnalysisRun(snapshot) {
   const rawConclusionText = snapshot.assistantMessage?.content
     || conclusions.map((item) => item.content.text).join("\n\n")
     || (snapshot.status === "succeeded" ? "分析已完成，结果与执行证据已保存。" : "正在执行分析任务。 ");
-  const narrative = parseAnalysisNarrative(rawConclusionText);
+  const parsedNarrative = parseAnalysisNarrative(rawConclusionText, {
+    sectionTitles: snapshot.tasks?.map((task) => task.title) ?? [],
+  });
+  const narrative = {
+    ...parsedNarrative,
+    highlights: parsedNarrative.highlights.map((item, index) => ({
+      ...item,
+      title: conciseFindingTitle(snapshot.tasks?.[index]?.title, item.title),
+    })),
+  };
   const interactionPrompt = snapshot.interaction?.prompt;
   const startedAt = snapshot.startedAt ? new Date(snapshot.startedAt).getTime() : Number.NaN;
   const finishedAt = snapshot.finishedAt ? new Date(snapshot.finishedAt).getTime() : Number.NaN;

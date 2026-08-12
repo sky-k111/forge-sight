@@ -33,6 +33,133 @@ describe("analysis narrative adapter", () => {
     ]);
   });
 
+  test("summarizes multi-task markdown without leaking table syntax into the result header", () => {
+    const result = parseAnalysisNarrative(`1. ### 各工序良率趋势
+
+| 工序 | 良率 |
+|------|------|
+| AOI检测 | 99.21% |
+
+**结论：**
+- 工序良率整体稳定，包装入库需重点关注。
+
+2. ### 产品抽检异常
+
+| 产品 | 不良率 |
+|------|--------|
+| P026 | 3.91% |
+
+**结论：** 未识别出异常产品，建议继续关注 P026。`);
+
+    expect(result.summary).toBe("已完成 2 项分析，关键结论如下。");
+    expect(result.summary).not.toContain("|");
+    expect(result.highlights).toEqual([
+      { title: "各工序良率趋势", text: "工序良率整体稳定，包装入库需重点关注。" },
+      { title: "产品抽检异常", text: "未识别出异常产品，建议继续关注 P026。" },
+    ]);
+  });
+
+  test("does not treat a nested numbered recommendation list as additional analysis tasks", () => {
+    const result = parseAnalysisNarrative(`1. 第一项分析没有返回停机记录。
+
+**结论**：指定周期内无设备停机记录。
+
+2. 第二项分析没有返回非计划停机记录。
+
+建议检查：
+1. 该周期内是否确实无停机事件；
+2. 数据源中的记录是否完整。
+
+如需进一步排查，可调整时间范围。`);
+
+    expect(result.summary).toBe("已完成 2 项分析，关键结论如下。");
+    expect(result.highlights).toHaveLength(2);
+    expect(result.highlights[1].text).toContain("第二项分析");
+  });
+
+  test("keeps multi-task finding titles concise when task instructions contain report constraints", () => {
+    const snapshot = snapshotWithResult({
+      question: "生成设备周报",
+      columns: ["设备", "停机分钟"],
+      rows: [["EQ-01", 42]],
+    });
+    snapshot.tasks = [
+      { id: "task-1", order: 1, title: "1. 汇总周期内设备停机时长并与上一周期比较。统计范围固定为 2026-08-05 至 2026-08-12。" },
+      { id: "task-2", order: 2, title: "2. 按设备和产线分析周期内非计划停机排名与变化。统计范围固定为 2026-08-05 至 2026-08-12。" },
+    ];
+    snapshot.assistantMessage.content = "1. 停机时长比较。\n\n**结论**：当前周期无停机记录。\n\n2. 非计划停机排名。\n\n**结论**：当前周期无非计划停机记录。";
+
+    const run = adaptAnalysisRun(snapshot);
+
+    expect(run.conclusion.highlights.map((item) => item.title)).toEqual([
+      "汇总周期内设备停机时长并与上一周期比较",
+      "按设备和产线分析周期内非计划停机排名与变化",
+    ]);
+  });
+
+  test("uses the explicit conclusion as the summary for a single markdown result table", () => {
+    const result = parseAnalysisNarrative(`根据查询结果，当前周期没有停机记录。
+
+结果表如下：
+
+| 当前周期 | 上一周期 |
+|---|---|
+| 无数据 | 无数据 |
+
+**结论**：指定周期内无设备停机记录，无法进行环比比较。`);
+
+    expect(result.summary).toBe("指定周期内无设备停机记录，无法进行环比比较。");
+    expect(result.summary).not.toContain("结果表");
+  });
+
+  test("preserves negative values in prose instead of turning them into findings", () => {
+    const result = parseAnalysisNarrative("本月良率环比 - 2.4%，仍高于企业最低标准。");
+
+    expect(result.summary).toBe("本月良率环比 - 2.4%，仍高于企业最低标准。");
+    expect(result.highlights).toEqual([]);
+  });
+
+  test("preserves a negative value that follows punctuation", () => {
+    const result = parseAnalysisNarrative("本月良率变化： - 2.4%，需要关注。");
+
+    expect(result.summary).toBe("本月良率变化： - 2.4%，需要关注。");
+    expect(result.highlights).toEqual([]);
+  });
+
+  test("keeps a recommendation-only numbered list inside one conclusion", () => {
+    const result = parseAnalysisNarrative(`建议检查：
+1. 核对统计时间范围；
+2. 确认源表数据是否完整。`);
+
+    expect(result.summary).toBe("建议检查： 1. 核对统计时间范围； 2. 确认源表数据是否完整。");
+    expect(result.highlights).toEqual([]);
+  });
+
+  test("uses authoritative task titles for the backend's plain numbered conclusions", () => {
+    const result = parseAnalysisNarrative(`1. 当前周期无设备停机记录。
+
+2. 当前周期无非计划停机记录。`, {
+      sectionTitles: ["停机时长比较", "非计划停机排名"],
+    });
+
+    expect(result.summary).toBe("已完成 2 项分析，关键结论如下。");
+    expect(result.highlights).toEqual([
+      { title: "停机时长比较", text: "当前周期无设备停机记录。" },
+      { title: "非计划停机排名", text: "当前周期无非计划停机记录。" },
+    ]);
+  });
+
+  test("removes markdown table blocks that omit outer pipe characters", () => {
+    const result = parseAnalysisNarrative(`当前工序良率如下：
+
+工序 | 良率
+--- | ---
+AOI检测 | 99.21%`);
+
+    expect(result.summary).toBe("当前工序良率如下：");
+    expect(result.summary).not.toContain("AOI检测");
+  });
+
   test("uses a line chart and compact month-day labels for date dimensions", () => {
     const run = adaptAnalysisRun(snapshotWithResult({
       question: "按统计日期查看不良数量分布",
