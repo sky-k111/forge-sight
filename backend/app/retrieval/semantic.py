@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 from functools import lru_cache
 
+import httpx
 from openai import OpenAI
 from sqlalchemy import bindparam, text
 
@@ -60,11 +61,17 @@ def _embedding_client() -> OpenAI:
     base_url = settings.embedding_base_url.strip()
     if not base_url:
         raise RuntimeError("EMBEDDING_BASE_URL 未配置")
+    http_client = httpx.Client(
+        proxy=settings.embedding_proxy_url or None,
+        trust_env=False,
+        timeout=settings.embedding_timeout_seconds,
+    )
     return OpenAI(
         api_key=settings.embedding_api_key or "local-embedding-service",
         base_url=base_url.rstrip("/"),
         timeout=settings.embedding_timeout_seconds,
         max_retries=settings.embedding_max_retries,
+        http_client=http_client,
     )
 
 
