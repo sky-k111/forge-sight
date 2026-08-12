@@ -16,6 +16,20 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 60
     llm_proxy_url: str = ""
 
+    # 语义检索使用独立的 OpenAI-compatible Embeddings 服务。默认关闭，避免在
+    # 未建索引或模型服务不可用时影响现有规则检索主链路。
+    retrieval_semantic_enabled: bool = False
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_dimensions: int = 1024
+    embedding_timeout_seconds: int = 8
+    embedding_max_retries: int = 1
+    retrieval_semantic_circuit_breaker_seconds: int = 30
+    retrieval_semantic_top_k: int = 20
+    retrieval_semantic_score_threshold: float = 0.45
+    retrieval_rrf_k: int = 60
+
     agent_max_llm_calls: int = 12
     agent_max_retry_calls: int = 3
     agent_max_input_tokens: int = 120000

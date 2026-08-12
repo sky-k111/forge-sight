@@ -13,6 +13,7 @@ from collections import deque
 from datetime import datetime
 
 from app.audit.service import write_audit
+from app.config import settings
 from app.db.models import (
     BusinessObject,
     BusinessRule,
@@ -27,6 +28,8 @@ from app.db.models import (
     TableRelation,
 )
 from app.db.platform import PlatformSession
+from app.retrieval import semantic
+from app.retrieval.fusion import fuse_candidate_rows
 
 
 class RetrievalValidation(ValueError):
@@ -282,8 +285,16 @@ def _resolve_source(session, source_id: int | None) -> DataSource:
     return source
 
 
-def _metric_candidates(session, question: str, source_id: int, topic_matches: list[dict]) -> list[dict]:
+def _metric_candidates(
+    session,
+    question: str,
+    source_id: int,
+    topic_matches: list[dict],
+    semantic_hits: list[dict] | None = None,
+) -> list[dict]:
     topic_scores = {item["name"]: item["score"] for item in topic_matches}
+    semantic_hits = semantic_hits or []
+    semantic_ids = {str(item["objectId"]) for item in semantic_hits}
     rows = (
         session.query(KnowledgeMetric, MetricSourceBinding)
         .join(MetricSourceBinding, MetricSourceBinding.metric_id == KnowledgeMetric.id)
@@ -312,7 +323,7 @@ def _metric_candidates(session, question: str, source_id: int, topic_matches: li
         if metric.topic in topic_scores:
             score += min(topic_scores[metric.topic], 8)
             matched.append(metric.topic)
-        if score <= 0:
+        if score <= 0 and metric.id not in semantic_ids:
             continue
         table_rows = session.query(MetricTableBinding).filter_by(binding_id=binding.id).order_by(
             MetricTableBinding.id
@@ -323,8 +334,10 @@ def _metric_candidates(session, question: str, source_id: int, topic_matches: li
         result.append(
             {
                 "metric": metric,
+                "candidateId": metric.id,
                 "binding": binding,
                 "score": score,
+                "lexicalScore": score,
                 "matched": list(dict.fromkeys(matched)),
                 "tables": [row.table_name for row in table_rows],
                 "fieldRows": field_rows,
@@ -333,10 +346,41 @@ def _metric_candidates(session, question: str, source_id: int, topic_matches: li
                 "coreQuality": _core_match_quality(question, [metric.name, *synonyms]),
             }
         )
+    lexical_rows = sorted(
+        (item for item in result if item["lexicalScore"] > 0),
+        key=lambda item: (-item["lexicalScore"], item["metric"].id),
+    )
+    if not semantic_hits:
+        return lexical_rows
+    fusion = fuse_candidate_rows(
+        lexical_rows,
+        semantic_hits,
+        id_key="candidateId",
+        rank_constant=settings.retrieval_rrf_k,
+    )
+    for item in result:
+        ranking = fusion[item["candidateId"]]
+        item["score"] = ranking["fusedScore"]
+        item["semanticScore"] = ranking["semanticScore"]
+        item["retrievalChannels"] = [
+            channel
+            for channel, rank in (
+                ("lexical", ranking["lexicalRank"]),
+                ("semantic", ranking["semanticRank"]),
+            )
+            if rank is not None
+        ]
     return sorted(result, key=lambda item: (-item["score"], item["metric"].id))
 
 
-def _direct_table_candidates(session, question: str, source_id: int) -> list[dict]:
+def _direct_table_candidates(
+    session,
+    question: str,
+    source_id: int,
+    semantic_hits: list[dict] | None = None,
+) -> list[dict]:
+    semantic_hits = semantic_hits or []
+    semantic_ids = {str(item["objectId"]) for item in semantic_hits}
     tables = session.query(DataTable).filter_by(source_id=source_id, registered=True).all()
     fields = session.query(TableField).filter_by(source_id=source_id).order_by(TableField.ordinal).all()
     by_table: dict[str, list[TableField]] = {}
@@ -360,8 +404,33 @@ def _direct_table_candidates(session, question: str, source_id: int) -> list[dic
         field_matches.sort(key=lambda item: -item[0])
         score = table_score + sum(item[0] for item in field_matches[:2])
         matched = [*table_matched, *(term for _points, labels in field_matches[:2] for term in labels)]
-        if score:
-            candidates.append({"table": table, "score": score, "tableScore": table_score, "matched": matched})
+        if score or table.name in semantic_ids:
+            candidates.append(
+                {
+                    "table": table,
+                    "candidateId": table.name,
+                    "score": score,
+                    "lexicalScore": score,
+                    "tableScore": table_score,
+                    "matched": matched,
+                }
+            )
+    lexical_rows = sorted(
+        (item for item in candidates if item["lexicalScore"] > 0),
+        key=lambda item: (-item["lexicalScore"], item["table"].name),
+    )
+    if not semantic_hits:
+        return lexical_rows
+    fusion = fuse_candidate_rows(
+        lexical_rows,
+        semantic_hits,
+        id_key="candidateId",
+        rank_constant=settings.retrieval_rrf_k,
+    )
+    for item in candidates:
+        ranking = fusion[item["candidateId"]]
+        item["score"] = ranking["fusedScore"]
+        item["semanticScore"] = ranking["semanticScore"]
     return sorted(candidates, key=lambda item: (-item["score"], item["table"].name))
 
 
@@ -545,6 +614,9 @@ def _serialize_metric(item: dict) -> dict:
         ],
         "relevanceScore": item["score"],
         "matchedTerms": item["matched"],
+        "retrievalChannels": item.get("retrievalChannels", ["lexical"]),
+        "lexicalScore": item.get("lexicalScore", item["score"]),
+        "semanticScore": item.get("semanticScore"),
     }
 
 
@@ -569,14 +641,37 @@ def build_context_package(
         source = _resolve_source(session, source_id)
         topic_matches = _topic_matches(question)
         intents = _detect_intents(question)
-        metric_items = _metric_candidates(session, question, source.id, topic_matches)
+        # SQL 内按对象类型独立 TopK，避免字段很多的数据表挤掉指标或业务规则候选。
+        semantic_result = semantic.search(
+            session,
+            question,
+            source.id,
+            object_types=("metric", "table", "business_object", "business_rule"),
+        )
+        semantic_hits = semantic_result.hits
+        semantic_metric_hits = [item for item in semantic_hits if item["objectType"] == "metric"]
+        semantic_table_hits = [item for item in semantic_hits if item["objectType"] == "table"]
+        semantic_object_hits = [item for item in semantic_hits if item["objectType"] == "business_object"]
+        semantic_rule_hits = [item for item in semantic_hits if item["objectType"] == "business_rule"]
+        metric_items = _metric_candidates(
+            session,
+            question,
+            source.id,
+            topic_matches,
+            semantic_metric_hits,
+        )
         if metric_items and "summary" not in intents:
             best_quality = max(item["coreQuality"] for item in metric_items)
             if best_quality:
                 minimum_quality = 1 if best_quality == 2 else best_quality
-                metric_items = [item for item in metric_items if item["coreQuality"] >= minimum_quality]
+                metric_items = [
+                    item
+                    for item in metric_items
+                    if item["coreQuality"] >= minimum_quality
+                    or "semantic" in item.get("retrievalChannels", [])
+                ]
         metric_items = metric_items[:max_metrics]
-        direct_items = _direct_table_candidates(session, question, source.id)
+        direct_items = _direct_table_candidates(session, question, source.id, semantic_table_hits)
         table_rows = session.query(DataTable).filter_by(source_id=source.id, registered=True).all()
         table_by_name = {row.name: row for row in table_rows}
         registered = set(table_by_name)
@@ -614,12 +709,13 @@ def build_context_package(
         dimensions = {dimension for item in metric_items for dimension in item["dimensions"]}
         object_rows = session.query(BusinessObject).filter_by(enabled=True).all()
         objects = []
+        semantic_object_ids = {str(item["objectId"]) for item in semantic_object_hits}
         for row in object_rows:
             score, matched = _score_terms(question, [(row.name, 8), (row.description, 3)])
             if row.name in dimensions:
                 score += 8
                 matched.append("指标维度")
-            if score or row.topic in selected_topics:
+            if score or row.topic in selected_topics or row.id in semantic_object_ids:
                 objects.append(
                     {
                         "id": row.id,
@@ -628,16 +724,36 @@ def build_context_package(
                         "description": row.description,
                         "matchedTerms": list(dict.fromkeys(matched)),
                         "relevanceScore": score,
+                        "lexicalScore": score,
                     }
                 )
+        object_fusion = fuse_candidate_rows(
+            sorted(objects, key=lambda item: (-item["lexicalScore"], item["id"])),
+            semantic_object_hits,
+            id_key="id",
+            rank_constant=settings.retrieval_rrf_k,
+        ) if semantic_object_hits else {}
+        for item in objects:
+            if item["id"] in object_fusion:
+                item["relevanceScore"] = object_fusion[item["id"]]["fusedScore"]
+                item["semanticScore"] = object_fusion[item["id"]]["semanticScore"]
         objects.sort(key=lambda item: (-item["relevanceScore"], item["id"]))
 
         rule_rows = session.query(BusinessRule).filter_by(enabled=True).all()
         rules = []
+        semantic_rule_ids = {str(item["objectId"]) for item in semantic_rule_hits}
         for row in rule_rows:
             score, matched = _score_terms(question, [(row.name, 7), (row.content, 4)])
-            applicable = row.scope == "全局" or row.scope in selected_topics or score > 0
+            applicable = (
+                row.scope == "全局"
+                or row.scope in selected_topics
+                or score > 0
+                or row.id in semantic_rule_ids
+            )
             if applicable:
+                lexical_score = score + (
+                    4 if row.scope in selected_topics else 1 if row.scope == "全局" else 0
+                )
                 rules.append(
                     {
                         "id": row.id,
@@ -645,10 +761,21 @@ def build_context_package(
                         "type": row.rule_type,
                         "scope": row.scope,
                         "content": row.content,
-                        "relevanceScore": score + (4 if row.scope in selected_topics else 1 if row.scope == "全局" else 0),
+                        "relevanceScore": lexical_score,
+                        "lexicalScore": lexical_score,
                         "matchedTerms": matched,
                     }
                 )
+        rule_fusion = fuse_candidate_rows(
+            sorted(rules, key=lambda item: (-item["lexicalScore"], item["id"])),
+            semantic_rule_hits,
+            id_key="id",
+            rank_constant=settings.retrieval_rrf_k,
+        ) if semantic_rule_hits else {}
+        for item in rules:
+            if item["id"] in rule_fusion:
+                item["relevanceScore"] = rule_fusion[item["id"]]["fusedScore"]
+                item["semanticScore"] = rule_fusion[item["id"]]["semanticScore"]
         rules.sort(key=lambda item: (-item["relevanceScore"], item["id"]))
 
         relation_payload = [
@@ -700,10 +827,19 @@ def build_context_package(
                 "database": source.db_name,
             },
             "retrieval": {
-                "strategy": "lexical-rule",
-                "version": "1.0",
+                "strategy": "hybrid-rrf" if semantic_hits else "lexical-rule",
+                "version": "2.0",
                 "intents": intents,
                 "topicMatches": topic_matches,
+                "channels": {
+                    "lexical": True,
+                    "semantic": bool(semantic_hits),
+                    "semanticModel": settings.embedding_model if semantic_hits else None,
+                    "semanticHitCount": len(semantic_hits),
+                    "semanticStatus": semantic_result.status,
+                    "fallbackApplied": semantic_result.status in {"unavailable", "circuit_open"},
+                    "fallbackReason": semantic_result.reason or None,
+                },
                 "limits": {
                     "metrics": max_metrics,
                     "tables": max_tables,
