@@ -21,8 +21,9 @@ class Settings(BaseSettings):
     retrieval_semantic_enabled: bool = False
     embedding_base_url: str = ""
     embedding_api_key: str = ""
-    embedding_model: str = "BAAI/bge-m3"
+    embedding_model: str = "text-embedding-v4"
     embedding_dimensions: int = 1024
+    embedding_send_dimensions: bool = True
     embedding_timeout_seconds: int = 8
     embedding_max_retries: int = 1
     retrieval_semantic_circuit_breaker_seconds: int = 30

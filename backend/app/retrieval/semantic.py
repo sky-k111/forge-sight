@@ -80,9 +80,14 @@ def _validate_vector(vector: list[float]) -> list[float]:
 def embed_texts(texts: list[str]) -> list[list[float]]:
     if not texts:
         return []
+    request: dict = {
+        "model": settings.embedding_model,
+        "input": texts,
+    }
+    if settings.embedding_send_dimensions:
+        request["dimensions"] = int(settings.embedding_dimensions)
     response = _embedding_client().embeddings.create(
-        model=settings.embedding_model,
-        input=texts,
+        **request,
     )
     ordered = sorted(response.data, key=lambda item: item.index)
     if len(ordered) != len(texts):
@@ -225,8 +230,14 @@ def ensure_schema(engine) -> None:
             connection.exec_driver_sql(statement)
 
 
-def rebuild_source_index(session, source_id: int, *, batch_size: int = 32) -> dict:
-    """Incrementally upsert changed objects and disable deleted/stale objects."""
+def rebuild_source_index(
+    session,
+    source_id: int,
+    *,
+    batch_size: int = 10,
+    force: bool = False,
+) -> dict:
+    """Synchronize one source, embedding only changed objects unless forced."""
 
     ensure_schema(session.get_bind())
     documents = collect_documents(session, source_id)
@@ -242,7 +253,11 @@ def rebuild_source_index(session, source_id: int, *, batch_size: int = 32) -> di
         {"source_id": source_id, "model": settings.embedding_model},
     ).mappings().all()
     existing = {(row["object_type"], row["object_id"]): row["content_hash"] for row in existing_rows}
-    changed = [doc for doc in documents if existing.get((doc.object_type, doc.object_id)) != doc.content_hash]
+    changed = [
+        doc
+        for doc in documents
+        if force or existing.get((doc.object_type, doc.object_id)) != doc.content_hash
+    ]
 
     for start in range(0, len(changed), max(1, batch_size)):
         batch = changed[start : start + max(1, batch_size)]
@@ -296,7 +311,13 @@ def rebuild_source_index(session, source_id: int, *, batch_size: int = 32) -> di
             },
         )
     session.commit()
-    return {"sourceId": source_id, "documents": len(documents), "updated": len(changed), "disabled": len(stale)}
+    return {
+        "sourceId": source_id,
+        "mode": "full" if force else "incremental",
+        "documents": len(documents),
+        "updated": len(changed),
+        "disabled": len(stale),
+    }
 
 
 def search(
