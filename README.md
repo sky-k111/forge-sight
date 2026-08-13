@@ -154,8 +154,8 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    Q[Q 邮箱绑定与验证] --> M[M 业务数据模型与迁移]
-    M --> R[R 智能生成与自动发布]
+    Q[Q 邮箱绑定与验证<br/>已完成] --> M[M 业务数据模型与迁移<br/>已完成]
+    M --> R[R 智能生成与自动发布<br/>待合并]
     M --> V[V 版本管理与文件导出]
     M --> N[N 消息中心与公告]
     Q --> N
@@ -171,11 +171,12 @@ flowchart LR
     U --> T[T 集成测试与上线验收]
     E --> T
 
+    classDef done fill:#ECFDF5,stroke:#059669,color:#064E3B,stroke-width:2px;
     classDef foundation fill:#EFF6FF,stroke:#2563EB,color:#1E3A8A,stroke-width:1.5px;
     classDef core fill:#FFF7ED,stroke:#EA580C,color:#7C2D12,stroke-width:1.5px;
     classDef delivery fill:#ECFDF5,stroke:#059669,color:#064E3B,stroke-width:1.5px;
     classDef quality fill:#F5F3FF,stroke:#7C3AED,color:#4C1D95,stroke-width:1.5px;
-    class Q,M foundation;
+    class Q,M done;
     class R,V,N core;
     class E,U delivery;
     class T quality;

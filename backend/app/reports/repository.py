@@ -170,6 +170,8 @@ def publish_version(
     version_id: str,
     event_id: str,
     idempotency_key: str,
+    event_type: str = "report.published",
+    event_payload: dict[str, Any] | None = None,
 ) -> ReportVersion:
     """在调用方事务内原子发布版本并记录 Outbox 事件。"""
 
@@ -182,13 +184,22 @@ def publish_version(
     version.status = "published"
     version.published_at = version.published_at or now
     if session.query(DomainEventOutbox).filter_by(idempotency_key=idempotency_key).first() is None:
+        payload = {"reportId": report_id, "versionId": version_id}
+        if event_payload is not None:
+            payload.update(
+                {
+                    "eventId": event_id,
+                    **event_payload,
+                    "publishedAt": version.published_at.isoformat(),
+                }
+            )
         session.add(
             DomainEventOutbox(
                 id=event_id,
-                event_type="report.published",
+                event_type=event_type,
                 aggregate_id=report_id,
                 idempotency_key=idempotency_key,
-                payload_json={"reportId": report_id, "versionId": version_id},
+                payload_json=payload,
             )
         )
     session.flush()

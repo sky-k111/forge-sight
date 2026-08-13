@@ -169,6 +169,7 @@ def test_create_subscription_uses_requested_channel(analysis_session):
 
     assert subscription["channel"] == "email"
     assert subscription["publishPolicy"] == "auto_publish"
+    assert subscription["nextRunAt"] is not None
 
 
 def test_legacy_feishu_delivery_keeps_feishu_channel(analysis_session, monkeypatch):
