@@ -1,16 +1,23 @@
 # Q01 邮箱身份与接口契约
 
-> 状态：契约草案（待 GPT 审查冻结）
+> 状态：契约草案（待 GPT 审查冻结，已按 2026-08-13 首轮审查意见修订）
 > 所属大任务：`Q邮箱绑定与验证`
 > 本任务编号：Q01
 > 作者：DeepSeek
-> 版本：V1.0
+> 版本：V1.1
 > 更新日期：2026-08-13
 
 本契约冻结 Q02～Q07 后端实现所依据的邮箱身份状态、数据字段、验证挑战、
 API、错误码与访问门禁。GPT 审查通过后标记为"契约冻结"；此后变更必须
 按 `docs/tasks/DEEPSEEK_GPT_COLLABORATION.md` 第 6 节执行。
 U03 前端绑定页按本契约接入。
+
+> V1.1 修订说明（响应 GPT 首轮审查 Critical 1 / Important 8 / Minor 1）：
+> 门禁覆盖匿名请求、门禁默认关闭与启动守卫、管理员修复入口改为仅设待验证目标、
+> `code_hash` 可空、活动挑战唯一性改为每用户一条、新增不可变验证事件表、
+> 验证错误码拆分、邮箱双字段（可投递 + canonical）、占用竞态与错误映射、E 任务所有权纠正。
+
+<!-- markdownlint-disable MD013 -->
 
 ---
 
@@ -20,9 +27,9 @@ U03 前端绑定页按本契约接入。
 
 - 邮箱身份三态、转换规则与存量用户初始状态。
 - `PlatformUser` 邮箱字段、规范化、唯一性、脱敏与兼容方案。
-- `EmailVerificationChallenge` 验证挑战的存储、生命周期与并发语义。
+- `EmailVerificationChallenge` 验证挑战与 `EmailVerificationEvent` 验证事件的存储、生命周期与并发语义。
 - 绑定、发码、验证、更换邮箱、注册、登录、当前用户共 8 个 API 的完整契约。
-- 受限会话与完整会话的语义、白名单与门禁矩阵。
+- 受限会话与完整会话的语义、白名单与门禁矩阵（含匿名请求处理）。
 - 安全要求（枚举、暴力、重放、频控、审计、脱敏）。
 - 验证邮件 Provider 抽象边界（不含任何视觉/模板决策）。
 - 数据库增量迁移与回滚方案。
@@ -49,11 +56,15 @@ U03 前端绑定页按本契约接入。
 | D1 | 邮箱状态不落独立列，由 `email` + `email_verified_at` 派生 | 避免双写不一致；API 输出 `emailStatus` 字符串 |
 | D2 | 更换邮箱期间用户保持 `verified`，新邮箱快照只存在于挑战行；`user.email` 仅在验证成功时原子替换 | 满足"成功前旧邮箱继续有效"（REQUIREMENTS 11.1） |
 | D3 | 注册只创建待验证账号并返回受限 token，验证码由前端随后调用发码接口触发 | 注册不被 SMTP 延迟/失败阻塞；发码失败可重试；整体流程仍满足 REQUIREMENTS 6.1 |
-| D4 | 邮箱整体小写规范化存储（含本地部分） | 避免大小写歧义双账号；业界通行；Q07 覆盖规范化测试 |
+| D4 | 邮箱双字段：`email` 存**可投递形式**（仅域名小写，本地部分原样）；`email_canonical` 存**唯一比较形式**（整体小写），唯一索引只建在 canonical 上 | 不改变可投递地址（REQUIREMENTS 11.1 只要求域名规范化）；canonical 仅用于去重与频控，不用于投递 |
 | D5 | 业务错误统一 `{"detail": "<文案>", "errorCode": "<稳定码>"}` | `detail` 兼容现有前端，`errorCode` 是冻结的机器契约 |
 | D6 | 验证成功后颁发新 full token（token 轮换） | token 无状态，无法服务端升级受限会话；轮换同时解决"验证后立刻获得完整权限" |
 | D7 | 存量旧 token（无 `auth_scope` 声明）一律视为 restricted | fail-closed；存量用户首次登录被引导绑定（REQUIREMENTS 6.2） |
-| D8 | 发码成功响应不含挑战 ID，验证失败原因统一 | 缩小可探测面（见第 7 节） |
+| D8 | 发码成功响应不含挑战 ID | 缩小可探测面（见第 7 节） |
+| D9 | **邮箱门禁默认关闭**（`AUTH_EMAIL_GATE_ENABLED=false`），按第 6.4 节安全顺序显式开启；开启且邮件不可真实投递时拒绝启动 | 防止 Q 合并后锁死全部存量用户与种子管理员（安全上线顺序） |
+| D10 | **演示模式默认关闭**（`DEMO_MODE_ENABLED=false`）；门禁开启时匿名请求一律 401，演示回退失效 | 堵住"删除 Authorization 头绕过门禁"的 Critical 漏洞；演示模式仅作显式开发配置 |
+| D11 | 管理员修复入口**只设置待验证目标并触发发码**，不直接置 verified | 邮箱所有权始终由验证码证明；防锁死靠 feature flag 与正常验证流程 |
+| D12 | 频控计数基于不可变验证事件表（`email_verification_event`），滚动小时窗口可精确计算 | 挑战行会被复用，`send_count` 无法承载跨 IP/跨挑战的窗口计数 |
 
 ---
 
@@ -85,9 +96,9 @@ stateDiagram-v2
 | unbound → verified | 合法 | 存量用户 `challenges` + `verify` 成功 |
 | pending_verification → verified | 合法 | `verify` 成功（挑战邮箱与待验证邮箱一致） |
 | pending_verification → pending_verification | 合法（行值不变） | 重发验证码；换目标邮箱（行值在 verify 时更新） |
-| verified → verified（更换邮箱） | 合法 | `change` + `verify` 成功后 `email` 与 `email_verified_at` 在同一事务原子替换 |
+| verified → verified（更换邮箱） | 合法 | `change` + `verify` 成功后 `email`/`email_canonical` 与 `email_verified_at` 在同一事务原子替换 |
 | verified → pending_verification | **非法** | `email_verified_at` 一旦写入永不回退 |
-| pending_verification / verified → unbound | **非法** | 已写入的邮箱不删除（管理员修复入口除外，必须审计） |
+| pending_verification / verified → unbound | **非法** | 已写入的邮箱不删除（管理员修复入口也只能改目标邮箱，必须审计） |
 | verified → verified（同邮箱再次验证） | 非法（无状态变化） | 返回 `409 EMAIL_ALREADY_VERIFIED` |
 
 ### 2.3 存量用户初始状态
@@ -105,23 +116,36 @@ stateDiagram-v2
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
-| `email` | `VARCHAR(254)` | NULL；规范化后写入；部分唯一索引 | 当前邮箱（含未验证的目标邮箱） |
+| `email` | `VARCHAR(254)` | NULL；**可投递形式** | 当前邮箱（含未验证的目标邮箱），用于投递与展示 |
+| `email_canonical` | `VARCHAR(254)` | NULL；**唯一比较形式**；部分唯一索引 | 用于去重、查找与频控，不用于投递 |
 | `email_verified_at` | `TIMESTAMP` | NULL | 最近一次验证成功的服务器时间（UTC） |
 
-### 3.2 规范化规则 `normalize_email(raw) -> str`
+不变式：`email IS NULL ⇔ email_canonical IS NULL`；两者始终同写同改。
+
+### 3.2 规范化规则
+
+**可投递形式 `normalize_email(raw) -> str`**（写入 `email`、用于 SMTP 投递与展示）：
 
 1. 去除首尾空白字符（含全角空格）。
-2. **整体转小写**（本地部分与域名一致处理，见决策 D4）。
-3. 校验格式（严格正则，允许常见合法字符组合），总长 ≤ 254，本地部分 ≤ 64。
+2. **仅域名部分转小写**；本地部分原样保留（保持可投递性，REQUIREMENTS 11.1）。
+3. 校验格式（严格 ASCII 正则，允许常见合法字符组合与 plus-address），总长 ≤ 254，本地部分 ≤ 64。
 4. 任何一步失败 → 抛 `AUTH_INVALID_EMAIL_FORMAT`（HTTP 400）。
 
-唯一性与大小写规则：
+**唯一比较形式 `canonicalize_email(deliverable) -> str`**（写入 `email_canonical`，
+仅用于唯一约束、冲突检测与频控桶键）：
 
-- 唯一约束作用在规范化后的值上；比较前一律先规范化。
-- 同一邮箱不同大小写、带/不带首尾空格均视为同一邮箱（注册冲突、挑战复用均按此判定）。
-- 唯一性通过 PostgreSQL 部分唯一索引实现：`email` 为 NULL 的多行互不冲突。
+1. 整体转小写（本地部分与域名）。
+2. **不做 plus-stripping**：`user+tag@x.com` 与 `user@x.com` 视为不同邮箱（冻结）。
+3. Unicode/IDN：首期**仅支持 ASCII 邮箱**；IDN 域名、Unicode 本地部分 → `400 AUTH_INVALID_EMAIL_FORMAT`
+   （后续版本可扩展，扩展时必须先走契约变更流程）。
 
-### 3.3 脱敏规则 `mask_email(normalized) -> str`
+### 3.3 唯一性与大小写规则
+
+- 唯一约束只建在 `email_canonical` 上（PostgreSQL 部分唯一索引：非 NULL 行唯一，NULL 行互不冲突）。
+- 比较前一律先 canonicalize：不同大小写、带/不带首尾空格视为同一邮箱。
+- `A@Example.com` 与 `a@example.com` 投递形式不同，但 canonical 相同 → 冲突 → `EMAIL_TAKEN`。
+
+### 3.4 脱敏规则 `mask_email(deliverable) -> str`
 
 | 本地部分长度 | 输出 |
 | --- | --- |
@@ -132,16 +156,16 @@ stateDiagram-v2
 
 - `/me` 与所有登录/注册/发码/验证响应中的 `emailMasked`。
 - 审计日志 `resource` 字段。
-- **任何 API 响应不返回未脱敏的邮箱**；邮件投递由服务端使用真实地址，不经 API 暴露。
+- **任何 API 响应不返回未脱敏的邮箱**；邮件投递由服务端使用可投递形式，不经 API 暴露。
 
-### 3.4 验证时间与邮箱状态
+### 3.5 验证时间与邮箱状态
 
 - `email_verified_at` = 验证成功的服务器时间；重复验证、更换邮箱成功后刷新。
 - API 侧 `emailStatus` 取值即第 2.1 节三态；`/me` 不返回挑战内部信息。
 
 ---
 
-## 4. 验证挑战模型与规则
+## 4. 验证挑战、验证事件与规则
 
 ### 4.1 `email_verification_challenge` 表
 
@@ -150,33 +174,42 @@ CREATE TABLE IF NOT EXISTS email_verification_challenge (
     id            VARCHAR(40)  NOT NULL,  -- new_id("c")
     user_id       VARCHAR(40)  NOT NULL,
     purpose       VARCHAR(24)  NOT NULL,  -- bind / verify / change（服务端派生）
-    email         VARCHAR(254) NOT NULL,  -- 规范化后的目标邮箱快照
-    code_hash     VARCHAR(256) NOT NULL,  -- HMAC-SHA256 摘要，明文不落库
+    email         VARCHAR(254) NOT NULL,  -- 可投递形式的目标邮箱快照
+    email_canonical VARCHAR(254) NOT NULL, -- 唯一比较形式（频控/去重用）
+    code_hash     VARCHAR(256) NULL,      -- HMAC-SHA256 摘要；消费后置 NULL（见约束）
     expires_at    TIMESTAMP    NOT NULL,
     attempt_count INTEGER      NOT NULL DEFAULT 0,
     send_count    INTEGER      NOT NULL DEFAULT 1,
     last_sent_at  TIMESTAMP    NOT NULL,
     consumed_at   TIMESTAMP    NULL,
     superseded_at TIMESTAMP    NULL,
-    ip            VARCHAR(45)  NOT NULL DEFAULT '',  -- 仅用于频控，不写入日志
     created_at    TIMESTAMP    NOT NULL,
     PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS ix_email_verification_challenge_user
     ON email_verification_challenge (user_id);
 CREATE INDEX IF NOT EXISTS ix_email_verification_challenge_email_created
-    ON email_verification_challenge (email, created_at);
+    ON email_verification_challenge (email_canonical, created_at);
+-- 每个账号至多一条活动挑战（与 purpose 无关）
 CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
-    ON email_verification_challenge (user_id, purpose, email)
+    ON email_verification_challenge (user_id)
     WHERE consumed_at IS NULL AND superseded_at IS NULL;
 ```
 
-字段说明：
+约束说明（修复审查 Important 3/4）：
 
-- `code_hash = HMAC-SHA256(EMAIL_CODE_SECRET, "{code}:{id}:{email}")` 的 hex 摘要；
-  验证时对候选码计算同式摘要后 `hmac.compare_digest` 比较。明文验证码不落库、不落日志。
-- 挑战"可用"判据：`consumed_at IS NULL AND superseded_at IS NULL AND expires_at > now AND attempt_count < max`。
-- 并发创建由部分唯一索引兜底：插入冲突时在事务内转为"取代旧挑战"或"复用同邮箱挑战"（Q03 实现约束）。
+- `code_hash` 允许 NULL；**活动挑战（`consumed_at IS NULL AND superseded_at IS NULL`）必须
+  `code_hash` 非空**（由服务层保证，Q03 加测试）。
+- 唯一索引按 `(user_id)` 而非 `(user_id, purpose, email)`：一个账号同一时刻只追求一个目标邮箱，
+  从根上排除"两个不同目标邮箱的挑战同时活动"的竞态（绑定与更换流程互斥）。
+- **创建挑战的一致性方案（Q03 实现约束）**：
+  1. 事务开始；
+  2. `SELECT ... FROM platform_user WHERE id = :user_id FOR UPDATE` 锁定用户行（PostgreSQL），串行化同一账号的并发发码；
+  3. 若目标邮箱与现有活动挑战邮箱 canonical 相同且未过期未超次 → 复用该行（重发路径）；
+  4. 否则将现有活动挑战置 `superseded_at = now`，再 INSERT 新挑战；
+  5. 提交。唯一索引作为兜底：并发突破导致 IntegrityError 时，服务层捕获并重试一次或映射业务错误（禁止 500）。
+  SQLite 无行锁：测试语义 = 依赖唯一索引 + IntegrityError 映射（Q07 在 SQLite 与 PostgreSQL 双语义下测试）。
+- 频控计数**不依赖**本表（挑战行会被复用、IP 不在挑战行上），统一来自 4.3 事件表（决策 D12）。
 
 ### 4.2 验证码规则
 
@@ -186,24 +219,69 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
 | 有效期 | 600 秒（10 分钟） | `EMAIL_CODE_TTL_SECONDS` |
 | 重发冷却 | 60 秒 | `EMAIL_CODE_RESEND_SECONDS` |
 | 单挑战错误上限 | 5 次，达到后挑战永久失效 | `EMAIL_CODE_MAX_ATTEMPTS` |
-| 小时级发送频控 | 每邮箱 5 / 每账号 5 / 每 IP 10 | `EMAIL_HOURLY_LIMIT_EMAIL/ACCOUNT/IP` |
-| 存储 | 仅安全摘要（HMAC-SHA256，服务端密钥） | `EMAIL_CODE_SECRET` |
+| 小时级频控 | 每邮箱 5 / 每账号 5 / 每 IP 10（含发码与验证，来源见 4.3） | `EMAIL_HOURLY_LIMIT_EMAIL/ACCOUNT/IP` |
+| 存储 | 仅安全摘要（HMAC-SHA256，服务端密钥），明文不落库、不落日志 | `EMAIL_CODE_SECRET` |
 
-### 4.3 生命周期规则
+`code_hash = HMAC-SHA256(EMAIL_CODE_SECRET, "{code}:{id}:{email_canonical}")` 的 hex 摘要；
+验证时对候选码计算同式摘要后 `hmac.compare_digest` 比较。
+
+### 4.3 `email_verification_event` 不可变验证事件表（修复审查 Important 5）
+
+```sql
+CREATE TABLE IF NOT EXISTS email_verification_event (
+    id             VARCHAR(40)  NOT NULL,  -- new_id("e")
+    user_id        VARCHAR(40)  NOT NULL,
+    email_canonical VARCHAR(254) NOT NULL,
+    purpose        VARCHAR(24)  NOT NULL,
+    challenge_id   VARCHAR(40)  NULL,
+    event_type     VARCHAR(24)  NOT NULL,  -- code_sent / send_failed / verify_attempt / verify_success
+    outcome        VARCHAR(32)  NOT NULL DEFAULT '',  -- sent / provider_error / invalid_code / expired / attempts_exceeded / superseded / consumed / not_found / success
+    ip             VARCHAR(45)  NOT NULL DEFAULT '',
+    created_at     TIMESTAMP    NOT NULL,
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_email_verification_event_email_time
+    ON email_verification_event (email_canonical, created_at);
+CREATE INDEX IF NOT EXISTS ix_email_verification_event_user_time
+    ON email_verification_event (user_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_email_verification_event_ip_time
+    ON email_verification_event (ip, created_at);
+CREATE INDEX IF NOT EXISTS ix_email_verification_event_challenge_time
+    ON email_verification_event (challenge_id, created_at);
+```
+
+- 每行不可变、只追加（append-only），是滚动小时窗口计数的唯一事实源：
+  每邮箱 = `COUNT WHERE email_canonical = ? AND created_at > now-1h`；
+  每账号 = 按 `user_id`；每 IP = 按 `ip`（发码与验证共享 IP 桶）。
+- **Provider 发送失败（`send_failed`）同样计入发码频控**（冻结）：失败尝试消耗服务器资源，
+  不因投递失败而豁免防滥用限流。
+- `verify_attempt`（含 `invalid_code/expired/attempts_exceeded/...`）计入 IP 桶与挑战 `attempt_count`
+  （双写：`attempt_count` 保证单挑战上限，事件表保证窗口频控）。
+- 保留策略：事件行保留 `EMAIL_EVENT_RETENTION_DAYS`（默认 30）天，由启动清理任务删除过期行；
+  只删除超过保留期的行，不删除挑战历史（挑战行供审计，不自动清理）。
+- 频控判断与时序：先记事件、后检查阈值；超限返回 429 并审计（拦截事件本身也入表）。
+
+### 4.4 生命周期规则
 
 - **重发（同邮箱）**：冷却内 → `429 CHALLENGE_RESEND_COOLDOWN`；冷却过后复用同一挑战行：
   生成新码、`expires_at` 重置、`send_count + 1`、`last_sent_at` 更新。
-- **更换目标邮箱**：新建挑战行；同一账号下其他活动挑战（`consumed_at IS NULL AND superseded_at IS NULL`）
-  在**同一事务**内置 `superseded_at = now`（满足 Q03"新验证码发出后使同用途旧挑战失效"）。
+- **更换目标邮箱**：锁定用户行后置旧活动挑战 `superseded_at = now`，同一事务 INSERT 新挑战
+  （Q03"新验证码发出后使同用途旧挑战失效"）。
 - **单次使用**：验证成功后置 `consumed_at = now` **且** `code_hash = NULL`（双保险）。
-- **重复验证（重放）**：已消费、已取代、已过期、超次数的挑战统一返回
-  `404 CHALLENGE_NOT_FOUND`（不区分原因，见第 7 节）。
+- **重复验证（重放）**：已消费的挑战上 `code_hash` 已置 NULL，候选码比较必然失败 →
+  `400 CODE_INVALID`（不泄露任何跨账号信息）。
 - **并发验证**：消费与用户邮箱更新在同一数据库事务内原子完成
-  （`UPDATE ... WHERE consumed_at IS NULL AND superseded_at IS NULL AND expires_at > now AND attempt_count < max`
-  并检查影响行数，配合行锁）。同一挑战并发双提交，恰好一次成功、一次 404。
-- **幂等键**：`(user_id, purpose, email)` 的活动挑战行即幂等边界 —— 同一目标邮箱的发码幂等复用，
-  验证成功以消费状态保证恰好一次。服务端"发码"操作在邮件 Provider 失败时不消费挑战、
-  不创建新挑战（返回 `502 EMAIL_SEND_FAILED`，冷却后可重试）。
+  （`UPDATE email_verification_challenge SET consumed_at=now, code_hash=NULL
+  WHERE id=? AND consumed_at IS NULL AND superseded_at IS NULL AND expires_at > now AND attempt_count < max`
+  并检查影响行数；PostgreSQL 加行锁）。同一挑战并发双提交，恰好一次成功、另一次按失败分支处理。
+- **verify 事务内占用竞态（修复审查 Important 8）**：提交用户邮箱前检查
+  `email_canonical` 是否已被其他账号占用；唯一索引冲突（并发注册/验证同一邮箱）→
+  捕获 IntegrityError → 回滚挑战消费 → `409 EMAIL_TAKEN`。**任何 IntegrityError 禁止暴露为 500**。
+- **发码前占用检查（challenges/change）**：目标 `email_canonical` 已被**其他账号**绑定 →
+  `409 EMAIL_TAKEN`；已被本人绑定且已验证 → `409 EMAIL_ALREADY_VERIFIED`。
+- **幂等键**：`user_id` 上的活动挑战唯一索引即幂等边界 —— 同一账号的发码幂等复用活动挑战行，
+  验证成功以消费状态保证恰好一次。Provider 失败时不消费挑战、不新建挑战
+  （返回 `502 EMAIL_SEND_FAILED`，冷却后可重试）。
 
 ---
 
@@ -233,15 +311,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
 | `AUTH_INVALID_CREDENTIALS` | 401 | login | 用户名或密码错误（不区分账号是否存在） |
 | `AUTH_ACCOUNT_DISABLED` | 401 | login | 账号已停用 |
 | `AUTH_USERNAME_TAKEN` | 409 | register | 用户名已存在 |
-| `EMAIL_TAKEN` | 409 | register | 该邮箱已被其他账号绑定 |
+| `EMAIL_TAKEN` | 409 | register / challenges / change / verify | 该邮箱已被其他账号绑定 |
 | `AUTH_INVALID_EMAIL_FORMAT` | 400 | register / challenges / change / verify / admin | 邮箱格式不正确 |
-| `EMAIL_ALREADY_VERIFIED` | 409 | challenges / change | 该邮箱已完成验证 |
+| `EMAIL_ALREADY_VERIFIED` | 409 | challenges / change / admin | 该邮箱已完成验证 |
 | `CHALLENGE_RESEND_COOLDOWN` | 429 | challenges / change | 验证码发送过于频繁，请稍后再试（响应含 `retryAfterSeconds`） |
 | `CHALLENGE_RATE_LIMITED` | 429 | challenges / change / verify | 操作过于频繁，请稍后再试 |
-| `CHALLENGE_NOT_FOUND` | 404 | verify | 验证码无效或已过期（不区分不存在/过期/超次/已消费/已取代） |
-| `EMAIL_VERIFICATION_REQUIRED` | 403 | 全部业务/管理接口（门禁） | 请先完成邮箱验证 |
+| `CODE_INVALID` | 400 | verify | 验证码不正确（含已消费挑战上的重放） |
+| `CODE_EXPIRED` | 400 | verify | 验证码已过期，请重新获取 |
+| `CODE_ATTEMPTS_EXCEEDED` | 400 | verify | 错误次数过多，请重新获取验证码 |
+| `CHALLENGE_NOT_FOUND` | 404 | verify | 验证请求不存在或已失效（挑战不存在/已被取代/邮箱与活动挑战不一致——统一，防探测他人挑战） |
+| `EMAIL_VERIFICATION_REQUIRED` | 403 | 全部业务/管理接口（门禁，restricted） | 请先完成邮箱验证 |
 | `EMAIL_SEND_FAILED` | 502 | challenges / change | 验证邮件发送失败，请稍后重试 |
-| `USER_NOT_FOUND` | 404 | admin/email-bind | 用户不存在 |
+| `USER_NOT_FOUND` | 404 | admin | 用户不存在 |
+
+错误码拆分依据（修复审查 Important 6）：`verify` 的调用者已通过本人 token 鉴权，
+区分 `CODE_INVALID / CODE_EXPIRED / CODE_ATTEMPTS_EXCEEDED` 不泄露"邮箱是否已注册"；
+涉及"挑战是否属于本人/是否存在"的失败仍统一为 `CHALLENGE_NOT_FOUND`。
 
 ### 5.2 `POST /api/auth/register`
 
@@ -261,7 +346,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
   "user": {
     "id": "u_xxx", "username": "zhangsan", "displayName": "张三",
     "role": "business", "title": "业务人员",
-    "emailMasked": "z***@example.com", "emailStatus": "pending_verification"
+    "emailMasked": "Z***@example.com", "emailStatus": "pending_verification"
   },
   "nextAction": "verify_email"
 }
@@ -285,7 +370,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
 ```json
 {
   "token": "<full>",
-  "user": { "...": "...", "emailMasked": "z***@example.com", "emailStatus": "verified" },
+  "user": { "...": "...", "emailMasked": "Z***@example.com", "emailStatus": "verified" },
   "nextAction": null
 }
 ```
@@ -305,7 +390,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
   "user": {
     "id": "u_xxx", "username": "zhangsan", "displayName": "张三",
     "role": "business", "title": "业务人员",
-    "emailMasked": "z***@example.com", "emailStatus": "verified"
+    "emailMasked": "Z***@example.com", "emailStatus": "verified"
   }
 }
 ```
@@ -317,6 +402,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
 - 鉴权：任意有效 token。用途：发送验证码（`purpose` 服务端派生）。
 - 请求 `email` 可省略：省略时对账号当前待验证邮箱重发（仅 pending 用户）；
   unbound 用户省略 email → `400 AUTH_INVALID_EMAIL_FORMAT`。
+- 发码前占用检查（4.4）：目标邮箱 canonical 被其他账号占用 → `409 EMAIL_TAKEN`。
 
 请求：
 
@@ -330,14 +416,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
 { "ok": true, "emailMasked": "d***@example.com", "retryAfterSeconds": 60, "purpose": "bind" }
 ```
 
-失败：`400` / `409 EMAIL_ALREADY_VERIFIED`（verified 用户对当前邮箱重发）/
+失败：`400` / `409 EMAIL_TAKEN` / `409 EMAIL_ALREADY_VERIFIED`（verified 用户对当前邮箱重发）/
 `429 CHALLENGE_RESEND_COOLDOWN` / `429 CHALLENGE_RATE_LIMITED` / `502 EMAIL_SEND_FAILED`。
-幂等：同 `(user, email)` 活动挑战复用同一行（冷却后更新）；换邮箱则取代旧挑战。
+幂等：同账号活动挑战复用同一行（冷却后更新）；换邮箱则锁定用户行 + 取代旧挑战 + 插入新行。
 
 ### 5.6 `POST /api/auth/email/change`
 
 - 鉴权：任意有效 token。用途：更换邮箱（`purpose=change`，与 challenges 共享同一服务逻辑，
   `email` 必填；对 pending 用户即"更换目标邮箱"）。
+- 发码前占用检查同 5.5。
 
 请求：
 
@@ -351,12 +438,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
 { "ok": true, "emailMasked": "n***@example.com", "retryAfterSeconds": 60, "purpose": "change" }
 ```
 
-失败：与 challenges 相同（`400` / `409` / `429` / `502`）。
+失败：与 challenges 相同（`400` / `409 EMAIL_TAKEN` / `409` / `429` / `502`）。
 
 ### 5.7 `POST /api/auth/email/verify`
 
 - 鉴权：任意有效 token。用途：提交验证码，消费活动挑战并提交邮箱变更。
-- 幂等/并发：单挑战恰好一次成功（原子消费）；成功后重放 → 统一 404。
+- 幂等/并发：单挑战恰好一次成功（原子消费）；成功后重放 → `400 CODE_INVALID`。
 
 请求：
 
@@ -374,17 +461,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
 }
 ```
 
-失败：`400 AUTH_INVALID_EMAIL_FORMAT` / `404 CHALLENGE_NOT_FOUND`（含码错误、过期、超次、
-已消费、被取代、邮箱不一致——全部统一）/ `429 CHALLENGE_RATE_LIMITED`。
+失败：
+
+- `400 AUTH_INVALID_EMAIL_FORMAT`
+- `400 CODE_INVALID`（码错误；含已消费挑战上的重放）
+- `400 CODE_EXPIRED`（挑战过期）
+- `400 CODE_ATTEMPTS_EXCEEDED`（超过单挑战错误上限）
+- `404 CHALLENGE_NOT_FOUND`（挑战不存在 / 已被取代 / `email` 与活动挑战不一致）
+- `409 EMAIL_TAKEN`（事务内占用竞态：目标邮箱已被其他账号验证）
+- `429 CHALLENGE_RATE_LIMITED`
 
 ### 5.8 `POST /api/auth/logout`
 
 - 鉴权：任意有效 token。行为不变（无状态 token，审计"退出登录"），返回 `{"ok": true}`。
 
-### 5.9 `POST /api/auth/admin/email-bind`（Q06，防锁死运维入口）
+### 5.9 `POST /api/auth/admin/email-bind`（Q06，防锁死运维入口，修复审查 Important 2）
 
 - 鉴权：**admin 角色 + full token**（即管理员自身已验证邮箱）。
-- 用途：运维修复入口，直接为指定账号写入邮箱并置为 verified（受审计，不绕过所有权验证的场景）。
+- 用途：为指定账号**设置待验证目标邮箱并触发验证码发送**；**不直接置 verified**，
+  所有权仍由验证码证明。目标用户必须为 `unbound` 或 `pending_verification`
+  （`verified` → `409 EMAIL_ALREADY_VERIFIED`，无需修复）。
 
 请求：
 
@@ -392,9 +488,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
 { "username": "someone", "email": "real@example.com" }
 ```
 
-成功 `200`：返回目标用户对象（`emailStatus: "verified"`）。
-失败：`400` / `404 USER_NOT_FOUND` / `403 EMAIL_VERIFICATION_REQUIRED`（非管理员或受限会话）。
-审计：`write_audit("管理员修复邮箱绑定", resource=<脱敏邮箱>, result="已记录")`。
+成功 `200`：
+
+```json
+{ "ok": true, "emailMasked": "r***@example.com", "purpose": "bind" }
+```
+
+行为：目标用户状态 → `pending_verification`（`email`/`email_canonical` 写入目标邮箱、
+`email_verified_at` 保持 NULL），创建挑战并发送验证码；后续由目标用户本人提交验证码完成验证。
+失败：`400 AUTH_INVALID_EMAIL_FORMAT` / `404 USER_NOT_FOUND` / `409 EMAIL_ALREADY_VERIFIED` /
+`409 EMAIL_TAKEN` / `403 EMAIL_VERIFICATION_REQUIRED`（非管理员或受限会话）。
+审计：`write_audit("管理员修复邮箱绑定（触发验证）", resource=<脱敏邮箱>, result="已记录")`。
 
 ### 5.10 端到端路径（Q01 验收四条路径）
 
@@ -404,8 +508,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
    `verify`(200, full) → 工作台。
 3. **更换邮箱**：`login`(full) → `change {newEmail}` → 期间旧邮箱持续有效、会话保持 full →
    `verify`(200) → `user.email` 原子切换为新邮箱。
-4. **验证码失败路径**：码错误（计数 +1）→ 5 次后挑战失效 → 重发（60 秒冷却 / 小时频控）→
-   过期（600 秒）→ 重放（已消费统一 404）。所有失败均审计、均返回稳定 errorCode。
+4. **验证码失败路径**：码错误（`CODE_INVALID`，计数 +1）→ 5 次后 `CODE_ATTEMPTS_EXCEEDED` →
+   过期 `CODE_EXPIRED`（600 秒）→ 重发（60 秒冷却 / 小时频控）→ 重放（`CODE_INVALID`）。
+   所有失败均审计、均返回稳定 errorCode。
 
 ---
 
@@ -421,31 +526,52 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
 - 存量旧 token（无 `auth_scope` 声明）一律视为 restricted（决策 D7）；升级后存量会话被引导绑定。
 - 未绑定/待验证用户**可以登录**，仅获得受限会话（REQUIREMENTS 11.3）。
 
-### 6.2 白名单（restricted 可访问）
+### 6.2 白名单与门禁矩阵（修复审查 Critical 1）
 
-| 接口 | 未登录 | restricted | full |
+**门禁开启时（`AUTH_EMAIL_GATE_ENABLED=true`）**：
+
+| 接口组 | 未登录 | restricted | full |
 | --- | --- | --- | --- |
-| `GET /health` | ✓ | ✓ | ✓ |
-| `POST /api/auth/register`、`POST /api/auth/login` | ✓ | ✓ | ✓ |
-| `GET /api/auth/me`、`POST /api/auth/logout` | ✗ 401 | ✓ | ✓ |
-| `POST /api/auth/email/challenges` / `change` / `verify` | ✗ 401 | ✓ | ✓ |
-| 其余全部业务/管理接口（analysis、gateway、datasources、knowledge、retrieval、overview、reports、modeling、model-governance、resources、security 及未来 `/api/v1/**`） | 现状演示模式，Q 范围不改动 | **✗ 403 `EMAIL_VERIFICATION_REQUIRED`** | ✓ |
+| `GET /health`、`POST /api/auth/register`、`POST /api/auth/login` | ✓ | ✓ | ✓ |
+| `GET /api/auth/me`、`POST /api/auth/logout`、`POST /api/auth/email/challenges` / `change` / `verify` | ✗ 401 | ✓ | ✓ |
+| 其余全部业务/管理接口（analysis、gateway、datasources、knowledge、retrieval、overview、reports、modeling、model-governance、resources、security 及未来 `/api/v1/**`） | **✗ 401（删除 Authorization 头不能绕过门禁）** | **✗ 403 `EMAIL_VERIFICATION_REQUIRED`** | ✓ |
 
-门禁实现于鉴权依赖层（Q06）：restricted token 命中非白名单 → 统一
-`403 {"detail": "请先完成邮箱验证", "errorCode": "EMAIL_VERIFICATION_REQUIRED"}`；
-前端无法通过绕过绑定页绕过该门禁。
+**门禁关闭时（`AUTH_EMAIL_GATE_ENABLED=false`，默认值）**：
+
+| 接口组 | 未登录 | restricted | full |
+| --- | --- | --- | --- |
+| 白名单接口 | 同上 | ✓ | ✓ |
+| 其余业务/管理接口 | 按 `DEMO_MODE_ENABLED`：`false`（默认）→ 401；`true` → 演示模式回退 | ✓（视为 full） | ✓ |
+
+- **匿名请求一律先经过门禁判定**：门禁开启时非白名单接口匿名返回 401，演示回退失效；
+  未验证用户删除 Authorization 头不能获得任何业务访问（REQUIREMENTS 11.3、17.1）。
+- **演示模式**是显式开发配置（`DEMO_MODE_ENABLED`，安全默认 `false`）；
+  门禁开启时演示模式对非白名单接口不生效。
+- 门禁实现于鉴权依赖层（Q06）：restricted token 命中非白名单 → 统一
+  `403 {"detail": "请先完成邮箱验证", "errorCode": "EMAIL_VERIFICATION_REQUIRED"}`；
+  前端无法通过绕过绑定页绕过该门禁。
 
 ### 6.3 管理员与存量账号
 
 - 管理员与普通用户执行同一门禁：admin 也必须验证邮箱后方可使用管理接口。
-- 种子管理员走存量绑定流程；异常情况由 5.9 运维入口修复（需另一已验证管理员或门禁临时关闭）。
+- 种子管理员走存量绑定流程；异常情况由 5.9 运维入口触发绑定（仍需验证码验证所有权），
+  或按 6.4 临时关闭门禁。
 - 存量账号：登录 → restricted + bind_email，绑定完成后恢复正常。
 
-### 6.4 防锁死方案
+### 6.4 防锁死与安全上线顺序（修复审查 Important 1）
 
-- 配置开关 `AUTH_EMAIL_GATE_ENABLED`（默认 `true`）：置 `false` 时门禁放行
-  （restricted 视为 full），并审计 `邮箱门禁关闭/开启` 事件。上线初期/邮件服务故障时使用。
-- 回滚语义 = 关闭门禁开关，**不回滚数据库 schema**（见第 9 节）。
+- **门禁默认关闭**：`AUTH_EMAIL_GATE_ENABLED=false`。Q 合并后存量用户与种子管理员不受影响，
+  可继续正常使用；绑定 API 已就绪，可逐步引导验证。
+- **启动守卫**：当 `AUTH_EMAIL_GATE_ENABLED=true` 且 `MAIL_PROVIDER=capture` 且
+  `AUTH_EMAIL_GATE_ALLOW_CAPTURE=true` 不成立时，应用**拒绝启动**并明确报错
+  （门禁开启却无真实投递能力 = 锁死配置）。测试与开发环境显式设置 `AUTH_EMAIL_GATE_ALLOW_CAPTURE=true`
+  以演练门禁逻辑。
+- **安全上线顺序（冻结）**：
+  1. 部署 Q（门禁默认关闭，存量不受影响，绑定/验证 API 可用，真实 Provider 未就绪时发码走 capture 且不开启门禁）；
+  2. E 任务交付真实 SMTP Provider（DeepSeek 负责 E01、E03～E09；GPT 负责 E02 视觉模板）；
+  3. 种子管理员完成自身邮箱绑定与验证；
+  4. 显式开启门禁（配置变更 + 审计"邮箱门禁开启"事件）；
+  5. 观测登录/绑定指标，异常时回滚 = 关闭门禁开关（**不回滚数据库 schema**）。
 - 验证邮件发送使用 capture/smtp 可替换 Provider（第 8 节），核心登录不依赖外部邮件服务可用性。
 
 ---
@@ -454,14 +580,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active
 
 | 威胁 | 对策 |
 | --- | --- |
-| 邮箱枚举 | 登录错误统一文案（现状保留）；`verify` 全部失败原因统一 404（不区分"邮箱存在/码错误/过期"）；发码接口只作用于**调用者自己的账号**，不做任何跨账号邮箱查找（零枚举面）；`/me` 只返回本人脱敏邮箱；全站 API 不返回未脱敏邮箱。唯一例外：注册 `409 EMAIL_TAKEN`（注册反馈必需，业界通行，已明示）。 |
-| 验证码暴力尝试 | 单挑战 5 次上限；验证接口受 IP 小时频控；失败统一错误码；每次失败审计（不含码）。 |
-| 重放 | 单次使用原子消费；消费后 `code_hash` 置 NULL；重放统一 404。 |
-| 频控维度 | 账号（发码 ≤ 5/时）、邮箱（发码 ≤ 5/时，跨账号）、IP（发码+验证 ≤ 10/时）；计数由挑战表派生查询实现（Q03），不新建计数器表。 |
-| 审计事件 | `请求邮箱验证码` / `重发邮箱验证码` / `邮箱验证码发送失败` / `邮箱验证成功` / `邮箱验证失败` / `邮箱验证码频控拦截` / `邮箱验证挑战被取代` / `管理员修复邮箱绑定` / `邮箱门禁关闭` / `邮箱门禁开启`。`resource` 一律存**脱敏邮箱**。 |
-| 日志脱敏 | 验证码、密码哈希、完整 token、未脱敏邮箱不进入任何日志；`ip` 仅存挑战行用于频控，不进入审计 detail。 |
+| 邮箱枚举 | 登录错误统一文案（现状保留）；`verify` 中"挑战是否属于本人/是否存在"统一 `CHALLENGE_NOT_FOUND`，只有本人挑战可区分 `CODE_INVALID/CODE_EXPIRED/CODE_ATTEMPTS_EXCEEDED`（无跨账号泄露）；发码接口只作用于**调用者自己的账号**；`/me` 只返回本人脱敏邮箱；全站 API 不返回未脱敏邮箱。明示例外：`EMAIL_TAKEN`（注册/change/verify 一致返回，注册反馈必需，业界通行，已明示）。 |
+| 匿名绕过门禁 | 门禁开启时非白名单接口匿名一律 401；演示模式默认关闭且门禁开启时失效（Critical 1 修复）。 |
+| 验证码暴力尝试 | 单挑战 5 次上限（`attempt_count` + 事件表双保险）；验证接口受 IP 小时频控；每次失败审计（不含码）。 |
+| 重放 | 单次使用原子消费；消费后 `code_hash` 置 NULL；重放 → `CODE_INVALID`。 |
+| 频控维度 | 账号（≤ 5/时）、邮箱 canonical（≤ 5/时，跨账号）、IP（发码+验证 ≤ 10/时）；计数全部来自不可变事件表 `email_verification_event`（滚动小时窗口可精确计算）；Provider 失败同样计入（4.3）。 |
+| 审计事件 | `请求邮箱验证码` / `重发邮箱验证码` / `邮箱验证码发送失败` / `邮箱验证成功` / `邮箱验证失败` / `邮箱验证码频控拦截` / `邮箱验证挑战被取代` / `管理员修复邮箱绑定（触发验证）` / `邮箱门禁关闭` / `邮箱门禁开启`。`resource` 一律存**脱敏邮箱**。 |
+| 日志脱敏 | 验证码、密码哈希、完整 token、未脱敏邮箱不进入任何日志；事件表 `ip` 仅用于频控，不进入审计 detail。 |
 | 凭据 | 系统**绝不**要求用户提供邮箱密码或授权码（REQUIREMENTS 11.1）；发信使用系统级 Provider 凭据（E 任务统一配置），Q 不接触 SMTP 密码。 |
 | 测试 | 所有测试使用 capture/fake Provider；任何测试不得触发真实 SMTP；`EMAIL_CODE_SECRET` 生产必填（与 `auth_token_secret` 同要求）。 |
+| 数据库错误映射 | 任何 IntegrityError（唯一约束冲突等）必须映射为业务错误码（`EMAIL_TAKEN` 等），禁止 500。 |
 
 ---
 
@@ -483,7 +611,8 @@ class SendResult:
 
 - `CaptureMailProvider`（默认，`MAIL_PROVIDER=capture`）：记录 `{to, code, purpose}` 供测试断言与开发调试，
   任何日志不得输出验证码明文（capture 内容仅内存/测试对象可读）。
-- 发送失败语义：挑战保留、`send_count` 不变、返回 `502 EMAIL_SEND_FAILED`，冷却后可重试（不误报已发送）。
+- 发送失败语义：挑战保留、`send_count` 不变、记 `send_failed` 事件（计入频控）、
+  返回 `502 EMAIL_SEND_FAILED`，冷却后可重试（不误报已发送）。
 - 本任务**不实现**：SMTP 具体厂商与连接配置（E 任务）、邮件 HTML/纯文本视觉模板（E02/GPT）、
   周报/公告邮件、投递队列与重试（E 任务）。
 
@@ -500,9 +629,10 @@ class SendResult:
 
 | 对象 | 变更 |
 | --- | --- |
-| `platform_user` | 新增 `email VARCHAR(254)`、`email_verified_at TIMESTAMP`（均 NULL，存量兼容） |
-| `platform_user` | 部分唯一索引 `uq_platform_user_email (email) WHERE email IS NOT NULL` |
-| 新表 | `email_verification_challenge`（DDL 见 4.1，含活动挑战部分唯一索引） |
+| `platform_user` | 新增 `email VARCHAR(254)`、`email_canonical VARCHAR(254)`、`email_verified_at TIMESTAMP`（均 NULL，存量兼容） |
+| `platform_user` | 部分唯一索引 `uq_platform_user_email (email_canonical) WHERE email_canonical IS NOT NULL` |
+| 新表 | `email_verification_challenge`（DDL 见 4.1；活动挑战唯一索引按 `user_id`） |
+| 新表 | `email_verification_event`（DDL 见 4.3；频控事实源，append-only） |
 | 业务库 MySQL | **零改动**（保持只读红线） |
 
 ### 9.2 迁移方式
@@ -514,15 +644,16 @@ class SendResult:
 
 ```sql
 ALTER TABLE platform_user ADD COLUMN IF NOT EXISTS email VARCHAR(254);
+ALTER TABLE platform_user ADD COLUMN IF NOT EXISTS email_canonical VARCHAR(254);
 ALTER TABLE platform_user ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_user_email
-    ON platform_user (email) WHERE email IS NOT NULL;
--- email_verification_challenge 建表与索引（见 4.1，全部 IF NOT EXISTS）
+    ON platform_user (email_canonical) WHERE email_canonical IS NOT NULL;
+-- email_verification_challenge / email_verification_event 建表与索引（见 4.1 / 4.3，全部 IF NOT EXISTS）
 ```
 
 - 幂等性：全部语句可重复执行；`bootstrap.py` 与 CI 均不会删除已有用户、报告、会话或审计数据。
 - SQLite 测试兼容：测试库经 `Base.metadata.create_all` 全量建表，部分唯一索引在 SQLite（≥3.8）同样支持；
-  增量 SQL 不在 SQLite 上执行（仅 PostgreSQL 环境）。
+  行锁（`FOR UPDATE`）在 SQLite 上不可用 → 以唯一索引 + IntegrityError 映射兜底（Q03/Q07 双引擎语义测试）。
 - 存量数据：新列全 NULL → 全部账号进入 `unbound`，不重置密码、不产生脏数据冲突
   （唯一索引只约束非 NULL 行）。
 
@@ -531,7 +662,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_user_email
 - **不回滚数据库 schema、不删除已验证邮箱**（Q00 明确要求）。
 - 回滚 = `AUTH_EMAIL_GATE_ENABLED=false` 放行门禁（数据与 schema 保留），
   或代码级回退门禁/API 改造（数据继续保留）。
-- 如未来确实要清理挑战表，只允许删除 `consumed_at`/`superseded_at` 均非空的过期历史行，
+- 事件表过期数据（超过保留期）可由启动清理任务删除；挑战表历史行供审计，不自动清理；
+  如未来要清理挑战表，只允许删除 `consumed_at`/`superseded_at` 均非空的过期历史行，
   且必须为独立受审计的运维操作。
 
 ---
@@ -547,10 +679,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_user_email
 | `EMAIL_CODE_TTL_SECONDS` | `600` | 验证码有效期（秒） |
 | `EMAIL_CODE_RESEND_SECONDS` | `60` | 重发冷却（秒） |
 | `EMAIL_CODE_MAX_ATTEMPTS` | `5` | 单挑战最大错误次数 |
-| `EMAIL_HOURLY_LIMIT_EMAIL` | `5` | 每邮箱每小时发码上限 |
+| `EMAIL_HOURLY_LIMIT_EMAIL` | `5` | 每邮箱每小时发码上限（canonical 桶） |
 | `EMAIL_HOURLY_LIMIT_ACCOUNT` | `5` | 每账号每小时发码上限 |
 | `EMAIL_HOURLY_LIMIT_IP` | `10` | 每 IP 每小时发码+验证上限 |
-| `AUTH_EMAIL_GATE_ENABLED` | `true` | 门禁总开关（防锁死） |
+| `AUTH_EMAIL_GATE_ENABLED` | **`false`** | 邮箱门禁总开关（安全默认关闭，按 6.4 顺序开启） |
+| `AUTH_EMAIL_GATE_ALLOW_CAPTURE` | `false` | 门禁开启 + capture Provider 组合的显式放行（测试/开发用） |
+| `DEMO_MODE_ENABLED` | **`false`** | 未登录演示模式开关（安全默认关闭；门禁开启时对非白名单接口失效） |
+| `EMAIL_EVENT_RETENTION_DAYS` | `30` | 验证事件表保留天数 |
 
 真实凭据只进入后端环境变量，不提交 `.env`。
 
@@ -567,11 +702,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_user_email
 
 | 任务 | 状态 | 依赖本契约的内容 |
 | --- | --- | --- |
-| Q02 用户模型与安全迁移 | 未开始 | 第 3、4.1、9 节 |
-| Q03 验证码生成/保存/验证服务 | 未开始 | 第 4 节（含并发/幂等约束） |
+| Q02 用户模型与安全迁移 | 未开始 | 第 3、4.1、4.3、9 节 |
+| Q03 验证码生成/保存/验证服务 | 未开始 | 第 4 节（含行锁/事件表/并发约束） |
 | Q04 验证邮件适配边界 | 未开始 | 第 8 节 |
 | Q05 注册/登录/me API 改造 | 未开始 | 第 5 节 |
-| Q06 服务端受限访问门禁 | 未开始 | 第 6 节 |
-| Q07 自动化测试与安全检查 | 未开始 | 第 2、4、7 节 |
+| Q06 服务端受限访问门禁 | 未开始 | 第 6 节（含匿名请求、演示模式开关、启动守卫） |
+| Q07 自动化测试与安全检查 | 未开始 | 第 2、4、7 节（双引擎并发语义） |
 | U03 前端绑定页（GPT） | 未开始 | 冻结后接入 |
-| E 任务 SMTP Provider（GPT 侧 E01/E02 分工内） | 未开始 | 第 8 节边界 |
+| E 任务邮件投递 | 未开始 | 按协作规范：**DeepSeek 负责 E01 Provider 契约、E03～E09 投递/重试/降级/API/测试；GPT 负责 E02 邮件视觉模板**（本表所有权已按协作规范纠正） |
