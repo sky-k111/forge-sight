@@ -7,7 +7,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.agent import service as analysis_service
+from app.api import auth as auth_api
+from app.auth import email_verification
 from app.auth import service as auth_service
+from app.auth.mail_provider import CaptureMailProvider
 from app.config import settings
 from app.db.models import Base, DataSource, PlatformUser
 from app.main import app
@@ -24,6 +27,7 @@ def auth_session(monkeypatch):
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     monkeypatch.setattr(auth_service, "PlatformSession", session_factory)
+    monkeypatch.setattr(email_verification, "PlatformSession", session_factory)
     monkeypatch.setattr(auth_service, "write_audit", lambda *args, **_kwargs: None)
     # 渐进式覆盖用例需要 analysis 服务写同一平台库
     monkeypatch.setattr(analysis_service, "PlatformSession", session_factory)
@@ -31,6 +35,9 @@ def auth_session(monkeypatch):
     monkeypatch.setattr(settings, "auth_admin_username", "admin")
     monkeypatch.setattr(settings, "auth_admin_password", "admin123")
     monkeypatch.setattr(settings, "auth_admin_display_name", "系统管理员")
+    monkeypatch.setattr(settings, "email_code_secret", "test-email-secret")
+    provider = CaptureMailProvider()
+    monkeypatch.setattr(auth_api, "get_verification_mail_provider", lambda: provider)
     with session_factory() as session:
         session.add(
             DataSource(
@@ -45,6 +52,7 @@ def auth_session(monkeypatch):
             )
         )
         session.commit()
+    session_factory.mail_provider = provider
     return session_factory
 
 
@@ -54,7 +62,12 @@ def test_register_creates_business_user_with_token(auth_session):
     client = TestClient(app)
     response = client.post(
         "/api/auth/register",
-        json={"username": "zhangsan", "password": "pass1234", "displayName": "张三"},
+        json={
+            "username": "zhangsan",
+            "password": "pass1234",
+            "displayName": "张三",
+            "email": "ZhangSan@Example.COM",
+        },
     )
     assert response.status_code == 201
     body = response.json()
@@ -63,36 +76,53 @@ def test_register_creates_business_user_with_token(auth_session):
     assert body["user"]["username"] == "zhangsan"
     assert body["user"]["role"] == "business"
     assert body["user"]["displayName"] == "张三"
+    assert body["user"]["emailMasked"] == "Z***@example.com"
+    assert body["user"]["emailStatus"] == "pending_verification"
+    assert body["nextAction"] == "verify_email"
+    assert auth_service.decode_token(body["token"])["scope"] == "restricted"
+    assert "email" not in body["user"]
     assert "password_hash" not in body["user"]
 
 
 def test_register_duplicate_username_conflict(auth_session):
     client = TestClient(app)
-    payload = {"username": "lisi", "password": "pass1234"}
+    payload = {"username": "lisi", "password": "pass1234", "email": "lisi@example.com"}
     assert client.post("/api/auth/register", json=payload).status_code == 201
     duplicate = client.post("/api/auth/register", json=payload)
     assert duplicate.status_code == 409
-    assert duplicate.json()["detail"] == "用户名已存在"
+    assert duplicate.json()["errorCode"] == "AUTH_USERNAME_TAKEN"
 
 
 def test_register_invalid_credentials_rejected(auth_session):
     client = TestClient(app)
     # 长度合法但含非法字符 → service 层校验 → 400
     assert (
-        client.post("/api/auth/register", json={"username": "a@b", "password": "pass1234"}).status_code
+        client.post(
+            "/api/auth/register",
+            json={"username": "a@b", "password": "pass1234", "email": "a@example.com"},
+        ).status_code
         == 400
     )
     assert (
-        client.post("/api/auth/register", json={"username": "含中文", "password": "pass1234"}).status_code
+        client.post(
+            "/api/auth/register",
+            json={"username": "含中文", "password": "pass1234", "email": "b@example.com"},
+        ).status_code
         == 400
     )
     # 长度不合法 → pydantic 层校验 → 422
     assert (
-        client.post("/api/auth/register", json={"username": "ab", "password": "pass1234"}).status_code
+        client.post(
+            "/api/auth/register",
+            json={"username": "ab", "password": "pass1234", "email": "ab@example.com"},
+        ).status_code
         == 422
     )
     assert (
-        client.post("/api/auth/register", json={"username": "zhangsan", "password": "12345"}).status_code
+        client.post(
+            "/api/auth/register",
+            json={"username": "zhangsan", "password": "12345", "email": "z@example.com"},
+        ).status_code
         == 422
     )
 
@@ -101,15 +131,48 @@ def test_register_invalid_credentials_rejected(auth_session):
 
 def test_login_success_returns_token(auth_session):
     client = TestClient(app)
-    client.post("/api/auth/register", json={"username": "wangwu", "password": "pass1234"})
+    client.post(
+        "/api/auth/register",
+        json={"username": "wangwu", "password": "pass1234", "email": "wangwu@example.com"},
+    )
     response = client.post("/api/auth/login", json={"username": "wangwu", "password": "pass1234"})
     assert response.status_code == 200
     assert response.json()["user"]["username"] == "wangwu"
+    assert response.json()["nextAction"] == "verify_email"
+
+
+def test_register_requires_valid_unique_email(auth_session):
+    client = TestClient(app)
+    missing = client.post(
+        "/api/auth/register", json={"username": "missingmail", "password": "pass1234"}
+    )
+    invalid = client.post(
+        "/api/auth/register",
+        json={"username": "badmail", "password": "pass1234", "email": "not-an-email"},
+    )
+    first = client.post(
+        "/api/auth/register",
+        json={"username": "mailone", "password": "pass1234", "email": "User@Example.com"},
+    )
+    duplicate = client.post(
+        "/api/auth/register",
+        json={"username": "mailtwo", "password": "pass1234", "email": "user@example.COM"},
+    )
+
+    assert missing.status_code == 422
+    assert invalid.status_code == 400
+    assert invalid.json()["errorCode"] == "AUTH_INVALID_EMAIL_FORMAT"
+    assert first.status_code == 201
+    assert duplicate.status_code == 409
+    assert duplicate.json()["errorCode"] == "EMAIL_TAKEN"
 
 
 def test_login_failure_message_does_not_leak_existence(auth_session):
     client = TestClient(app)
-    client.post("/api/auth/register", json={"username": "zhaoliu", "password": "pass1234"})
+    client.post(
+        "/api/auth/register",
+        json={"username": "zhaoliu", "password": "pass1234", "email": "zhaoliu@example.com"},
+    )
     wrong_password = client.post(
         "/api/auth/login", json={"username": "zhaoliu", "password": "wrong-password"}
     )
@@ -119,19 +182,25 @@ def test_login_failure_message_does_not_leak_existence(auth_session):
     assert wrong_password.status_code == 401
     assert missing_user.status_code == 401
     assert wrong_password.json()["detail"] == missing_user.json()["detail"]
+    assert wrong_password.json()["errorCode"] == "AUTH_INVALID_CREDENTIALS"
 
 
 # ---------- /me ----------
 
 def test_me_requires_valid_token(auth_session):
     client = TestClient(app)
-    client.post("/api/auth/register", json={"username": "qianqi", "password": "pass1234"})
+    client.post(
+        "/api/auth/register",
+        json={"username": "qianqi", "password": "pass1234", "email": "qianqi@example.com"},
+    )
     login = client.post("/api/auth/login", json={"username": "qianqi", "password": "pass1234"})
     token = login.json()["token"]
 
     ok = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert ok.status_code == 200
     assert ok.json()["user"]["username"] == "qianqi"
+    assert ok.json()["user"]["emailMasked"] == "q***@example.com"
+    assert ok.json()["user"]["emailStatus"] == "pending_verification"
 
     assert client.get("/api/auth/me").status_code == 401
 
@@ -144,13 +213,113 @@ def test_me_requires_valid_token(auth_session):
 def test_me_rejects_expired_token(auth_session, monkeypatch):
     monkeypatch.setattr(settings, "auth_token_ttl_seconds", -60)
     client = TestClient(app)
-    client.post("/api/auth/register", json={"username": "sunba", "password": "pass1234"})
+    client.post(
+        "/api/auth/register",
+        json={"username": "sunba", "password": "pass1234", "email": "sunba@example.com"},
+    )
     login = client.post("/api/auth/login", json={"username": "sunba", "password": "pass1234"})
     expired = login.json()["token"]
     assert auth_service.decode_token(expired) is None
     assert (
         client.get("/api/auth/me", headers={"Authorization": f"Bearer {expired}"}).status_code == 401
     )
+
+
+def test_email_challenge_verify_and_replay_flow(auth_session):
+    client = TestClient(app)
+    registered = client.post(
+        "/api/auth/register",
+        json={"username": "verifyme", "password": "pass1234", "email": "Verify@Example.com"},
+    ).json()
+    headers = {"Authorization": f"Bearer {registered['token']}"}
+
+    challenge = client.post("/api/auth/email/challenges", json={}, headers=headers)
+
+    assert challenge.status_code == 200
+    assert challenge.json()["emailMasked"] == "V***@example.com"
+    assert challenge.json()["purpose"] == "verify"
+    code = auth_session.mail_provider.messages[-1].code
+    verified = client.post(
+        "/api/auth/email/verify",
+        json={"email": "verify@example.com", "code": code},
+        headers=headers,
+    )
+    assert verified.status_code == 200
+    assert verified.json()["user"]["emailStatus"] == "verified"
+    assert verified.json()["nextAction"] is None
+    assert auth_service.decode_token(verified.json()["token"])["scope"] == "full"
+
+    replay = client.post(
+        "/api/auth/email/verify",
+        json={"email": "verify@example.com", "code": code},
+        headers=headers,
+    )
+    assert replay.status_code == 400
+    assert replay.json()["errorCode"] == "CODE_INVALID"
+
+
+def test_unbound_existing_user_gets_bind_action_and_can_submit_email(auth_session):
+    auth_service.seed_admin()
+    client = TestClient(app)
+    logged_in = client.post(
+        "/api/auth/login", json={"username": "admin", "password": "admin123"}
+    )
+    headers = {"Authorization": f"Bearer {logged_in.json()['token']}"}
+
+    assert logged_in.status_code == 200
+    assert logged_in.json()["user"]["emailStatus"] == "unbound"
+    assert logged_in.json()["nextAction"] == "bind_email"
+    missing = client.post("/api/auth/email/challenges", json={}, headers=headers)
+    assert missing.status_code == 400
+    assert missing.json()["errorCode"] == "AUTH_INVALID_EMAIL_FORMAT"
+
+    challenge = client.post(
+        "/api/auth/email/challenges",
+        json={"email": "admin@example.com"},
+        headers=headers,
+    )
+    assert challenge.status_code == 200
+    assert challenge.json()["purpose"] == "bind"
+
+
+def test_verified_user_can_change_email_without_changing_password_login(auth_session):
+    client = TestClient(app)
+    registered = client.post(
+        "/api/auth/register",
+        json={"username": "changer", "password": "pass1234", "email": "old@example.com"},
+    ).json()
+    headers = {"Authorization": f"Bearer {registered['token']}"}
+    client.post("/api/auth/email/challenges", json={}, headers=headers)
+    first_code = auth_session.mail_provider.messages[-1].code
+    verified = client.post(
+        "/api/auth/email/verify",
+        json={"email": "old@example.com", "code": first_code},
+        headers=headers,
+    ).json()
+    full_headers = {"Authorization": f"Bearer {verified['token']}"}
+
+    changed = client.post(
+        "/api/auth/email/change",
+        json={"email": "New@Example.com"},
+        headers=full_headers,
+    )
+    assert changed.status_code == 200
+    assert changed.json()["purpose"] == "change"
+    change_code = auth_session.mail_provider.messages[-1].code
+    confirmed = client.post(
+        "/api/auth/email/verify",
+        json={"email": "new@example.com", "code": change_code},
+        headers=full_headers,
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json()["user"]["emailMasked"] == "N***@example.com"
+
+    login_again = client.post(
+        "/api/auth/login", json={"username": "changer", "password": "pass1234"}
+    )
+    assert login_again.status_code == 200
+    assert login_again.json()["user"]["emailStatus"] == "verified"
+    assert login_again.json()["nextAction"] is None
 
 
 # ---------- 种子管理员 ----------
@@ -169,7 +338,10 @@ def test_seed_admin_is_idempotent(auth_session):
 
 def test_token_identity_overrides_client_user_id(auth_session):
     client = TestClient(app)
-    client.post("/api/auth/register", json={"username": "overrider", "password": "pass1234"})
+    client.post(
+        "/api/auth/register",
+        json={"username": "overrider", "password": "pass1234", "email": "over@example.com"},
+    )
     login = client.post("/api/auth/login", json={"username": "overrider", "password": "pass1234"})
     token = login.json()["token"]
 

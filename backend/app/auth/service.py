@@ -18,9 +18,16 @@ from typing import Any
 
 from app.agent.ids import new_id
 from app.audit.service import write_audit
+from app.auth.email_verification import (
+    EmailVerificationError,
+    canonicalize_email,
+    mask_email,
+    normalize_email,
+)
 from app.config import settings
 from app.db.models import PlatformUser
 from app.db.platform import PlatformSession
+from sqlalchemy.exc import IntegrityError
 
 SCRYPT_N, SCRYPT_R, SCRYPT_P, SCRYPT_DKLEN = 2**14, 8, 1, 32
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,30}$")
@@ -66,6 +73,7 @@ def create_token(user: PlatformUser) -> str:
     payload = {
         "sub": user.username,
         "role": user.role,
+        "scope": "full" if user.email_verified_at is not None else "restricted",
         "iat": now,
         "exp": now + settings.auth_token_ttl_seconds,
     }
@@ -109,12 +117,40 @@ def validate_credentials(username: str, password: str) -> None:
 
 
 def user_payload(user: PlatformUser) -> dict:
+    email_status = email_status_for(user)
     return {
         "id": user.id,
         "username": user.username,
         "displayName": user.display_name,
         "role": user.role,
         "title": user.title,
+        "emailMasked": mask_email(user.email) if user.email else None,
+        "emailStatus": email_status,
+    }
+
+
+def email_status_for(user: PlatformUser) -> str:
+    if user.email_verified_at is not None:
+        return "verified"
+    if user.email is not None:
+        return "pending_verification"
+    return "unbound"
+
+
+def next_action_for(user: PlatformUser) -> str | None:
+    status = email_status_for(user)
+    if status == "unbound":
+        return "bind_email"
+    if status == "pending_verification":
+        return "verify_email"
+    return None
+
+
+def auth_payload(user: PlatformUser) -> dict:
+    return {
+        "token": create_token(user),
+        "user": user_payload(user),
+        "nextAction": next_action_for(user),
     }
 
 
@@ -123,12 +159,17 @@ def get_user_by_username(username: str) -> PlatformUser | None:
         return session.query(PlatformUser).filter(PlatformUser.username == username).first()
 
 
-def register_user(username: str, password: str, display_name: str = "") -> dict:
+def register_user(username: str, password: str, display_name: str, email: str) -> dict:
     """注册（默认业务角色），返回 `{token, user}`；冲突/非法抛 ValueError。"""
     username = normalize_username(username)
     validate_credentials(username, password)
+    deliverable = normalize_email(email)
+    canonical = canonicalize_email(deliverable)
     if get_user_by_username(username):
         raise ValueError("用户名已存在")
+    with PlatformSession() as session:
+        if session.query(PlatformUser.id).filter_by(email_canonical=canonical).first():
+            raise EmailVerificationError("EMAIL_TAKEN")
     user = PlatformUser(
         id=new_id("u"),
         username=username,
@@ -136,12 +177,20 @@ def register_user(username: str, password: str, display_name: str = "") -> dict:
         display_name=(display_name or username)[:50],
         role="business",
         title="业务人员",
+        email=deliverable,
+        email_canonical=canonical,
     )
     with PlatformSession() as session:
         session.add(user)
-        session.commit()
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            if session.query(PlatformUser.id).filter_by(username=username).first():
+                raise ValueError("用户名已存在") from exc
+            raise EmailVerificationError("EMAIL_TAKEN") from exc
     write_audit("注册用户", resource=username, result="已记录", user_name=username, role="业务人员")
-    return {"token": create_token(user), "user": user_payload(user)}
+    return auth_payload(user)
 
 
 def login(username: str, password: str) -> dict:
@@ -155,7 +204,7 @@ def login(username: str, password: str) -> dict:
         write_audit("登录失败", resource=username, result="已拦截", detail="账号已停用", user_name=username, role=user.role)
         raise ValueError("账号已停用")
     write_audit("登录", resource=username, result="允许", user_name=username, role=user.role)
-    return {"token": create_token(user), "user": user_payload(user)}
+    return auth_payload(user)
 
 
 def logout(username: str) -> None:
