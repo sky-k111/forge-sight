@@ -353,6 +353,8 @@ describe("ForgeSight application routes", () => {
     await screen.findByLabelText("实际良率与工序标准值柱状图");
 
     expect(container.querySelector(".chart-frame.chart-frame--elevated")).toBeTruthy();
+    expect(screen.getByText("执行记录已保存")).toBeTruthy();
+    expect(screen.queryByText(/TRACE \/ run-real/)).toBeNull();
   });
 
   test("keeps the analysis bar and legend on the same series color", async () => {
@@ -432,6 +434,8 @@ describe("ForgeSight application routes", () => {
     expect(await screen.findByRole("heading", { name: "智能建模" })).toBeTruthy();
     expect(await screen.findByText((_, element) => element?.tagName === "SMALL" && element.textContent.includes("2,752 个样本"))).toBeTruthy();
     expect(screen.getByText((_, element) => element?.tagName === "SMALL" && element.textContent.includes("高风险样本 851 个"))).toBeTruthy();
+    expect(screen.queryByText("2026-07-16T10:32:00")).toBeNull();
+    expect(screen.queryByText(/TASK \/ mt-demo/)).toBeNull();
     expect(screen.queryByText("赛题必须项")).toBeNull();
   });
 

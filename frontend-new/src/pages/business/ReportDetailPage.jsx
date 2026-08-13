@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
+import { conciseFindingTitle, parseAnalysisNarrative } from "../../lib/narrative";
 import { Button, Card, EmptyState, ErrorNotice, PageFrame, RouteSkeleton, StatusPill } from "../../components/ui";
 import {
   approveReport,
@@ -98,17 +99,17 @@ export default function ReportDetailPage() {
     <PageFrame className="max-w-none gap-4 xl:px-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 items-start gap-3">
-          <button type="button" onClick={() => navigate("/workspace/reports")} className="mt-0.5 grid h-8 w-8 shrink-0 cursor-pointer place-items-center rounded-control border border-line bg-surface text-muted hover:text-ink">
+          <button type="button" aria-label="返回报告列表" onClick={() => navigate("/workspace/reports")} className="mt-0.5 grid h-8 w-8 shrink-0 cursor-pointer place-items-center rounded-control border border-line bg-surface text-muted hover:text-ink">
             <Icon name="chevron" size={15} className="rotate-180" />
           </button>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <StatusPill tone={statusTone[report.status] ?? "gray"}>{report.statusLabel}</StatusPill>
-              <span className="font-mono text-[10px] text-faint">{report.id} · V{report.version?.version}</span>
+              <span className="text-[10px] text-faint">报告版本 V{report.version?.version}</span>
             </div>
             <h2 className="mt-2 truncate text-xl font-semibold tracking-tight text-ink">{report.title}</h2>
             <p className="mt-1 text-xs text-muted">
-              {report.sourceName} · {report.periodStart?.slice(0, 10)} 至 {report.periodEnd?.slice(0, 10)} · 责任人 {report.ownerId}
+              {report.sourceName} · {report.periodStart?.slice(0, 10)} 至 {report.periodEnd?.slice(0, 10)}
             </p>
           </div>
         </div>
@@ -202,9 +203,12 @@ export default function ReportDetailPage() {
             <header className="border-b border-line px-5 py-4">
               <span className="text-[11px] font-semibold tracking-[0.08em] text-primary">MANAGEMENT SUMMARY</span>
               <h3 className="mt-1 text-base font-semibold tracking-tight text-ink">管理摘要</h3>
-              <p className="mt-2 whitespace-pre-line text-body leading-7 text-ink-2">
-                {report.summary || (TERMINAL.has(report.status) ? "本报告尚未形成管理摘要。" : "章节完成后将自动生成跨章节管理摘要。")}
-              </p>
+              <NarrativeBlock
+                value={report.summary}
+                empty={TERMINAL.has(report.status) ? "本报告尚未形成管理摘要。" : "章节完成后将自动生成跨章节管理摘要。"}
+                maxFindings={4}
+                titles={report.sections?.map((section) => section.title)}
+              />
             </header>
             {selected ? (
               <article>
@@ -218,7 +222,7 @@ export default function ReportDetailPage() {
                 {selected.summary ? (
                   <div className="border-t border-line px-5 py-4">
                     <h4 className="text-xs font-semibold text-ink">分析结论</h4>
-                    <p className="mt-2 whitespace-pre-line text-body leading-7 text-ink-2">{selected.summary}</p>
+                    <NarrativeBlock value={selected.summary} maxFindings={5} />
                   </div>
                 ) : (
                   <div className="border-t border-line"><EmptyState title={selected.statusLabel} description="该章节完成后会在这里显示结论、图表和结果明细。" /></div>
@@ -242,6 +246,25 @@ export default function ReportDetailPage() {
         </aside>
       </div>
     </PageFrame>
+  );
+}
+
+function NarrativeBlock({ value, empty = "暂无结论。", maxFindings = 3, titles = [] }) {
+  const narrative = parseAnalysisNarrative(value ?? "", { sectionTitles: titles });
+  const findings = narrative.highlights.slice(0, maxFindings);
+  return (
+    <div className="mt-2 text-body leading-7 text-ink-2">
+      <p>{narrative.summary || empty}</p>
+      {findings.length > 0 && (
+        <ul className="mt-3 grid gap-2 border-l-2 border-primary/20 pl-3.5">
+          {findings.map((finding, index) => (
+            <li key={`${finding.title}-${finding.text}`} className="leading-relaxed">
+              <strong className="font-semibold text-ink">{conciseFindingTitle(titles[index], finding.title)}：</strong>{finding.text}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -309,7 +332,7 @@ function EvidencePanel({ section }) {
       </EvidenceBlock>
       <EvidenceBlock title="证据资产" icon="link">
         <p className="text-[11px] leading-relaxed text-muted">{section.artifactIds?.length ?? 0} 个不可变产物已绑定到本章节。</p>
-        <div className="mt-2 flex flex-wrap gap-1">{section.artifactIds?.map((id) => <code key={id} className="rounded-tag bg-surface-3 px-1.5 py-1 font-mono text-[9px] text-ink-2">{id.slice(0, 14)}…</code>)}</div>
+        {section.artifactIds?.length ? <p className="text-[10px] leading-relaxed text-faint">完整资产可在分析证据链中核验。</p> : null}
       </EvidenceBlock>
     </div>
   );

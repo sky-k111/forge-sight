@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
+import { reportListSummary } from "../../lib/narrative";
 import { Button, Card, EmptyState, ErrorNotice, Modal, PageFrame, RouteSkeleton, StatusPill } from "../../components/ui";
 import { listSources } from "../../api/datasources";
 import {
@@ -228,7 +229,9 @@ export default function ReportsPage() {
                     </div>
                     <h3 className="mt-2 truncate text-body font-semibold text-ink">{report.title}</h3>
                     <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted">
-                      {report.summary || (TERMINAL.has(report.status) ? "尚未形成管理摘要。" : "正在执行章节分析，页面会自动更新真实进度。")}
+                      {report.summary
+                        ? reportListSummary(report.summary)
+                        : (TERMINAL.has(report.status) ? "尚未形成管理摘要。" : "正在执行章节分析，页面会自动更新真实进度。")}
                     </p>
                   </div>
                   <div className="flex min-w-28 flex-col items-end justify-between gap-3">
@@ -348,7 +351,7 @@ function ReportCreateWizard({ open, initialTemplateId, sourceId, sources, templa
           <span className="text-[11px] font-semibold tracking-[0.08em] text-faint">CREATE REPORT</span>
           <h3 className="mt-1 text-base font-semibold text-ink">创建一份可复核报告</h3>
         </div>
-        <button type="button" onClick={onClose} className="grid h-8 w-8 cursor-pointer place-items-center rounded-control text-muted hover:bg-surface-3">
+        <button type="button" aria-label="关闭报告创建窗口" onClick={onClose} className="grid h-8 w-8 cursor-pointer place-items-center rounded-control text-muted hover:bg-surface-3">
           <Icon name="close" size={16} />
         </button>
       </div>

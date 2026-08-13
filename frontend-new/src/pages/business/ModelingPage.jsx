@@ -34,6 +34,29 @@ function formatMetric(key, value) {
   return String(value);
 }
 
+function formatDateTime(value) {
+  if (!value) return "暂无更新";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function sampleCaption(task) {
+  if (!task.sampleCount) return "待训练时完成抽样统计";
+  const count = Number(task.sampleCount);
+  const countText = `${count.toLocaleString("zh-CN")} 个样本`;
+  const summary = String(task.sampleSummary ?? "").trim();
+  const repeatsCount = summary.replaceAll(",", "").includes(String(count)) && /样本/.test(summary);
+  return !summary || repeatsCount ? countText : `${countText} · ${summary}`;
+}
+
 function metricLine(model) {
   const keys = METRIC_KEYS[model.family] ?? [];
   const parts = keys.map(([key, label]) => `${label} ${formatMetric(key, model.metrics?.[key])}`);
@@ -177,7 +200,7 @@ export default function ModelingPage() {
         </label>
         <div className="hidden h-8 w-px bg-line sm:block" />
         <div className="min-w-36"><span className="block text-[10px] text-faint">任务来源</span><strong className="mt-0.5 block text-xs font-semibold text-ink-2">{task.sourceLabel}</strong></div>
-        <div className="min-w-36"><span className="block text-[10px] text-faint">最近更新</span><strong className="mt-0.5 block text-xs font-semibold text-ink-2">{task.updatedAt}</strong></div>
+        <div className="min-w-36"><span className="block text-[10px] text-faint">最近更新</span><strong className="mt-0.5 block text-xs font-semibold text-ink-2">{formatDateTime(task.updatedAt)}</strong></div>
         <StatusPill tone={task.tone}>{task.statusLabel}</StatusPill>
       </Card>
 
@@ -197,12 +220,12 @@ export default function ModelingPage() {
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
         <Card className="overflow-hidden">
           <div className="border-b border-line px-5 py-4">
-            <span className="font-mono text-[10px] font-semibold tracking-wide text-faint">TASK / {task.id}</span>
+            <span className="text-[10px] font-semibold tracking-wide text-faint">业务建模任务</span>
             <h3 className="mt-1 text-base font-semibold tracking-tight text-ink">任务概览</h3>
           </div>
           <div className="grid sm:grid-cols-2">
             <SummaryItem label="要解决的问题" value={task.goal} wide />
-            <SummaryItem label="使用数据" value={task.dataset} caption={task.sampleCount ? `${task.sampleCount.toLocaleString()} 个样本 · ${task.sampleSummary}` : "待训练时完成抽样统计"} />
+            <SummaryItem label="使用数据" value={task.dataset} caption={sampleCaption(task)} />
             <SummaryItem label="预测目标" value={task.targetLabel || task.targetField || "未指定"} caption={task.targetField} mono />
             <SummaryItem label="当前方案" value={hasResult ? task.selectedModelName : "Agent 智能推荐"} caption={hasResult ? task.metric : `${task.candidates.length} 个候选模型待比较`} />
           </div>
