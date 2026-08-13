@@ -4,6 +4,7 @@ export const roleMenus = {
       label: "业务工作台",
       items: [
         { id: "overview", label: "分析总览", icon: "overview" },
+        { id: "messages", label: "消息中心", icon: "bell" },
         {
           id: "analysis-center",
           label: "分析中心",
@@ -23,6 +24,7 @@ export const roleMenus = {
       label: "管理员工作台",
       items: [
         { id: "admin-overview", label: "治理总览", icon: "overview" },
+        { id: "admin-messages", label: "消息中心", icon: "bell" },
         {
           id: "data-governance",
           label: "数据治理",
@@ -40,6 +42,8 @@ export const roleMenus = {
             { id: "model-governance", label: "模型治理", icon: "model" },
             { id: "settings", label: "系统配置", icon: "settings" },
             { id: "security", label: "安全审计", icon: "shield" },
+            { id: "announcements", label: "公告管理", icon: "message" },
+            { id: "deliveries", label: "邮件投递", icon: "send" },
           ],
         },
       ],
@@ -48,15 +52,79 @@ export const roleMenus = {
 };
 
 export const pageMeta = {
-  overview: { eyebrow: "业务人员工作区", title: "分析总览", subtitle: "数据更新至 2026-07-15 · 3 项异常待关注" },
-  analysis: { eyebrow: "业务人员工作区", title: "智能问析", subtitle: "自然语言查询、分析过程与执行结果" },
-  sessions: { eyebrow: "业务人员工作区", title: "历史会话", subtitle: "全部历史问答会话，点击继续分析" },
-  modeling: { eyebrow: "业务人员工作区", title: "智能建模", subtitle: "Agent 自动建模与人工复核" },
-  reports: { eyebrow: "业务人员工作区", title: "报告中心", subtitle: "4 份报告 · 1 份待复核" },
-  "admin-overview": { eyebrow: "管理员工作区", title: "治理总览", subtitle: "3 类治理事项待处理 · 最后巡检 10:36" },
-  knowledge: { eyebrow: "管理员工作区", title: "业务知识", subtitle: "77 个知识项 · 3 个待审核" },
-  resources: { eyebrow: "管理员工作区", title: "数据资源", subtitle: "10 张表 · 76 个字段 · 15 条关联关系" },
-  "model-governance": { eyebrow: "管理员工作区", title: "模型治理", subtitle: "4 个模型 · 1 个待复核" },
-  settings: { eyebrow: "管理员工作区", title: "系统配置", subtitle: "4 项运行依赖在线" },
-  security: { eyebrow: "管理员工作区", title: "安全审计", subtitle: "过去 24 小时校验 482 次 · 拦截 3 次" },
+  overview: {
+    eyebrow: "业务人员工作区",
+    title: "分析总览",
+    subtitle: "数据更新至 2026-07-15 · 3 项异常待关注",
+  },
+  analysis: {
+    eyebrow: "业务人员工作区",
+    title: "智能问析",
+    subtitle: "自然语言查询、分析过程与执行结果",
+  },
+  sessions: {
+    eyebrow: "业务人员工作区",
+    title: "历史会话",
+    subtitle: "全部历史问答会话，点击继续分析",
+  },
+  modeling: {
+    eyebrow: "业务人员工作区",
+    title: "智能建模",
+    subtitle: "Agent 自动建模与人工复核",
+  },
+  reports: {
+    eyebrow: "业务人员工作区",
+    title: "周报中心",
+    subtitle: "Agent 自动发布 · 图表、证据与文件同一版本",
+  },
+  messages: {
+    eyebrow: "消息工作区",
+    title: "消息中心",
+    subtitle: "周报与管理员公告统一送达",
+  },
+  "admin-messages": {
+    eyebrow: "管理员工作区",
+    title: "消息中心",
+    subtitle: "周报与管理员公告统一送达",
+  },
+  "admin-overview": {
+    eyebrow: "管理员工作区",
+    title: "治理总览",
+    subtitle: "3 类治理事项待处理 · 最后巡检 10:36",
+  },
+  knowledge: {
+    eyebrow: "管理员工作区",
+    title: "业务知识",
+    subtitle: "77 个知识项 · 3 个待审核",
+  },
+  resources: {
+    eyebrow: "管理员工作区",
+    title: "数据资源",
+    subtitle: "10 张表 · 76 个字段 · 15 条关联关系",
+  },
+  "model-governance": {
+    eyebrow: "管理员工作区",
+    title: "模型治理",
+    subtitle: "4 个模型 · 1 个待复核",
+  },
+  settings: {
+    eyebrow: "管理员工作区",
+    title: "系统配置",
+    subtitle: "4 项运行依赖在线",
+  },
+  security: {
+    eyebrow: "管理员工作区",
+    title: "安全审计",
+    subtitle: "过去 24 小时校验 482 次 · 拦截 3 次",
+  },
+  announcements: {
+    eyebrow: "管理员工作区",
+    title: "公告管理",
+    subtitle: "创建、发布和撤回站内公告",
+  },
+  deliveries: {
+    eyebrow: "管理员工作区",
+    title: "邮件投递",
+    subtitle: "定位失败邮件并安全重发",
+  },
 };

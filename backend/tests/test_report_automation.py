@@ -175,6 +175,30 @@ def test_scheduled_agent_report_validates_and_publishes_without_review(analysis_
         assert session.query(DomainEventOutbox).count() == 1
 
 
+def test_weekly_report_without_subscription_still_auto_publishes(analysis_session):
+    seed_report_templates(analysis_session)
+    _subscription(analysis_session, next_run_at=datetime(2026, 8, 10, 1, 0))
+    automation.scan_due_subscriptions(
+        now=datetime(2026, 8, 10, 1, 1), session_factory=analysis_session
+    )
+    report_id, _ = _complete_scheduled_run(analysis_session)
+    with analysis_session() as session:
+        report = session.get(Report, report_id)
+        report.subscription_id = None
+        report.schedule_key = None
+        session.commit()
+
+    service.sync_report(report_id, session_factory=analysis_session)
+
+    with analysis_session() as session:
+        report = session.get(Report, report_id)
+        version = session.get(ReportVersion, report.current_version_id)
+        assert report.status == "published", version.validation_json
+        assert report.publish_source == "agent"
+        assert version.status == "published"
+        assert version.validation_json["passed"] is True
+
+
 def test_missing_section_evidence_blocks_automatic_publish(analysis_session):
     seed_report_templates(analysis_session)
     _subscription(analysis_session, next_run_at=datetime(2026, 8, 10, 1, 0))

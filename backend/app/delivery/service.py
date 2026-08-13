@@ -749,6 +749,8 @@ def list_deliveries(
     *,
     message_id: str | None = None,
     report_id: str | None = None,
+    announcement_id: str | None = None,
+    content_type: str | None = None,
     recipient_user_id: str | None = None,
     status: str | None = None,
     created_from: datetime | None = None,
@@ -760,6 +762,18 @@ def list_deliveries(
         query = query.filter_by(message_id=message_id)
     if report_id:
         query = query.filter_by(report_id=report_id)
+    if content_type == "report":
+        query = query.filter(ReportDelivery.report_id.is_not(None))
+    elif content_type == "announcement":
+        query = query.filter(
+            ReportDelivery.report_id.is_(None),
+            ReportDelivery.message_id.is_not(None),
+        )
+    if announcement_id:
+        query = query.join(Message, Message.id == ReportDelivery.message_id).filter(
+            Message.related_type == "announcement",
+            Message.related_id == announcement_id,
+        )
     if recipient_user_id:
         query = query.filter_by(recipient_user_id=recipient_user_id)
     if status:

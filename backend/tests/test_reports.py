@@ -12,6 +12,8 @@ from app.db.models import (
     AnalysisRun,
     AnalysisTask,
     KnowledgeMetric,
+    Message,
+    MessageRecipient,
     MetricSourceBinding,
     Report,
     ReportFile,
@@ -131,6 +133,7 @@ def test_create_and_finalize_topic_report_reuses_agent_artifacts(analysis_sessio
     assert completed["status"] == "awaiting_review"
     assert completed["confidence"] == 91
     assert completed["sections"][0]["artifactIds"] == ["art-conclusion"]
+    assert completed["content"]
 
     service.submit_review(report["id"], "reviewer", session_factory=analysis_session)
     service.approve_report(report["id"], "reviewer", session_factory=analysis_session)
@@ -275,6 +278,68 @@ def test_create_subscription_uses_requested_channel(analysis_session):
     assert subscription["channel"] == "email"
     assert subscription["publishPolicy"] == "auto_publish"
     assert subscription["nextRunAt"] is not None
+
+
+def test_report_list_exposes_structured_overview_without_full_sections(analysis_session):
+    with analysis_session() as session:
+        report = Report(
+            id="weekly-list-card",
+            title="生产运营周报",
+            template_id="tpl-weekly",
+            source_id=1,
+            report_type="weekly",
+            status="published",
+            owner_id="owner-1",
+            period_start=datetime(2026, 8, 3),
+            period_end=datetime(2026, 8, 10),
+            current_version_id="weekly-list-version",
+        )
+        version = ReportVersion(
+            id="weekly-list-version",
+            report_id=report.id,
+            version=2,
+            status="published",
+            content_json={
+                "schemaVersion": "weekly-report/v1",
+                "managementSummary": {"findings": [{"text": "产量保持稳定。"}]},
+                "metrics": [{"name": "总产量", "value": 12840, "unit": "件"}],
+                "anomalies": [{"title": "焊接良率下降", "severity": "high"}],
+                "dataQuality": {"coverage": 97},
+            },
+        )
+        report_file = ReportFile(
+            id="weekly-list-pdf",
+            report_id=report.id,
+            version_id=version.id,
+            format="pdf",
+            status="ready",
+        )
+        message = Message(
+            id="weekly-list-message",
+            message_type="weekly_report",
+            source="report-agent",
+            title=report.title,
+            summary="产量保持稳定。",
+            related_type="report",
+            related_id=report.id,
+            report_version_id=version.id,
+            idempotency_key="weekly-list-message",
+        )
+        recipient = MessageRecipient(
+            id="weekly-list-recipient",
+            message_id=message.id,
+            user_id="owner-1",
+            is_read=True,
+        )
+        session.add_all([report, version, report_file, message, recipient])
+        session.commit()
+
+    listed = service.list_reports(owner_id="owner-1", session_factory=analysis_session)
+
+    assert listed[0]["reportOverview"]["managementSummary"]["findings"][0]["text"] == "产量保持稳定。"
+    assert listed[0]["reportOverview"]["anomalies"][0]["severity"] == "high"
+    assert listed[0]["files"][0]["downloadUrl"] == "/api/v1/report-files/weekly-list-pdf/download"
+    assert listed[0]["isRead"] is True
 
 
 def test_legacy_feishu_delivery_keeps_feishu_channel(analysis_session, monkeypatch):

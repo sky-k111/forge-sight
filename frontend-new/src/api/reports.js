@@ -1,5 +1,6 @@
 import { apiUrl, httpGet, httpPost } from "./_http";
 import { currentUserId } from "../lib/auth";
+import { getToken } from "../lib/auth";
 
 const USER_ID = currentUserId;
 
@@ -61,6 +62,22 @@ export function createReportSubscription(payload) {
   });
 }
 
-export function reportExportUrl(id, format = "html") {
-  return apiUrl(`/api/v1/reports/${id}/export?format=${format}`);
+export function reportFileUrl(file) {
+  if (!file?.downloadUrl) return null;
+  return apiUrl(file.downloadUrl);
+}
+
+export async function downloadReportFile(file, fallbackName = "ForgeSight-weekly-report") {
+  const url = reportFileUrl(file);
+  if (!url) throw new Error("报告文件尚未就绪");
+  const token = getToken();
+  const response = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!response.ok) throw new Error(response.status === 409 ? "报告文件仍在生成，请稍后再试" : "报告文件下载失败");
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = `${fallbackName}.${file.format === "xlsx" ? "xlsx" : "pdf"}`;
+  link.click();
+  URL.revokeObjectURL(objectUrl);
 }
