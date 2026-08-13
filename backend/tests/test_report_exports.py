@@ -18,6 +18,8 @@ def _report_content() -> dict:
             "reportType": "weekly",
             "periodStart": "2026-08-03T00:00:00",
             "periodEnd": "2026-08-10T00:00:00",
+            "comparisonPeriodStart": "2026-07-27T00:00:00",
+            "comparisonPeriodEnd": "2026-08-03T00:00:00",
             "timezone": "Asia/Shanghai",
         },
         "managementSummary": {
@@ -26,12 +28,14 @@ def _report_content() -> dict:
                     "level": "confirmed",
                     "text": "本周总产量提升 6.12%，关键产线运行平稳。",
                     "evidenceArtifactIds": ["artifact-output"],
+                    "evidenceStatus": "verified",
                     "confidence": 94,
                 },
                 {
                     "level": "attention",
                     "text": "AOI 工序不良率高于目标，需要在下周完成参数复核。",
                     "evidenceArtifactIds": ["artifact-quality"],
+                    "evidenceStatus": "verified",
                     "confidence": 86,
                 },
             ],
@@ -42,6 +46,7 @@ def _report_content() -> dict:
                     "dueAt": "2026-08-14T18:00:00",
                     "priority": "high",
                     "evidenceArtifactIds": ["artifact-quality"],
+                    "evidenceStatus": "verified",
                 }
             ],
         },
@@ -100,6 +105,7 @@ def _report_content() -> dict:
                 "severity": "high",
                 "metricKey": "pass_rate",
                 "evidenceArtifactIds": ["artifact-quality"],
+                "evidenceStatus": "verified",
                 "confidence": 86,
             }
         ],
@@ -117,6 +123,7 @@ def _report_content() -> dict:
                 "rationale": "该工序对一次通过率贡献最大。",
                 "priority": "high",
                 "evidenceArtifactIds": ["artifact-quality"],
+                "evidenceStatus": "verified",
             }
         ],
         "dataQuality": {
@@ -125,6 +132,11 @@ def _report_content() -> dict:
             "missingMetrics": [],
             "temporaryMetrics": [],
             "failedSections": [],
+        },
+        "audience": {
+            "scopeHash": "scope-a",
+            "dataSourceIds": [1],
+            "sensitiveFieldsRedacted": True,
         },
         "appendix": {
             "sources": ["MES 生产执行系统", "QMS 质量管理系统"],
@@ -171,6 +183,7 @@ def test_long_pdf_table_repeats_cleanly_and_keeps_last_row_searchable():
             "severity": "medium",
             "metricKey": "pass_rate",
             "evidenceArtifactIds": [f"artifact-{index}"],
+            "evidenceStatus": "verified",
             "confidence": 80,
         }
         for index in range(1, 61)
@@ -192,3 +205,40 @@ def test_excel_neutralizes_formula_injection_in_untrusted_text():
 
     assert cell.data_type == "s"
     assert cell.value.startswith("'=HYPERLINK")
+
+
+def test_pdf_escapes_reportlab_markup_and_does_not_embed_local_files(tmp_path):
+    local_image = tmp_path / "private.png"
+    local_image.write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDAT\x08\xd7c\xf8\xcf\xc0\xf0\x1f\x00\x05\x00\x01\xff\x89\x99=\x1d\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    content = _report_content()
+    content["managementSummary"]["findings"][0]["text"] = (
+        f'<img src="{local_image}"/> 本周总产量提升 6.12%。'
+    )
+
+    reader = PdfReader(BytesIO(render_pdf_bytes(content)))
+    images = []
+    for page in reader.pages:
+        resources = page["/Resources"]
+        images.extend(
+            item.get_object()
+            for item in resources.get("/XObject", {}).values()
+            if item.get_object().get("/Subtype") == "/Image"
+        )
+
+    assert len(images) == 1  # only the renderer-owned insight hero
+    assert "img" in "".join(page.extract_text() or "" for page in reader.pages)
+
+
+def test_data_anomaly_pdf_uses_an_explicit_no_trend_state():
+    content = _report_content()
+    content["metrics"] = []
+    content["trends"] = []
+    content["dataQuality"]["coverage"] = 42
+
+    reader = PdfReader(BytesIO(render_pdf_bytes(content)))
+    extracted = "".join(page.extract_text() or "" for page in reader.pages)
+
+    assert "当前冻结版本没有可验证的时间序列" in extracted

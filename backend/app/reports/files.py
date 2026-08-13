@@ -23,6 +23,7 @@ from app.db.models import (
     ReportVersion,
 )
 from app.reports.exports import render_excel_bytes, render_pdf_bytes
+from app.reports.repository import resolve_audience_scope
 
 
 class FileAccessDenied(PermissionError):
@@ -92,13 +93,25 @@ def resolve_download(
 
     user_ids = {str(user.get("id") or ""), str(user.get("username") or "")}
     user_ids.discard("")
-    allowed = (
-        user.get("role") == "admin"
-        or report.owner_id in user_ids
-        or _is_recipient(session, version.id, user_ids)
-    )
-    if not allowed:
+    is_admin = user.get("role") == "admin"
+    has_relationship = report.owner_id in user_ids or _is_recipient(session, version.id, user_ids)
+    if not is_admin and not has_relationship:
         raise FileAccessDenied("无权下载此周报文件")
+    if not is_admin:
+        current_scope = resolve_audience_scope(
+            session,
+            "weekly_report",
+            {"userIds": sorted(user_ids)},
+        )
+        requested_dimensions = (report.scope_json or {}).get("dimensions") or {}
+        dimensions_allowed = all(
+            set(values if isinstance(values, list) else [values]).issubset(
+                set(current_scope.dimensions.get(dimension, ()))
+            )
+            for dimension, values in requested_dimensions.items()
+        )
+        if report.source_id not in current_scope.data_source_ids or not dimensions_allowed:
+            raise FileAccessDenied("当前数据权限不允许下载此周报文件")
     if report_file.status != "ready":
         raise FileNotReady(report_file.status, report_file.error_json)
     if not report_file.storage_uri:

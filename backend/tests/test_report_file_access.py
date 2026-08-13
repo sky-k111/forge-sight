@@ -8,7 +8,15 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.db.models import Base, Message, MessageRecipient, Report, ReportFile, ReportVersion
+from app.db.models import (
+    Base,
+    DataScopePolicy,
+    Message,
+    MessageRecipient,
+    Report,
+    ReportFile,
+    ReportVersion,
+)
 from app.api import reports as reports_api
 from app.auth.deps import require_user
 from app.main import app
@@ -84,6 +92,22 @@ def file_session(tmp_path):
                     message_id="message-1",
                     user_id="recipient-id",
                 ),
+                DataScopePolicy(
+                    id="policy-owner",
+                    subject_type="user",
+                    subject_id="owner-name",
+                    business_key="weekly_report",
+                    effect="allow",
+                    data_source_ids_json=[1],
+                ),
+                DataScopePolicy(
+                    id="policy-recipient",
+                    subject_type="user",
+                    subject_id="recipient-id",
+                    business_key="weekly_report",
+                    effect="allow",
+                    data_source_ids_json=[1],
+                ),
             ]
         )
         session.commit()
@@ -140,6 +164,22 @@ def test_not_ready_file_returns_explicit_status(file_session):
         )
 
     assert caught.value.status == "queued"
+
+
+def test_revoked_data_scope_blocks_owner_and_historical_recipient(file_session):
+    session_factory, storage_root = file_session
+
+    with session_factory() as session:
+        session.get(DataScopePolicy, "policy-owner").enabled = False
+        session.get(DataScopePolicy, "policy-recipient").enabled = False
+        session.flush()
+
+        for user in (
+            {"id": "owner-id", "username": "owner-name", "role": "business"},
+            {"id": "recipient-id", "username": "recipient", "role": "business"},
+        ):
+            with pytest.raises(FileAccessDenied):
+                resolve_download(session, "file-ready", user, storage_root)
 
 
 def test_download_api_requires_login_and_returns_safe_attachment(file_session, monkeypatch):

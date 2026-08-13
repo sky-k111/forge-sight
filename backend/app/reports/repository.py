@@ -211,7 +211,13 @@ def publish_version(
                 payload_json=payload,
             )
         )
-    for format_name in ("pdf", "xlsx"):
+    export_formats = (
+        ("pdf", "xlsx")
+        if report.report_type == "weekly"
+        and (version.content_json or {}).get("schemaVersion") == "weekly-report/v1"
+        else ()
+    )
+    for format_name in export_formats:
         if (
             session.query(ReportFile)
             .filter_by(version_id=version.id, format=format_name)

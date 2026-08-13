@@ -13,6 +13,8 @@ from app.db.models import (
     KnowledgeMetric,
     MetricSourceBinding,
     Report,
+    ReportFile,
+    ReportSection,
     ReportVersion,
 )
 from app.reports import feishu, service
@@ -128,6 +130,67 @@ def test_create_and_finalize_topic_report_reuses_agent_artifacts(analysis_sessio
     assert completed["status"] == "awaiting_review"
     assert completed["confidence"] == 91
     assert completed["sections"][0]["artifactIds"] == ["art-conclusion"]
+
+    service.submit_review(report["id"], "reviewer", session_factory=analysis_session)
+    service.approve_report(report["id"], "reviewer", session_factory=analysis_session)
+    service.publish_report(report["id"], "reviewer", session_factory=analysis_session)
+    with analysis_session() as session:
+        assert session.query(ReportFile).count() == 0
+
+
+def test_manual_weekly_publish_converts_legacy_content_before_queuing_exports(analysis_session):
+    with analysis_session() as session:
+        report = Report(
+            id="manual-weekly",
+            title="手工生产周报",
+            template_id="tpl-weekly",
+            source_id=1,
+            report_type="weekly",
+            status="approved",
+            owner_id="owner-1",
+            period_start=datetime(2026, 8, 3),
+            period_end=datetime(2026, 8, 10),
+            current_version_id="manual-version",
+            scope_json={"timezone": "Asia/Shanghai"},
+        )
+        version = ReportVersion(
+            id="manual-version",
+            report_id=report.id,
+            version=1,
+            status="approved",
+            summary="本周总产量为 12840件。",
+            content_json={"summary": "本周总产量为 12840件。", "sections": []},
+            data_quality_json={"coverageScore": 100},
+        )
+        section = ReportSection(
+            id="manual-section",
+            report_id=report.id,
+            version_id=version.id,
+            code="output",
+            title="生产情况",
+            section_order=1,
+            status="succeeded",
+            summary="本周总产量为 12840件。",
+            confidence=92,
+            artifact_ids_json=["artifact-output"],
+            content_json={
+                "result": {
+                    "columns": ["week", "output_qty"],
+                    "rows": [["W31", 12100], ["W32", 12840]],
+                },
+                "metricResolution": {"id": "output_qty", "name": "总产量", "unit": "件"},
+            },
+        )
+        session.add_all([report, version, section])
+        session.commit()
+
+    service.publish_report("manual-weekly", "reviewer", session_factory=analysis_session)
+
+    with analysis_session() as session:
+        version = session.get(ReportVersion, "manual-version")
+        assert version.content_json["schemaVersion"] == "weekly-report/v1"
+        assert version.validation_json["passed"] is True
+        assert {row.format for row in session.query(ReportFile).all()} == {"pdf", "xlsx"}
 
 
 def test_feishu_signature_and_success_response(monkeypatch):

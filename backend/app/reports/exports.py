@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
+from xml.sax.saxutils import escape
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+import reportlab
 from PIL import Image as PillowImage
 from PIL import ImageDraw
+from PIL import ImageFont
 from reportlab.graphics.charts.linecharts import HorizontalLineChart
 from reportlab.graphics.shapes import Drawing
 from reportlab.lib import colors
@@ -48,6 +52,12 @@ def _register_fonts() -> tuple[str, str]:
     if regular not in pdfmetrics.getRegisteredFontNames():
         pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
     return "STSong-Light", "STSong-Light"
+
+
+def _pdf_text(value: object) -> str:
+    """Treat every model/user value as text, never as ReportLab markup."""
+
+    return escape(str(value), {'"': "&quot;", "'": "&#39;"})
 
 
 def _styles():
@@ -108,6 +118,14 @@ def _styles():
             leading=11,
             textColor=MUTED,
         ),
+        "tableHeader": ParagraphStyle(
+            "ForgeSightTableHeader",
+            parent=styles["BodyText"],
+            fontName=regular,
+            fontSize=7.5,
+            leading=11,
+            textColor=colors.white,
+        ),
         "metric": ParagraphStyle(
             "ForgeSightMetric",
             parent=styles["Normal"],
@@ -135,6 +153,10 @@ def _insight_image(report: StructuredWeeklyReport) -> BytesIO:
     width, height = 1440, 480
     image = PillowImage.new("RGB", (width, height), "#0A4F4B")
     draw = ImageDraw.Draw(image)
+    font_root = Path(reportlab.__file__).resolve().parent / "fonts"
+    label_font = ImageFont.truetype(str(font_root / "Vera.ttf"), 20)
+    headline_font = ImageFont.truetype(str(font_root / "VeraBd.ttf"), 58)
+    caption_font = ImageFont.truetype(str(font_root / "Vera.ttf"), 16)
     for y in range(height):
         ratio = y / height
         color = (
@@ -144,30 +166,36 @@ def _insight_image(report: StructuredWeeklyReport) -> BytesIO:
         )
         draw.line((0, y, width, y), fill=color)
     draw.rounded_rectangle((48, 42, width - 48, height - 42), radius=30, outline="#5AD6C8", width=3)
-    draw.text((82, 74), "FORGESIGHT  /  WEEKLY SIGNAL", fill="#B8F2E9")
+    anomaly_variant = report.data_quality.coverage < 60
+    hero_label = "FORGESIGHT  /  DATA QUALITY ALERT" if anomaly_variant else "FORGESIGHT  /  WEEKLY SIGNAL"
+    draw.text((82, 74), hero_label, fill="#B8F2E9", font=label_font)
     primary = report.metrics[0] if report.metrics else None
-    headline = f"{primary.value:,.0f} {primary.unit}" if primary else f"{report.data_quality.coverage}%"
+    headline = f"{primary.value:,.0f}" if primary else f"{report.data_quality.coverage}%"
     subtitle = "PRIMARY KPI" if primary else "DATA COVERAGE"
-    draw.text((84, 145), headline, fill="white", stroke_width=1)
-    draw.text((86, 190), subtitle, fill="#B8F2E9")
+    draw.text((84, 145), headline, fill="white", font=headline_font)
+    draw.text((86, 220), subtitle, fill="#B8F2E9", font=caption_font)
 
-    trend = report.trends[0] if report.trends else None
-    points = [point.value for point in trend.points] if trend else [42, 58, 54, 76, 72, 90]
-    if len(points) == 1:
-        points = [points[0], points[0]]
-    low, high = min(points), max(points)
-    spread = high - low or 1
     chart_left, chart_top, chart_right, chart_bottom = 610, 92, 1340, 370
     draw.line((chart_left, chart_bottom, chart_right, chart_bottom), fill="#77CFC4", width=2)
-    coordinates = []
-    for index, value in enumerate(points):
-        x = chart_left + (chart_right - chart_left) * index / (len(points) - 1)
-        y = chart_bottom - (chart_bottom - chart_top) * (value - low) / spread
-        coordinates.append((x, y))
-    draw.line(coordinates, fill="#F8C76A", width=8, joint="curve")
-    for x, y in coordinates:
-        draw.ellipse((x - 9, y - 9, x + 9, y + 9), fill="#F8C76A", outline="white", width=3)
-    draw.text((chart_left, 395), "TREND / VERIFIED DATA", fill="#B8F2E9")
+    trend = report.trends[0] if report.trends and len(report.trends[0].points) >= 2 else None
+    if trend:
+        points = [point.value for point in trend.points]
+        low, high = min(points), max(points)
+        spread = high - low or 1
+        coordinates = []
+        for index, value in enumerate(points):
+            x = chart_left + (chart_right - chart_left) * index / (len(points) - 1)
+            y = chart_bottom - (chart_bottom - chart_top) * (value - low) / spread
+            coordinates.append((x, y))
+        draw.line(coordinates, fill="#F8C76A", width=8, joint="curve")
+        for x, y in coordinates:
+            draw.ellipse((x - 9, y - 9, x + 9, y + 9), fill="#F8C76A", outline="white", width=3)
+    draw.text(
+        (chart_left, 395),
+        "TREND / VERIFIED DATA" if trend else "NO VERIFIED TREND DATA",
+        fill="#B8F2E9",
+        font=caption_font,
+    )
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
     output.seek(0)
@@ -195,8 +223,8 @@ def _metric_table(report: StructuredWeeklyReport, styles: dict) -> Table:
             delta = f"{metric.change_rate:+.1%} 环比"
         cells.append(
             [
-                Paragraph(metric.name, styles["metricLabel"]),
-                Paragraph(f"{metric.value:,.2f} {metric.unit}", styles["metric"]),
+                Paragraph(_pdf_text(metric.name), styles["metricLabel"]),
+                Paragraph(_pdf_text(f"{metric.value:,.2f} {metric.unit}"), styles["metric"]),
                 Paragraph(delta or f"可信度 {metric.confidence}", styles["metricLabel"]),
             ]
         )
@@ -238,7 +266,7 @@ def _trend_chart(report: StructuredWeeklyReport) -> Drawing | None:
     chart.width = 390
     chart.data = [[point.value for point in series.points]]
     chart.categoryAxis.categoryNames = [point.label for point in series.points]
-    chart.categoryAxis.labels.fontName = "Helvetica"
+    chart.categoryAxis.labels.fontName = _register_fonts()[0]
     chart.categoryAxis.labels.fontSize = 7
     chart.valueAxis.labels.fontName = "Helvetica"
     chart.valueAxis.labels.fontSize = 7
@@ -272,9 +300,11 @@ def render_pdf_bytes(content: dict) -> bytes:
     story = [
         Spacer(1, 7 * mm),
         Paragraph("FORGESIGHT · WEEKLY BUSINESS REVIEW", styles["eyebrow"]),
-        Paragraph(report.identity.title, styles["title"]),
+        Paragraph(_pdf_text(report.identity.title), styles["title"]),
         Paragraph(
-            f"报告周期 {period}　·　数据覆盖率 {report.data_quality.coverage}%　·　版本 {report.identity.version_id}",
+            _pdf_text(
+                f"报告周期 {period}　·　数据覆盖率 {report.data_quality.coverage}%　·　版本 {report.identity.version_id}"
+            ),
             styles["small"],
         ),
         Spacer(1, 6 * mm),
@@ -287,7 +317,7 @@ def render_pdf_bytes(content: dict) -> bytes:
         prefix = "●" if finding.level == "confirmed" else "◆"
         story.append(
             Paragraph(
-                f"<font color='#0B6E69'>{prefix}</font>　{finding.text}　"
+                f"<font color='#0B6E69'>{prefix}</font>　{_pdf_text(finding.text)}　"
                 f"<font color='#667085'>可信度 {finding.confidence}</font>",
                 styles["body"],
             )
@@ -303,27 +333,37 @@ def render_pdf_bytes(content: dict) -> bytes:
     chart = _trend_chart(report)
     if chart is not None:
         story.extend([Spacer(1, 3 * mm), chart])
+    else:
+        story.extend(
+            [
+                Spacer(1, 3 * mm),
+                Paragraph("当前冻结版本没有可验证的时间序列，因此未绘制趋势图。", styles["body"]),
+                Spacer(1, 4 * mm),
+            ]
+        )
 
     story.append(Paragraph("异常明细", styles["heading"]))
     anomaly_rows = [
         [
-            Paragraph("异常", styles["small"]),
-            Paragraph("等级", styles["small"]),
-            Paragraph("影响与说明", styles["small"]),
-            Paragraph("可信度", styles["small"]),
+            Paragraph("异常", styles["tableHeader"]),
+            Paragraph("等级", styles["tableHeader"]),
+            Paragraph("影响与说明", styles["tableHeader"]),
+            Paragraph("可信度", styles["tableHeader"]),
         ]
     ]
     for item in report.anomalies:
         anomaly_rows.append(
             [
-                Paragraph(item.title, styles["body"]),
+                Paragraph(_pdf_text(item.title), styles["body"]),
                 Paragraph(item.severity.upper(), styles["small"]),
-                Paragraph(item.description, styles["body"]),
+                Paragraph(_pdf_text(item.description), styles["body"]),
                 Paragraph(str(item.confidence), styles["body"]),
             ]
         )
     if len(anomaly_rows) == 1:
-        anomaly_rows.append([Paragraph("本期无已确认异常", styles["body"]), "—", "—", "—"])
+        anomaly_rows.append(
+            [Paragraph("冻结证据中未识别到结构化异常记录", styles["body"]), "—", "—", "—"]
+        )
     anomaly_table = LongTable(
         anomaly_rows,
         colWidths=[39 * mm, 20 * mm, 91 * mm, 20 * mm],
@@ -335,18 +375,18 @@ def render_pdf_bytes(content: dict) -> bytes:
     story.append(Paragraph("行动建议", styles["heading"]))
     action_rows = [
         [
-            Paragraph("优先级", styles["small"]),
-            Paragraph("行动", styles["small"]),
-            Paragraph("负责人", styles["small"]),
-            Paragraph("截止时间", styles["small"]),
+            Paragraph("优先级", styles["tableHeader"]),
+            Paragraph("行动", styles["tableHeader"]),
+            Paragraph("负责人", styles["tableHeader"]),
+            Paragraph("截止时间", styles["tableHeader"]),
         ]
     ]
     for item in report.management_summary.actions:
         action_rows.append(
             [
                 Paragraph(item.priority.upper(), styles["small"]),
-                Paragraph(item.text, styles["body"]),
-                Paragraph(item.owner or "待指派", styles["body"]),
+                Paragraph(_pdf_text(item.text), styles["body"]),
+                Paragraph(_pdf_text(item.owner or "待指派"), styles["body"]),
                 Paragraph(item.due_at.strftime("%Y-%m-%d") if item.due_at else "待确认", styles["body"]),
             ]
         )
@@ -354,7 +394,7 @@ def render_pdf_bytes(content: dict) -> bytes:
         action_rows.append(
             [
                 Paragraph(item.priority.upper(), styles["small"]),
-                Paragraph(f"{item.title}：{item.rationale}", styles["body"]),
+                Paragraph(_pdf_text(f"{item.title}：{item.rationale}"), styles["body"]),
                 Paragraph("待指派", styles["body"]),
                 Paragraph("待确认", styles["body"]),
             ]
@@ -364,7 +404,7 @@ def render_pdf_bytes(content: dict) -> bytes:
     story.extend([action_table, Spacer(1, 5 * mm)])
     story.append(
         Paragraph(
-            "数据来源：" + "、".join(report.appendix.sources) + "。本文件由 ForgeSight 服务端基于冻结版本生成。",
+            _pdf_text("数据来源：" + "、".join(report.appendix.sources)) + "。本文件由 ForgeSight 服务端基于冻结版本生成。",
             styles["small"],
         )
     )

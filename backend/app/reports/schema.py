@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -21,6 +22,8 @@ class ReportIdentity(ReportContentModel):
     report_type: Literal["weekly"] = Field(alias="reportType")
     period_start: datetime = Field(alias="periodStart")
     period_end: datetime = Field(alias="periodEnd")
+    comparison_period_start: datetime | None = Field(default=None, alias="comparisonPeriodStart")
+    comparison_period_end: datetime | None = Field(default=None, alias="comparisonPeriodEnd")
     timezone: str = Field(min_length=1, max_length=50)
 
 
@@ -29,6 +32,7 @@ class Finding(ReportContentModel):
     section_code: str | None = Field(default=None, alias="sectionCode")
     text: str = Field(min_length=1)
     evidence_artifact_ids: list[str] = Field(alias="evidenceArtifactIds")
+    evidence_status: Literal["verified", "inferred", "missing"] = Field(alias="evidenceStatus")
     confidence: int = Field(ge=0, le=100)
 
 
@@ -40,6 +44,7 @@ class Action(ReportContentModel):
     evidence_artifact_ids: list[str] = Field(
         default_factory=list, alias="evidenceArtifactIds"
     )
+    evidence_status: Literal["verified", "inferred", "missing"] = Field(alias="evidenceStatus")
 
 
 class ManagementSummary(ReportContentModel):
@@ -77,6 +82,7 @@ class Anomaly(ReportContentModel):
     severity: Literal["critical", "high", "medium", "low"]
     metric_key: str | None = Field(default=None, alias="metricKey")
     evidence_artifact_ids: list[str] = Field(alias="evidenceArtifactIds")
+    evidence_status: Literal["verified", "inferred", "missing"] = Field(alias="evidenceStatus")
     confidence: int = Field(ge=0, le=100)
 
 
@@ -94,6 +100,13 @@ class Recommendation(ReportContentModel):
     rationale: str = Field(min_length=1)
     priority: Literal["high", "medium", "low"]
     evidence_artifact_ids: list[str] = Field(alias="evidenceArtifactIds")
+    evidence_status: Literal["verified", "inferred", "missing"] = Field(alias="evidenceStatus")
+
+
+class AudienceScope(ReportContentModel):
+    scope_hash: str = Field(alias="scopeHash", min_length=1)
+    data_source_ids: list[int] = Field(alias="dataSourceIds", min_length=1)
+    sensitive_fields_redacted: bool = Field(alias="sensitiveFieldsRedacted")
 
 
 class DataQuality(ReportContentModel):
@@ -123,8 +136,69 @@ class StructuredWeeklyReport(ReportContentModel):
     anomalies: list[Anomaly]
     progress: list[ProgressItem]
     recommendations: list[Recommendation]
+    audience: AudienceScope
     data_quality: DataQuality = Field(alias="dataQuality")
     appendix: Appendix
+
+
+_SENSITIVE_KEYS = {
+    "password",
+    "token",
+    "secret",
+    "authorization",
+    "authorizationcode",
+    "smtpauthorizationcode",
+}
+
+
+def _contains_sensitive_key(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = re.sub(r"[^a-z]", "", str(key).lower())
+            if any(marker in normalized for marker in _SENSITIVE_KEYS) or _contains_sensitive_key(child):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_sensitive_key(item) for item in value)
+    return False
+
+
+def _numeric_claim_errors(report: StructuredWeeklyReport) -> list[str]:
+    """Find percentage/unit claims that are not backed by a structured metric."""
+
+    percentage_values = {
+        round(value, 4)
+        for metric in report.metrics
+        for value in (
+            ([metric.value] if metric.unit == "%" else [])
+            + ([metric.change_rate * 100] if metric.change_rate is not None else [])
+        )
+    }
+    unit_values: dict[str, set[float]] = {}
+    for metric in report.metrics:
+        unit_values.setdefault(metric.unit, set()).update(
+            round(value, 4)
+            for value in (metric.value, metric.previous_value)
+            if value is not None
+        )
+    texts = [item.text for item in report.management_summary.findings]
+    texts.extend(item.text for item in report.management_summary.actions)
+    texts.extend(item.description for item in report.anomalies)
+    texts.extend(item.rationale for item in report.recommendations)
+    errors: list[str] = []
+    for text in texts:
+        for matched in re.finditer(r"(?<![A-Za-z0-9])(-?\d+(?:\.\d+)?)\s*%", text):
+            value = round(float(matched.group(1)), 4)
+            if not any(abs(value - allowed) <= 0.01 for allowed in percentage_values):
+                errors.append(matched.group(0).strip())
+        for unit, allowed_values in unit_values.items():
+            if not unit or unit == "%":
+                continue
+            pattern = rf"(?<![A-Za-z0-9])(-?\d+(?:\.\d+)?)\s*{re.escape(unit)}"
+            for matched in re.finditer(pattern, text):
+                value = round(float(matched.group(1)), 4)
+                if not any(abs(value - allowed) <= 0.01 for allowed in allowed_values):
+                    errors.append(matched.group(0).strip())
+    return sorted(set(errors))
 
 
 def validate_for_publish(content: dict) -> dict:
@@ -134,18 +208,28 @@ def validate_for_publish(content: dict) -> dict:
     try:
         report = StructuredWeeklyReport.model_validate(content)
     except ValidationError as exc:
+        invalid_rules = [
+            {
+                "code": "V-HARD-001",
+                "level": "error",
+                "passed": False,
+                "message": "结构化周报不符合 weekly-report/v1。",
+                "details": exc.errors(include_url=False),
+            }
+        ]
+        if _contains_sensitive_key(content):
+            invalid_rules.append(
+                {
+                    "code": "V-HARD-009",
+                    "level": "error",
+                    "passed": False,
+                    "message": "接收范围无效或结构化周报仍包含敏感字段。",
+                }
+            )
         return {
             "passed": False,
             "ruleVersion": "weekly-report-validation-v2",
-            "rules": [
-                {
-                    "code": "V-HARD-001",
-                    "level": "error",
-                    "passed": False,
-                    "message": "结构化周报不符合 weekly-report/v1。",
-                    "details": exc.errors(include_url=False),
-                }
-            ],
+            "rules": invalid_rules,
             "checkedAt": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -210,6 +294,77 @@ def validate_for_publish(content: dict) -> dict:
                 "level": "error",
                 "passed": False,
                 "message": "正常版周报必须包含结构化指标，数据不足时应使用数据异常版。",
+            }
+        )
+
+    comparative_metrics = [
+        metric
+        for metric in report.metrics
+        if metric.previous_value is not None or metric.change_rate is not None
+    ]
+    comparison_start = report.identity.comparison_period_start
+    comparison_end = report.identity.comparison_period_end
+    comparison_invalid = bool(comparative_metrics) and (
+        comparison_start is None
+        or comparison_end is None
+        or comparison_end > report.identity.period_start
+        or comparison_start >= comparison_end
+        or (
+            comparison_end - comparison_start
+            != report.identity.period_end - report.identity.period_start
+        )
+    )
+    if comparison_invalid:
+        rules.append(
+            {
+                "code": "V-HARD-006",
+                "level": "error",
+                "passed": False,
+                "message": "包含对比指标时必须提供完整且等长的上一比较周期。",
+            }
+        )
+
+    inconsistent_claims = _numeric_claim_errors(report)
+    if inconsistent_claims:
+        rules.append(
+            {
+                "code": "V-HARD-007",
+                "level": "error",
+                "passed": False,
+                "message": "正文数值必须能回溯到结构化指标。",
+                "claims": inconsistent_claims,
+            }
+        )
+
+    evidence_state_errors: list[str] = []
+    for index, item in enumerate(report.management_summary.findings):
+        cause_claim = any(word in item.text for word in ("原因", "导致", "由于"))
+        if (item.level == "confirmed" or cause_claim) and item.evidence_status != "verified":
+            evidence_state_errors.append(f"finding:{index}")
+    for index, item in enumerate(report.anomalies):
+        if item.evidence_status != "verified":
+            evidence_state_errors.append(f"anomaly:{index}")
+    if evidence_state_errors:
+        rules.append(
+            {
+                "code": "V-HARD-008",
+                "level": "error",
+                "passed": False,
+                "message": "确认性结论和原因措辞必须使用已验证证据。",
+                "items": evidence_state_errors,
+            }
+        )
+
+    if (
+        not report.audience.sensitive_fields_redacted
+        or _contains_sensitive_key(content)
+    ):
+        rules.append(
+            {
+                "code": "V-HARD-009",
+                "level": "error",
+                "passed": False,
+                "message": "接收范围无效或结构化周报仍包含敏感字段。",
             }
         )
 

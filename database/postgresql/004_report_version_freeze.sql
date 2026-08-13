@@ -27,9 +27,12 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $freeze$
 BEGIN
-    IF OLD.status = 'published' AND TG_OP = 'DELETE' THEN
-        RAISE EXCEPTION 'published report version % cannot be deleted', OLD.id
-            USING ERRCODE = '55000';
+    IF TG_OP = 'DELETE' THEN
+        IF OLD.status = 'published' THEN
+            RAISE EXCEPTION 'published report version % cannot be deleted', OLD.id
+                USING ERRCODE = '55000';
+        END IF;
+        RETURN OLD;
     END IF;
     IF OLD.status = 'published' AND (
         NEW.status IS DISTINCT FROM OLD.status

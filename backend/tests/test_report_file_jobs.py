@@ -35,6 +35,11 @@ def _content() -> dict:
         "anomalies": [],
         "progress": [],
         "recommendations": [],
+        "audience": {
+            "scopeHash": "scope-a",
+            "dataSourceIds": [1],
+            "sensitiveFieldsRedacted": True,
+        },
         "dataQuality": {
             "coverage": 100,
             "delayedSources": [],

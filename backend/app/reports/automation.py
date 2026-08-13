@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -391,6 +392,7 @@ def compose_management_summary(raw_summary: str, sections: list[ReportSection]) 
                 "level": "confirmed",
                 "text": raw_summary.strip(),
                 "evidenceArtifactIds": all_evidence,
+                "evidenceStatus": "verified",
                 "confidence": round(sum(scored) / len(scored)) if scored else 60,
             }
         )
@@ -403,6 +405,7 @@ def compose_management_summary(raw_summary: str, sections: list[ReportSection]) 
                 "sectionCode": section.code,
                 "text": section.summary.strip(),
                 "evidenceArtifactIds": list(section.artifact_ids_json or []),
+                "evidenceStatus": "verified" if section.artifact_ids_json else "missing",
                 "confidence": section.confidence,
             }
         )
@@ -415,9 +418,19 @@ def compose_management_summary(raw_summary: str, sections: list[ReportSection]) 
                 "text": "优先复核低可信度或数据覆盖不足的章节，并在下一周期跟踪变化。",
                 "priority": "medium",
                 "evidenceArtifactIds": all_evidence,
+                "evidenceStatus": "verified" if all_evidence else "missing",
             }
         ],
     }
+
+
+def _is_temporal_label(value: object) -> bool:
+    label = str(value).strip()
+    return bool(
+        re.fullmatch(r"W\d{1,2}", label, re.IGNORECASE)
+        or re.fullmatch(r"\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?", label)
+        or re.fullmatch(r"第?\d{1,2}周", label)
+    )
 
 
 def _structured_metrics(sections: list[ReportSection]) -> tuple[list[dict], list[dict], list[dict]]:
@@ -457,6 +470,17 @@ def _structured_metrics(sections: list[ReportSection]) -> tuple[list[dict], list
         if not numeric_rows:
             continue
         resolution = content.get("metricResolution") or {}
+        label_index = next((index for index in range(len(columns)) if index != numeric_index), None)
+        if len(numeric_rows) > 1 and (
+            not resolution.get("id")
+            or label_index is None
+            or not all(
+                label_index < len(row) and _is_temporal_label(row[label_index])
+                for row in numeric_rows
+            )
+        ):
+            # Grouped/category rows do not define current and comparison periods.
+            continue
         key = str(resolution.get("id") or columns[numeric_index] or section.code)
         if key in seen_keys:
             continue
@@ -494,7 +518,6 @@ def _structured_metrics(sections: list[ReportSection]) -> tuple[list[dict], list
             }
         )
         if len(numeric_rows) >= 2:
-            label_index = next((index for index in range(len(columns)) if index != numeric_index), None)
             trends.append(
                 {
                     "metricKey": key,
@@ -513,6 +536,47 @@ def _structured_metrics(sections: list[ReportSection]) -> tuple[list[dict], list
         if definition:
             definitions.append({"name": name, "definition": str(definition)})
     return metrics, trends, definitions
+
+
+def _structured_operational_items(sections: list[ReportSection]) -> tuple[list[dict], list[dict], list[dict]]:
+    anomalies: list[dict] = []
+    progress: list[dict] = []
+    recommendations: list[dict] = []
+    for section in sections:
+        summary = section.summary.strip()
+        if not summary or not section.artifact_ids_json:
+            continue
+        evidence = list(section.artifact_ids_json)
+        verified = "verified"
+        if any(keyword in summary for keyword in ("异常", "不良", "波动", "风险", "偏高", "偏低")):
+            anomalies.append(
+                {
+                    "title": section.title,
+                    "description": summary,
+                    "severity": "high" if any(word in summary for word in ("严重", "高风险")) else "medium",
+                    "evidenceArtifactIds": evidence,
+                    "evidenceStatus": verified,
+                    "confidence": section.confidence,
+                }
+            )
+            recommendations.append(
+                {
+                    "title": f"跟进{section.title}",
+                    "rationale": "依据本期已冻结异常证据安排复核和改善跟踪。",
+                    "priority": "high" if section.confidence >= 80 else "medium",
+                    "evidenceArtifactIds": evidence,
+                    "evidenceStatus": verified,
+                }
+            )
+        if any(keyword in summary for keyword in ("进度", "完成", "推进", "改善")):
+            progress.append(
+                {
+                    "title": section.title,
+                    "status": "on_track",
+                    "note": summary,
+                }
+            )
+    return anomalies, progress, recommendations
 
 
 def build_structured_content(
@@ -534,6 +598,18 @@ def build_structured_content(
         "failedSections": [section.code for section in sections if section.status != "succeeded"],
     }
     metrics, trends, definitions = _structured_metrics(sections)
+    anomalies, progress, recommendations = _structured_operational_items(sections)
+    period_duration = report.period_end - report.period_start
+    comparison_start = report.period_start - period_duration
+    scope = getattr(report, "scope_json", None) or {}
+    scope_hash = getattr(report, "audience_scope_hash", None) or hashlib.sha256(
+        json.dumps(
+            {"sourceId": report.source_id, "scope": scope},
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
     return {
         "schemaVersion": "weekly-report/v1",
         "identity": {
@@ -543,14 +619,21 @@ def build_structured_content(
             "reportType": "weekly",
             "periodStart": report.period_start.isoformat(),
             "periodEnd": report.period_end.isoformat(),
+            "comparisonPeriodStart": comparison_start.isoformat(),
+            "comparisonPeriodEnd": report.period_start.isoformat(),
             "timezone": timezone_name,
         },
         "managementSummary": compose_management_summary(raw_summary, sections),
         "metrics": metrics,
         "trends": trends,
-        "anomalies": [],
-        "progress": [],
-        "recommendations": [],
+        "anomalies": anomalies,
+        "progress": progress,
+        "recommendations": recommendations,
+        "audience": {
+            "scopeHash": scope_hash,
+            "dataSourceIds": [report.source_id],
+            "sensitiveFieldsRedacted": True,
+        },
         "dataQuality": data_quality,
         "appendix": {
             "sources": [f"data-source:{report.source_id}"],

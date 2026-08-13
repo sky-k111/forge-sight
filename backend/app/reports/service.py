@@ -504,6 +504,37 @@ def publish_report(
         if report.status not in {"approved", "published"}:
             raise ReportConflict("报告通过复核后才能发布")
         version = session.query(ReportVersion).filter_by(id=report.current_version_id).one()
+        if report.report_type == "weekly" and (version.content_json or {}).get("schemaVersion") != "weekly-report/v1":
+            from app.reports.automation import build_structured_content, validate_generated_version
+            from app.reports.schema import calculate_confidence
+
+            sections = (
+                session.query(ReportSection)
+                .filter_by(report_id=report.id, version_id=version.id)
+                .order_by(ReportSection.section_order)
+                .all()
+            )
+            timezone_name = str((report.scope_json or {}).get("timezone") or "Asia/Shanghai")
+            structured = build_structured_content(
+                report=report,
+                version=version,
+                sections=sections,
+                raw_summary=version.summary,
+                timezone_name=timezone_name,
+            )
+            validation = validate_generated_version(sections, structured)
+            if not validation["passed"]:
+                raise ReportConflict("周报结构化校验未通过，不能发布或生成下载文件")
+            confidence = calculate_confidence(structured["dataQuality"])
+            version.content_json = structured
+            version.schema_version = structured["schemaVersion"]
+            version.validation_json = validation
+            version.confidence_score = confidence["score"]
+            version.confidence_algorithm_version = confidence["algorithmVersion"]
+            version.data_quality_json = {
+                **(version.data_quality_json or {}),
+                "confidence": confidence,
+            }
         report.reviewer_id = report.reviewer_id or user_id
         publish_version(
             session,

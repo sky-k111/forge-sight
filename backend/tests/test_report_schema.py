@@ -24,6 +24,8 @@ def _content(**overrides) -> dict:
             "reportType": "weekly",
             "periodStart": "2026-08-03T00:00:00",
             "periodEnd": "2026-08-10T00:00:00",
+            "comparisonPeriodStart": "2026-07-27T00:00:00",
+            "comparisonPeriodEnd": "2026-08-03T00:00:00",
             "timezone": "Asia/Shanghai",
         },
         "managementSummary": {
@@ -32,6 +34,7 @@ def _content(**overrides) -> dict:
                     "level": "confirmed",
                     "text": "本周产量保持稳定。",
                     "evidenceArtifactIds": ["artifact-1"],
+                    "evidenceStatus": "verified",
                     "confidence": 92,
                 }
             ],
@@ -64,6 +67,11 @@ def _content(**overrides) -> dict:
         "anomalies": [],
         "progress": [],
         "recommendations": [],
+        "audience": {
+            "scopeHash": "scope-a",
+            "dataSourceIds": [1],
+            "sensitiveFieldsRedacted": True,
+        },
         "dataQuality": {
             "coverage": 96,
             "delayedSources": [],
@@ -102,10 +110,10 @@ def test_publish_validation_reports_machine_readable_hard_rule_failures():
 
     assert result["passed"] is False
     assert result["ruleVersion"] == "weekly-report-validation-v2"
-    assert {item["code"] for item in result["rules"] if item["level"] == "error"} == {
+    assert {
         "V-HARD-002",
         "V-HARD-004",
-    }
+    } <= {item["code"] for item in result["rules"] if item["level"] == "error"}
 
 
 def test_normal_report_without_structured_metrics_is_blocked():
@@ -115,6 +123,20 @@ def test_normal_report_without_structured_metrics_is_blocked():
 
     assert result["passed"] is False
     assert "V-HARD-005" in {item["code"] for item in result["rules"]}
+
+
+def test_publish_validation_blocks_inconsistent_claims_periods_evidence_and_secrets():
+    content = _content()
+    content["managementSummary"]["findings"][0].update(
+        {"text": "由于产能提升，本周增长 99%。", "evidenceStatus": "inferred"}
+    )
+    content["identity"]["comparisonPeriodStart"] = "2026-08-01T00:00:00"
+    content["audience"]["sensitiveFieldsRedacted"] = False
+
+    result = validate_for_publish(content)
+
+    codes = {item["code"] for item in result["rules"] if item["level"] == "error"}
+    assert {"V-HARD-006", "V-HARD-007", "V-HARD-008", "V-HARD-009"} <= codes
 
 
 def test_confidence_is_explainable_and_switches_to_data_anomaly_variant():
@@ -162,6 +184,8 @@ def test_structured_content_extracts_metric_trend_and_definition_from_frozen_res
         source_id=1,
         period_start=datetime(2026, 8, 3),
         period_end=datetime(2026, 8, 10),
+        scope_json={},
+        audience_scope_hash="scope-a",
     )
     version = SimpleNamespace(
         id="version-1",
@@ -198,3 +222,46 @@ def test_structured_content_extracts_metric_trend_and_definition_from_frozen_res
     assert content["metrics"][0]["evidenceArtifactIds"] == ["artifact-result"]
     assert content["trends"][0]["points"][-1] == {"label": "W32", "value": 12840.0}
     assert content["appendix"]["definitions"][0]["name"] == "总产量"
+
+
+def test_grouped_category_rows_are_not_misread_as_period_over_period_metrics():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1",
+        title="生产经营周报",
+        source_id=1,
+        period_start=datetime(2026, 8, 3),
+        period_end=datetime(2026, 8, 10),
+        scope_json={},
+        audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 42})
+    section = SimpleNamespace(
+        code="output",
+        title="产线表现",
+        status="succeeded",
+        summary="二线出现异常波动，需继续复核。",
+        confidence=90,
+        artifact_ids_json=["artifact-result"],
+        content_json={
+            "result": {
+                "columns": ["production_line", "output_qty"],
+                "rows": [["一线", 12100], ["二线", 12840]],
+            },
+            "metricResolution": {"id": "output_qty", "name": "总产量", "unit": "件"},
+        },
+    )
+
+    content = build_structured_content(
+        report=report,
+        version=version,
+        sections=[section],
+        raw_summary="二线出现异常波动，需继续复核。",
+        timezone_name="Asia/Shanghai",
+    )
+
+    assert content["metrics"] == []
+    assert content["trends"] == []
+    assert content["anomalies"][0]["title"] == "产线表现"
+    assert content["recommendations"][0]["evidenceStatus"] == "verified"

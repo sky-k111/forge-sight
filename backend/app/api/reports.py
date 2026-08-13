@@ -104,12 +104,12 @@ def push_report_to_feishu(report_id: str):
 
 
 @router.get("/reports/{report_id}/export", response_class=HTMLResponse)
-def export_report(report_id: str, format: str = Query(default="html", pattern=r"^(html|pdf)$")):
+def export_report(report_id: str, format: str = Query(default="html", pattern=r"^html$")):
     try:
         document = service.export_html(report_id)
     except Exception as exc:
         _raise(exc)
-    # 第一版由浏览器打印为 PDF，保证中文字体与图表渲染一致。
+    # 兼容旧 HTML 预览；正式 PDF/XLSX 统一通过 report-files 下载接口提供。
     return HTMLResponse(
         document,
         headers={"Content-Disposition": f'inline; filename="{report_id}.html"'},
@@ -120,20 +120,44 @@ def export_report(report_id: str, format: str = Query(default="html", pattern=r"
 def download_report_file(file_id: str, user: dict = Depends(require_user)):
     """Download a ready report file without exposing its storage URI."""
 
+    user_name, role = current_user_display(user)
     try:
         with PlatformSession() as session:
             download = resolve_download(session, file_id, user, settings.report_storage_dir)
     except KeyError as exc:
+        write_audit(
+            action="下载周报文件",
+            resource=f"report-file:{file_id}",
+            result="拒绝",
+            detail="reason=not_found",
+            user_name=user_name,
+            role=role,
+        )
         raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
     except FileAccessDenied as exc:
+        write_audit(
+            action="下载周报文件",
+            resource=f"report-file:{file_id}",
+            result="拒绝",
+            detail="reason=access_denied",
+            user_name=user_name,
+            role=role,
+        )
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except FileNotReady as exc:
+        write_audit(
+            action="下载周报文件",
+            resource=f"report-file:{file_id}",
+            result="拒绝",
+            detail=f"reason=not_ready;status={exc.status}",
+            user_name=user_name,
+            role=role,
+        )
         raise HTTPException(
             status_code=409,
             detail={"message": str(exc), "fileStatus": exc.status, "error": exc.error},
         ) from exc
 
-    user_name, role = current_user_display(user)
     write_audit(
         action="下载周报文件",
         resource=f"report:{download.report_id}/file:{download.file_id}",
