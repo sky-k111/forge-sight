@@ -34,7 +34,7 @@ docs/tasks/
 
 - [功能需求](./REQUIREMENTS.md)
 - [任务总览与依赖](./TASK_INDEX.md)
-- [多 AI 开发分工与交付协议](./MULTI_AI_COLLABORATION.md)
+- [DeepSeek 与 GPT 开发分工及交付协议](./DEEPSEEK_GPT_COLLABORATION.md)
 - [Q00 邮箱绑定与验证](./未完成/Q邮箱绑定与验证/Q00_执行计划.md)
 - [M00 业务数据模型与迁移](./未完成/M业务数据模型与迁移/M00_执行计划.md)
 - [R00 智能生成与自动发布](./未完成/R智能生成与自动发布/R00_执行计划.md)

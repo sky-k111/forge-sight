@@ -1,15 +1,15 @@
-# 多 AI 开发分工与交付协议
+# DeepSeek 与 GPT 开发分工及交付协议
 
 > 状态：协作基线
 >
 > 适用范围：Q、M、R、V、N、E、U、T 全部项目任务
 >
-> 核心原则：推理密集工作交给推理 AI，视觉与体验工作交给 Codex；
+> 核心原则：推理密集工作交给 DeepSeek，视觉与体验工作交给 GPT；
 > 任何共享文件都通过前置 PR 合并后再修改，不允许双方在两个未合并分支中同时编辑。
 
 ## 1. 角色定义
 
-### 推理 AI
+### DeepSeek
 
 负责领域建模、状态机、数据库迁移、Agent 编排、权限、安全、幂等、
 并发、重试、容量和后端测试。
@@ -21,18 +21,18 @@
 - 设计稳定 API、事件和数据库契约。
 - 编写后端服务、迁移及自动化测试。
 
-### Codex
+### GPT（当前协作 AI）
 
 负责产品体验、界面、精美排版、图片、图表、PDF 视觉、邮件视觉模板、
 响应式与可访问性、浏览器测试、跨任务集成，以及所有提交的最终审查。
 
-Codex 也是最终质量门负责人：推理 AI 的 PR 未经 Codex 审查不得合并。
+GPT 也是最终质量门负责人：DeepSeek 的 PR 未经 GPT 审查不得合并。
 
 ## 2. 全任务分工
 
 <!-- markdownlint-disable MD013 -->
 
-| 大任务 | 推理 AI 负责 | Codex 负责 | 交接点 |
+| 大任务 | DeepSeek 负责 | GPT 负责 | 交接点 |
 | --- | --- | --- | --- |
 | Q 邮箱绑定与验证 | Q01～Q07 的后端契约、模型、迁移、验证码、API、门禁和安全测试 | 审查 Q；在 U03 实现 Web 绑定与验证体验 | Q API 和错误码冻结后交给 U03 |
 | M 业务数据模型与迁移 | M01～M10 全部领域模型、权限解析、Outbox、迁移和并发测试 | 审查 schema、迁移和状态一致性 | M 迁移合并后 R/V/N 才能开发 |
@@ -41,13 +41,13 @@ Codex 也是最终质量门负责人：推理 AI 的 PR 未经 Codex 审查不�
 | N 消息中心与公告 | N01～N08 全部消息、接收人、未读、公告、权限、事件和后端测试 | 在 U04、U07 完成消息和公告界面 | N API 合并后再写 UI 数据接入 |
 | E 邮件投递与重试 | E01、E03～E09：Provider、任务、Worker、重试、降级、安全链接、API 和测试 | E02：周报/公告邮件的 HTML 排版、纯文本降级和视觉预览 | E01 Provider 契约先合并，E02 后接入 |
 | U 前端交互与视觉设计 | 不修改 U；只按已冻结契约回答后端问题 | U01～U09 全部研究、设计、页面、动效、可访问性和浏览器验收 | Q/R/V/N/E 稳定 API 是编码前置条件 |
-| T 集成测试与上线验收 | T01、T02、T04～T06、T08、T09：追踪、迁移、安全、并发、性能、监控和回滚 | T03 端到端浏览器测试、T07 视觉与文件验收、T10 最终审查和交接 | 所有结果由 Codex 汇总后才能发布 |
+| T 集成测试与上线验收 | T01、T02、T04～T06、T08、T09：追踪、迁移、安全、并发、性能、监控和回滚 | T03 端到端浏览器测试、T07 视觉与文件验收、T10 最终审查和交接 | 所有结果由 GPT 汇总后才能发布 |
 
 <!-- markdownlint-enable MD013 -->
 
-## 3. 推理 AI 的明确工作清单
+## 3. DeepSeek 的明确工作清单
 
-将本文件交给推理 AI 时，同时指定一个大任务或一组连续小任务。推理 AI 必须：
+将本文件交给 DeepSeek 时，同时指定一个大任务或一组连续小任务。DeepSeek 必须：
 
 1. 先阅读 `AGENTS.md`、`docs/tasks/REQUIREMENTS.md`、对应的 `字母00`，
    以及本任务下所有指定小任务文件。
@@ -58,11 +58,11 @@ Codex 也是最终质量门负责人：推理 AI 的 PR 未经 Codex 审查不�
 6. 所有外部副作用使用可替换接口；测试使用 fake provider，不调用真实邮箱。
 7. 提供单元测试、集成测试、并发/幂等测试和必要的安全负例。
 8. 开 Draft PR，不自行合并；CI 通过后才标记 Ready for review。
-9. 在 PR 中请求 Codex 最终审查，并等待审查结论。
+9. 在 PR 中请求 GPT 最终审查，并等待审查结论。
 
-## 4. 推理 AI 不得做的事情
+## 4. DeepSeek 不得做的事情
 
-以下内容由 Codex 独占，推理 AI 不得修改：
+以下内容由 GPT 独占，DeepSeek 不得修改：
 
 - `frontend-new/**`
 - 页面颜色、字体、间距、布局、图标、动效和响应式规则
@@ -73,7 +73,7 @@ Codex 也是最终质量门负责人：推理 AI 的 PR 未经 Codex 审查不�
 - 根 `README.md`
 - `docs/tasks/**` 中的任务状态和目录迁移
 
-推理 AI 同样不得：
+DeepSeek 同样不得：
 
 - 直接推送或合并到 `main`。
 - 使用 `force push` 覆盖他人提交。
@@ -85,7 +85,7 @@ Codex 也是最终质量门负责人：推理 AI 的 PR 未经 Codex 审查不�
 
 ## 5. 文件所有权与防冲突规则
 
-### 推理 AI 可直接修改
+### DeepSeek 可直接修改
 
 - `backend/app/auth/**`
 - `backend/app/db/**`
@@ -97,13 +97,13 @@ Codex 也是最终质量门负责人：推理 AI 的 PR 未经 Codex 审查不�
 - `database/**`
 - 与任务直接相关的 `.env.example` 和后端配置项
 
-### Codex 保留路径
+### GPT 保留路径
 
 - `frontend-new/**`
 - `backend/app/reports/rendering/**`：PDF 视觉渲染
 - `backend/app/mail/templates/**`：邮件 HTML 与纯文本模板
 - `docs/acceptance/visual/**`：视觉验收证据
-- `.github/**`：仅在用户确认 CI 方案后由 Codex 实施
+- `.github/**`：仅在用户确认 CI 方案后由 GPT 实施
 
 ### 共享文件
 
@@ -115,7 +115,7 @@ Codex 也是最终质量门负责人：推理 AI 的 PR 未经 Codex 审查不�
 - `backend/app/api/reports.py`
 - `backend/app/reports/service.py`
 
-规则：推理 AI 的基础 PR 先合并；Codex 再从更新后的 `main` 建视觉或集成分支。
+规则：DeepSeek 的基础 PR 先合并；GPT 再从更新后的 `main` 建视觉或集成分支。
 如果确实必须修改共享文件，PR 描述必须列出文件和原因。
 
 ## 6. 契约冻结与变更流程
@@ -129,18 +129,18 @@ Codex 也是最终质量门负责人：推理 AI 的 PR 未经 Codex 审查不�
 - 事件名称、幂等键和 payload。
 - 数据库唯一约束与索引。
 
-Codex 审查通过后标记为“契约冻结”。冻结后如需调整：
+GPT 审查通过后标记为“契约冻结”。冻结后如需调整：
 
 1. 单独列出旧契约、新契约和变更原因。
 2. 说明对前端、PDF、邮件、迁移和已有数据的影响。
-3. 未经 Codex 确认不得直接修改实现。
+3. 未经 GPT 确认不得直接修改实现。
 
 ## 7. 推荐实施顺序
 
 ```text
 批次 A
-Q 后端 → Codex 审查 → 合并
-M 后端 → Codex 审查 → 合并
+Q 后端 → GPT 审查 → 合并
+M 后端 → GPT 审查 → 合并
 
 批次 B
 R 后端 ┐
@@ -151,17 +151,17 @@ N 后端 ┘
 E 核心 → 审查并合并
 
 批次 D
-Codex：V05 + E02 + U01～U09
-推理 AI：T01/T02/T04/T05/T06/T08/T09
+GPT：V05 + E02 + U01～U09
+DeepSeek：T01/T02/T04/T05/T06/T08/T09
 
 批次 E
-Codex：T03 + T07 + T10 + 全量最终审查
+GPT：T03 + T07 + T10 + 全量最终审查
 ```
 
 即使批次 B 可并行，也必须各自使用独立分支和 PR。V05 必须从 V 核心合并后的
 `main` 创建，E02 必须从 E01 合并后的 `main` 创建。
 
-## 8. 推理 AI 每次交付必须提供
+## 8. DeepSeek 每次交付必须提供
 
 PR 描述必须包含：
 
@@ -175,9 +175,9 @@ PR 描述必须包含：
 
 不得用“测试应该通过”“逻辑看起来没问题”代替真实命令输出。
 
-## 9. Codex 最终审查门
+## 9. GPT 最终审查门
 
-Codex 对每个推理 AI PR 至少检查：
+GPT 对每个 DeepSeek PR 至少检查：
 
 1. 是否严格处于分配范围内。
 2. 是否破坏冻结契约或已有 API。
@@ -189,23 +189,23 @@ Codex 对每个推理 AI PR 至少检查：
 8. 是否存在无关重构、重复代码或隐藏技术债。
 
 审查结果按 `Critical / Important / Minor` 输出。Critical 和 Important 清零后，
-才能合并；合并后由 Codex 更新任务状态。
+才能合并；合并后由 GPT 更新任务状态。
 
-## 10. 可直接交给推理 AI 的指令
+## 10. 可直接交给 DeepSeek 的指令
 
 ```text
 你负责 ForgeSight 的推理密集型后端任务。开始前完整阅读：
 1. AGENTS.md
 2. docs/tasks/REQUIREMENTS.md
-3. docs/tasks/MULTI_AI_COLLABORATION.md
+3. docs/tasks/DEEPSEEK_GPT_COLLABORATION.md
 4. 我指定的大任务 字母00_执行计划.md
 5. 我指定的所有小任务文件
 
-严格遵守 MULTI_AI_COLLABORATION.md 的文件所有权和禁止修改范围。
+严格遵守 DEEPSEEK_GPT_COLLABORATION.md 的文件所有权和禁止修改范围。
 从最新 main 建独立分支，测试先行，只实现指定任务。
 先冻结契约，再实现；开 Draft PR，CI 全绿后标记 Ready for review。
 不要合并，不要修改 frontend-new、视觉模板、README、docs/tasks 状态或 .github。
-完成后按文档第 8 节提交交付报告，等待 Codex 最终审查。
+完成后按文档第 8 节提交交付报告，等待 GPT 最终审查。
 
 本次指定任务：<在这里填写，例如 Q01～Q07>
 ```
