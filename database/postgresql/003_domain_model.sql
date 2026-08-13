@@ -50,16 +50,22 @@ CREATE TABLE IF NOT EXISTS report_file (
     checksum VARCHAR(128),
     generation_attempt INTEGER NOT NULL,
     error_json JSONB,
+    next_retry_at TIMESTAMP WITHOUT TIME ZONE,
+    lease_owner VARCHAR(80),
+    lease_expires_at TIMESTAMP WITHOUT TIME ZONE,
     created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
     generated_at TIMESTAMP WITHOUT TIME ZONE,
     CONSTRAINT uq_report_file_version_format UNIQUE (version_id, format),
     CONSTRAINT ck_report_file_format CHECK (format IN ('pdf', 'xlsx')),
     CONSTRAINT ck_report_file_status
-        CHECK (status IN ('queued', 'generating', 'ready', 'failed'))
+        CHECK (status IN ('queued', 'generating', 'ready', 'failed', 'dead_letter'))
 );
 CREATE INDEX IF NOT EXISTS ix_report_file_report_id ON report_file (report_id);
 CREATE INDEX IF NOT EXISTS ix_report_file_version_id ON report_file (version_id);
 CREATE INDEX IF NOT EXISTS ix_report_file_status ON report_file (status);
+CREATE INDEX IF NOT EXISTS ix_report_file_next_retry_at ON report_file (next_retry_at);
+CREATE INDEX IF NOT EXISTS ix_report_file_lease_owner ON report_file (lease_owner);
+CREATE INDEX IF NOT EXISTS ix_report_file_lease_expires_at ON report_file (lease_expires_at);
 
 CREATE TABLE IF NOT EXISTS message (
     id VARCHAR(40) PRIMARY KEY,

@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
+from app.agent.ids import new_id
 from app.db.models import (
     DataScopePolicy,
     DomainEventOutbox,
@@ -23,6 +24,7 @@ from app.db.models import (
     UserMembership,
 )
 from app.reports.domain import PublishedVersionImmutable, ensure_version_mutable
+from app.reports.schema import content_checksum as compute_content_checksum
 
 
 @dataclass(frozen=True)
@@ -180,11 +182,18 @@ def publish_version(
     if report.current_version_id != version.id or version.report_id != report.id:
         raise ValueError("只能发布报告当前版本")
     now = datetime.now()
+    checksum = compute_content_checksum(version.content_json or {})
     report.status = "published"
     version.status = "published"
+    version.content_checksum = checksum
+    version.frozen_at = version.frozen_at or now
     version.published_at = version.published_at or now
     if session.query(DomainEventOutbox).filter_by(idempotency_key=idempotency_key).first() is None:
-        payload = {"reportId": report_id, "versionId": version_id}
+        payload = {
+            "reportId": report_id,
+            "versionId": version_id,
+            "contentChecksum": checksum,
+        }
         if event_payload is not None:
             payload.update(
                 {
@@ -202,6 +211,29 @@ def publish_version(
                 payload_json=payload,
             )
         )
+    export_formats = (
+        ("pdf", "xlsx")
+        if report.report_type == "weekly"
+        and (version.content_json or {}).get("schemaVersion") == "weekly-report/v1"
+        else ()
+    )
+    for format_name in export_formats:
+        if (
+            session.query(ReportFile)
+            .filter_by(version_id=version.id, format=format_name)
+            .first()
+            is None
+        ):
+            session.add(
+                ReportFile(
+                    id=new_id("rpf"),
+                    report_id=report.id,
+                    version_id=version.id,
+                    format=format_name,
+                    status="queued",
+                    source_content_checksum=checksum,
+                )
+            )
     session.flush()
     return version
 
@@ -255,10 +287,24 @@ def update_report_file(session: Session, file_id: str, **changes) -> ReportFile:
     """更新生成中的文件；ready 后 URI 与校验值保持不可变。"""
 
     report_file = session.query(ReportFile).filter_by(id=file_id).with_for_update().one()
-    immutable_fields = {"storage_uri", "mime_type", "file_size", "checksum"}
+    immutable_fields = {
+        "storage_uri",
+        "mime_type",
+        "file_size",
+        "checksum",
+        "source_content_checksum",
+    }
     if report_file.status == "ready" and immutable_fields.intersection(changes):
         raise PublishedVersionImmutable("已就绪报告文件不可替换")
-    allowed = immutable_fields | {"status", "generation_attempt", "error_json", "generated_at"}
+    allowed = immutable_fields | {
+        "status",
+        "generation_attempt",
+        "error_json",
+        "generated_at",
+        "next_retry_at",
+        "lease_owner",
+        "lease_expires_at",
+    }
     for key, value in changes.items():
         if key not in allowed:
             raise ValueError(f"不允许修改文件字段 {key}")

@@ -56,6 +56,16 @@ def _loop() -> None:
             scan_due_subscriptions()
         except Exception:  # noqa: BLE001 - 单个调度故障不能阻塞既有 Agent 队列
             log.exception("周期周报到期扫描失败")
+        try:
+            from app.reports.files import run_file_worker_once
+
+            run_file_worker_once(
+                PlatformSession,
+                _worker_id + ":report-file",
+                settings.report_storage_dir,
+            )
+        except Exception:  # noqa: BLE001 - PDF 与 Excel 失败互相隔离并由任务状态重试
+            log.exception("周报文件生成失败")
         run_id = _claim_run()
         if run_id is None:
             _stop.wait(settings.agent_worker_poll_seconds)

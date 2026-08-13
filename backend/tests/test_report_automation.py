@@ -152,12 +152,20 @@ def test_scheduled_agent_report_validates_and_publishes_without_review(analysis_
     with analysis_session() as session:
         report = session.query(Report).one()
         version = session.query(ReportVersion).one()
-        event = session.query(DomainEventOutbox).one()
-        assert report.status == "published"
+        assert report.status == "published", version.validation_json
         assert report.publish_source == "agent"
         assert version.status == "published"
+        event = session.query(DomainEventOutbox).one()
         assert version.validation_json["passed"] is True
+        assert version.validation_json["ruleVersion"] == "weekly-report-validation-v2"
         assert version.workflow_version == automation.WORKFLOW_VERSION
+        assert version.schema_version == "weekly-report/v1"
+        assert version.content_json["schemaVersion"] == "weekly-report/v1"
+        assert version.content_json["identity"]["versionId"] == version.id
+        assert version.content_json["dataQuality"]["coverage"] == 0
+        assert version.data_quality_json["confidence"]["algorithmVersion"] == "weekly-confidence/v1"
+        assert version.content_checksum
+        assert event.payload_json["contentChecksum"] == version.content_checksum
         assert version.approved_by is None
         assert event.event_type == "report.version.published"
         assert event.payload_json["subscriptionId"] == "sub-weekly"

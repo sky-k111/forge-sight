@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, event, text
+from sqlalchemy.exc import DBAPIError
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +26,7 @@ def test_domain_migration_is_registered_after_email_identity():
     assert [path.name for path in bootstrap.postgres_migration_paths(MIGRATION_DIR)] == [
         "002_email_identity.sql",
         "003_domain_model.sql",
+        "004_report_version_freeze.sql",
     ]
 
 
@@ -59,8 +61,48 @@ def test_domain_migration_is_repeatable_and_preserves_legacy_subscription():
                 )
             )
 
-        assert bootstrap.apply_postgres_migrations(scoped_engine, MIGRATION_DIR) == 2
-        assert bootstrap.apply_postgres_migrations(scoped_engine, MIGRATION_DIR) == 2
+        assert bootstrap.apply_postgres_migrations(scoped_engine, MIGRATION_DIR) == 3
+        assert bootstrap.apply_postgres_migrations(scoped_engine, MIGRATION_DIR) == 3
+
+        with scoped_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO report_version "
+                    "(id, report_id, version, status, summary, content_json, "
+                    "data_snapshot_json, validation_json, schema_version, workflow_version, "
+                    "model_snapshot_json, data_quality_json, created_by, generated_at) "
+                    "VALUES ('frozen-version', 'report-1', 1, 'published', 'frozen', "
+                    "'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'weekly-report/v1', "
+                    "'workflow-v1', '{}'::jsonb, '{}'::jsonb, 'test', CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO report_version "
+                    "(id, report_id, version, status, summary, content_json, "
+                    "data_snapshot_json, validation_json, schema_version, workflow_version, "
+                    "model_snapshot_json, data_quality_json, created_by, generated_at) "
+                    "VALUES ('draft-version', 'report-2', 1, 'draft', 'draft', "
+                    "'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'weekly-report/v1', "
+                    "'workflow-v1', '{}'::jsonb, '{}'::jsonb, 'test', CURRENT_TIMESTAMP)"
+                )
+            )
+        with scoped_engine.begin() as connection:
+            deleted = connection.execute(
+                text("DELETE FROM report_version WHERE id = 'draft-version'")
+            )
+            assert deleted.rowcount == 1
+        with pytest.raises(DBAPIError), scoped_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE report_version SET status = 'draft' "
+                    "WHERE id = 'frozen-version'"
+                )
+            )
+        with pytest.raises(DBAPIError), scoped_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM report_version WHERE id = 'frozen-version'")
+            )
 
         with scoped_engine.connect() as connection:
             legacy = connection.execute(

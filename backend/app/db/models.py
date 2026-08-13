@@ -526,12 +526,17 @@ class ReportVersion(Base):
     content_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     data_snapshot_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     validation_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    schema_version: Mapped[str] = mapped_column(String(32), default="weekly-report/v1")
+    content_checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    confidence_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence_algorithm_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
     workflow_version: Mapped[str] = mapped_column(String(64), default="")
     model_snapshot_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     data_quality_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     created_by: Mapped[str] = mapped_column(String(64), default="report-agent")
     approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    frozen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
@@ -543,7 +548,7 @@ class ReportFile(Base):
         UniqueConstraint("version_id", "format", name="uq_report_file_version_format"),
         CheckConstraint("format IN ('pdf', 'xlsx')", name="ck_report_file_format"),
         CheckConstraint(
-            "status IN ('queued', 'generating', 'ready', 'failed')",
+            "status IN ('queued', 'generating', 'ready', 'failed', 'dead_letter')",
             name="ck_report_file_status",
         ),
     )
@@ -557,8 +562,12 @@ class ReportFile(Base):
     mime_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
     file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     checksum: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_content_checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
     generation_attempt: Mapped[int] = mapped_column(Integer, default=0)
     error_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    lease_owner: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

@@ -701,18 +701,25 @@ CREATE TABLE IF NOT EXISTS report_file (
 	mime_type VARCHAR(120),
 	file_size BIGINT,
 	checksum VARCHAR(128),
+	source_content_checksum VARCHAR(64),
 	generation_attempt INTEGER NOT NULL,
 	error_json JSONB,
+	next_retry_at TIMESTAMP WITHOUT TIME ZONE,
+	lease_owner VARCHAR(80),
+	lease_expires_at TIMESTAMP WITHOUT TIME ZONE,
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	generated_at TIMESTAMP WITHOUT TIME ZONE,
 	PRIMARY KEY (id),
 	CONSTRAINT uq_report_file_version_format UNIQUE (version_id, format),
 	CONSTRAINT ck_report_file_format CHECK (format IN ('pdf', 'xlsx')),
-	CONSTRAINT ck_report_file_status CHECK (status IN ('queued', 'generating', 'ready', 'failed'))
+	CONSTRAINT ck_report_file_status CHECK (status IN ('queued', 'generating', 'ready', 'failed', 'dead_letter'))
 );
 CREATE INDEX IF NOT EXISTS ix_report_file_report_id ON report_file (report_id);
 CREATE INDEX IF NOT EXISTS ix_report_file_status ON report_file (status);
 CREATE INDEX IF NOT EXISTS ix_report_file_version_id ON report_file (version_id);
+CREATE INDEX IF NOT EXISTS ix_report_file_next_retry_at ON report_file (next_retry_at);
+CREATE INDEX IF NOT EXISTS ix_report_file_lease_owner ON report_file (lease_owner);
+CREATE INDEX IF NOT EXISTS ix_report_file_lease_expires_at ON report_file (lease_expires_at);
 
 CREATE TABLE IF NOT EXISTS report_section (
 	id VARCHAR(40) NOT NULL,
@@ -786,12 +793,17 @@ CREATE TABLE IF NOT EXISTS report_version (
 	content_json JSONB NOT NULL,
 	data_snapshot_json JSONB NOT NULL,
 	validation_json JSONB NOT NULL,
+	schema_version VARCHAR(32) NOT NULL,
+	content_checksum VARCHAR(64),
+	confidence_score INTEGER,
+	confidence_algorithm_version VARCHAR(40),
 	workflow_version VARCHAR(64) NOT NULL,
 	model_snapshot_json JSONB NOT NULL,
 	data_quality_json JSONB NOT NULL,
 	created_by VARCHAR(64) NOT NULL,
 	approved_by VARCHAR(64),
 	generated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	frozen_at TIMESTAMP WITHOUT TIME ZONE,
 	published_at TIMESTAMP WITHOUT TIME ZONE,
 	PRIMARY KEY (id),
 	CONSTRAINT uq_report_version UNIQUE (report_id, version),

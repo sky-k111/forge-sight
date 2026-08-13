@@ -22,6 +22,7 @@ from app.db.models import (
     MetricSourceBinding,
     Report,
     ReportDelivery,
+    ReportFile,
     ReportSection,
     ReportSubscription,
     ReportTemplate,
@@ -29,6 +30,7 @@ from app.db.models import (
 )
 from app.db.platform import PlatformSession
 from app.reports import feishu
+from app.reports.repository import publish_version
 
 
 class ReportNotFound(KeyError):
@@ -296,10 +298,19 @@ def get_report(
             if include_sections
             else []
         )
+        files = (
+            session.query(ReportFile)
+            .filter_by(report_id=row.id, version_id=row.current_version_id)
+            .order_by(ReportFile.format)
+            .all()
+            if include_sections and row.current_version_id
+            else []
+        )
         result = _report_dict(row, source, template, version)
         if include_sections:
             result["sections"] = [_section_dict(item) for item in sections]
             result["deliveries"] = [_delivery_dict(item) for item in deliveries]
+            result["files"] = [_file_dict(item) for item in files]
         return result
 
 
@@ -493,10 +504,55 @@ def publish_report(
         if report.status not in {"approved", "published"}:
             raise ReportConflict("报告通过复核后才能发布")
         version = session.query(ReportVersion).filter_by(id=report.current_version_id).one()
-        report.status = "published"
+        if report.report_type == "weekly" and (version.content_json or {}).get("schemaVersion") != "weekly-report/v1":
+            from app.reports.automation import build_structured_content, validate_generated_version
+            from app.reports.schema import calculate_confidence
+
+            sections = (
+                session.query(ReportSection)
+                .filter_by(report_id=report.id, version_id=version.id)
+                .order_by(ReportSection.section_order)
+                .all()
+            )
+            timezone_name = str((report.scope_json or {}).get("timezone") or "Asia/Shanghai")
+            structured = build_structured_content(
+                report=report,
+                version=version,
+                sections=sections,
+                raw_summary=version.summary,
+                timezone_name=timezone_name,
+            )
+            validation = validate_generated_version(sections, structured)
+            if not validation["passed"]:
+                raise ReportConflict("周报结构化校验未通过，不能发布或生成下载文件")
+            confidence = calculate_confidence(structured["dataQuality"])
+            version.content_json = structured
+            version.schema_version = structured["schemaVersion"]
+            version.validation_json = validation
+            version.confidence_score = confidence["score"]
+            version.confidence_algorithm_version = confidence["algorithmVersion"]
+            version.data_quality_json = {
+                **(version.data_quality_json or {}),
+                "confidence": confidence,
+            }
+        if report.report_type == "weekly":
+            from app.reports.schema import validate_for_publish
+
+            current_validation = validate_for_publish(version.content_json or {})
+            if not current_validation["passed"]:
+                raise ReportConflict("周报未通过当前自动发布硬校验，不能发布或生成下载文件")
+            if version.status != "published":
+                version.validation_json = current_validation
         report.reviewer_id = report.reviewer_id or user_id
-        version.status = "published"
-        version.published_at = version.published_at or datetime.now()
+        publish_version(
+            session,
+            report_id=report.id,
+            version_id=version.id,
+            event_id=new_id("evt"),
+            idempotency_key=f"report-version-published:{version.id}",
+            event_type="report.version.published",
+            event_payload={"publishSource": "manual"},
+        )
         session.commit()
     if push_to_feishu:
         deliver_to_feishu(report_id, session_factory=session_factory)
@@ -725,6 +781,20 @@ def _section_dict(row: ReportSection) -> dict:
         "analysisTaskId": row.analysis_task_id,
         "artifactIds": row.artifact_ids_json or [],
         "error": row.error_json,
+    }
+
+
+def _file_dict(row: ReportFile) -> dict:
+    return {
+        "id": row.id,
+        "format": row.format,
+        "status": row.status,
+        "mimeType": row.mime_type,
+        "fileSize": row.file_size,
+        "checksum": row.checksum,
+        "generatedAt": _iso(row.generated_at),
+        "error": row.error_json,
+        "downloadUrl": f"/api/v1/report-files/{row.id}/download",
     }
 
 
