@@ -73,7 +73,7 @@ def create_token(user: PlatformUser) -> str:
     payload = {
         "sub": user.username,
         "role": user.role,
-        "scope": "full" if user.email_verified_at is not None else "restricted",
+        "auth_scope": "full" if user.email_verified_at is not None else "restricted",
         "iat": now,
         "exp": now + settings.auth_token_ttl_seconds,
     }

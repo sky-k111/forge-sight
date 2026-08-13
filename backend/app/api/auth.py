@@ -4,10 +4,13 @@ from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
+from app.audit.service import write_audit
 from app.auth.deps import require_user
 from app.auth.email_verification import (
     EmailVerificationError,
     issue_email_challenge,
+    mask_email,
+    normalize_email,
     verify_email_challenge,
 )
 from app.auth.mail_provider import get_verification_mail_provider
@@ -74,6 +77,30 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
+def _masked_for_audit(raw_email: str | None, user: dict) -> str:
+    try:
+        return mask_email(normalize_email(raw_email or ""))
+    except EmailVerificationError:
+        return user.get("emailMasked") or ""
+
+
+def _audit_verification_error(exc: EmailVerificationError, raw_email: str | None, user: dict) -> None:
+    if exc.code == "CHALLENGE_RATE_LIMITED":
+        action = "邮箱验证码频控拦截"
+    elif exc.code == "EMAIL_SEND_FAILED":
+        action = "邮箱验证码发送失败"
+    else:
+        action = "邮箱验证失败"
+    write_audit(
+        action,
+        resource=_masked_for_audit(raw_email, user),
+        result="已拦截",
+        detail=exc.code,
+        user_name=user["username"],
+        role=user["role"],
+    )
+
+
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest) -> dict:
     try:
@@ -129,7 +156,15 @@ def create_email_challenge(
             provider=get_verification_mail_provider(),
         )
     except EmailVerificationError as exc:
+        _audit_verification_error(exc, target_email, user)
         return _email_error_response(exc)
+    write_audit(
+        "请求邮箱验证码",
+        resource=issued.email_masked,
+        result="已记录",
+        user_name=user["username"],
+        role=user["role"],
+    )
     return {
         "ok": True,
         "emailMasked": issued.email_masked,
@@ -153,7 +188,15 @@ def change_email(
             provider=get_verification_mail_provider(),
         )
     except EmailVerificationError as exc:
+        _audit_verification_error(exc, payload.email, user)
         return _email_error_response(exc)
+    write_audit(
+        "请求更换邮箱验证码",
+        resource=issued.email_masked,
+        result="已记录",
+        user_name=user["username"],
+        role=user["role"],
+    )
     return {
         "ok": True,
         "emailMasked": issued.email_masked,
@@ -173,5 +216,13 @@ def verify_email(
             user["id"], payload.email, payload.code, _client_ip(request)
         )
     except EmailVerificationError as exc:
+        _audit_verification_error(exc, payload.email, user)
         return _email_error_response(exc)
+    write_audit(
+        "邮箱验证成功",
+        resource=verified_user.email and mask_email(verified_user.email) or "",
+        result="允许",
+        user_name=user["username"],
+        role=user["role"],
+    )
     return auth_payload(verified_user)

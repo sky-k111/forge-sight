@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     auth_admin_username: str = "admin"                        # 种子管理员登录名
     auth_admin_password: str = "admin123"                     # 仅演示默认值，生产必改
     auth_admin_display_name: str = "系统管理员"
+    auth_email_gate_enabled: bool = False
+    auth_email_gate_allow_capture: bool = False
+    demo_mode_enabled: bool = False
 
     # —— 邮箱验证 ——
     email_code_secret: str = ""                                # 生产必须配置

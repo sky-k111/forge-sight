@@ -11,6 +11,7 @@ from app.api import auth as auth_api
 from app.auth import email_verification
 from app.auth import service as auth_service
 from app.auth.mail_provider import CaptureMailProvider
+from app.auth.deps import validate_email_gate_configuration
 from app.config import settings
 from app.db.models import Base, DataSource, PlatformUser
 from app.main import app
@@ -36,8 +37,13 @@ def auth_session(monkeypatch):
     monkeypatch.setattr(settings, "auth_admin_password", "admin123")
     monkeypatch.setattr(settings, "auth_admin_display_name", "系统管理员")
     monkeypatch.setattr(settings, "email_code_secret", "test-email-secret")
+    monkeypatch.setattr(settings, "auth_email_gate_enabled", False)
+    monkeypatch.setattr(settings, "auth_email_gate_allow_capture", True)
+    monkeypatch.setattr(settings, "demo_mode_enabled", True)
     provider = CaptureMailProvider()
     monkeypatch.setattr(auth_api, "get_verification_mail_provider", lambda: provider)
+    audit_events = []
+    monkeypatch.setattr(auth_api, "write_audit", lambda *args, **kwargs: audit_events.append((args, kwargs)))
     with session_factory() as session:
         session.add(
             DataSource(
@@ -53,6 +59,7 @@ def auth_session(monkeypatch):
         )
         session.commit()
     session_factory.mail_provider = provider
+    session_factory.audit_events = audit_events
     return session_factory
 
 
@@ -79,7 +86,7 @@ def test_register_creates_business_user_with_token(auth_session):
     assert body["user"]["emailMasked"] == "Z***@example.com"
     assert body["user"]["emailStatus"] == "pending_verification"
     assert body["nextAction"] == "verify_email"
-    assert auth_service.decode_token(body["token"])["scope"] == "restricted"
+    assert auth_service.decode_token(body["token"])["auth_scope"] == "restricted"
     assert "email" not in body["user"]
     assert "password_hash" not in body["user"]
 
@@ -247,7 +254,7 @@ def test_email_challenge_verify_and_replay_flow(auth_session):
     assert verified.status_code == 200
     assert verified.json()["user"]["emailStatus"] == "verified"
     assert verified.json()["nextAction"] is None
-    assert auth_service.decode_token(verified.json()["token"])["scope"] == "full"
+    assert auth_service.decode_token(verified.json()["token"])["auth_scope"] == "full"
 
     replay = client.post(
         "/api/auth/email/verify",
@@ -256,6 +263,11 @@ def test_email_challenge_verify_and_replay_flow(auth_session):
     )
     assert replay.status_code == 400
     assert replay.json()["errorCode"] == "CODE_INVALID"
+    audit_actions = [args[0] for args, _kwargs in auth_session.audit_events]
+    assert "请求邮箱验证码" in audit_actions
+    assert "邮箱验证成功" in audit_actions
+    assert "邮箱验证失败" in audit_actions
+    assert "Verify@Example.com" not in repr(auth_session.audit_events)
 
 
 def test_unbound_existing_user_gets_bind_action_and_can_submit_email(auth_session):
@@ -368,3 +380,112 @@ def test_no_token_falls_back_to_client_user_id(auth_session):
     assert created.status_code == 201
     listed = client.get("/api/analysis/sessions", params={"userId": "local-test-user"}).json()
     assert any(item["id"] == created.json()["id"] for item in listed)
+
+
+# ---------- 邮箱访问门禁 ----------
+
+def test_email_gate_blocks_restricted_and_anonymous_business_access(auth_session, monkeypatch):
+    monkeypatch.setattr(settings, "auth_email_gate_enabled", True)
+    monkeypatch.setattr(settings, "demo_mode_enabled", True)
+    client = TestClient(app)
+    registered = client.post(
+        "/api/auth/register",
+        json={"username": "gated", "password": "pass1234", "email": "gated@example.com"},
+    ).json()
+
+    restricted = client.get(
+        "/api/analysis/sessions",
+        headers={"Authorization": f"Bearer {registered['token']}"},
+    )
+    anonymous = client.get("/api/analysis/sessions")
+
+    assert restricted.status_code == 403
+    assert restricted.json()["errorCode"] == "EMAIL_VERIFICATION_REQUIRED"
+    assert anonymous.status_code == 401
+    assert anonymous.json()["errorCode"] == "AUTH_REQUIRED"
+
+
+def test_email_gate_allows_restricted_auth_whitelist(auth_session, monkeypatch):
+    monkeypatch.setattr(settings, "auth_email_gate_enabled", True)
+    client = TestClient(app)
+    registered = client.post(
+        "/api/auth/register",
+        json={"username": "whitelist", "password": "pass1234", "email": "white@example.com"},
+    ).json()
+    headers = {"Authorization": f"Bearer {registered['token']}"}
+
+    assert client.get("/api/auth/me", headers=headers).status_code == 200
+    assert client.post("/api/auth/email/challenges", json={}, headers=headers).status_code == 200
+    assert client.post("/api/auth/logout", headers=headers).status_code == 200
+
+
+def test_email_gate_allows_verified_full_token(auth_session, monkeypatch):
+    monkeypatch.setattr(settings, "auth_email_gate_enabled", True)
+    client = TestClient(app)
+    registered = client.post(
+        "/api/auth/register",
+        json={"username": "fulluser", "password": "pass1234", "email": "full@example.com"},
+    ).json()
+    headers = {"Authorization": f"Bearer {registered['token']}"}
+    client.post("/api/auth/email/challenges", json={}, headers=headers)
+    code = auth_session.mail_provider.messages[-1].code
+    verified = client.post(
+        "/api/auth/email/verify",
+        json={"email": "full@example.com", "code": code},
+        headers=headers,
+    ).json()
+
+    response = client.get(
+        "/api/analysis/sessions",
+        headers={"Authorization": f"Bearer {verified['token']}"},
+    )
+    assert response.status_code == 200
+
+
+def test_email_gate_rechecks_full_token_against_database(auth_session, monkeypatch):
+    monkeypatch.setattr(settings, "auth_email_gate_enabled", True)
+    client = TestClient(app)
+    registered = client.post(
+        "/api/auth/register",
+        json={"username": "rechecked", "password": "pass1234", "email": "check@example.com"},
+    ).json()
+    headers = {"Authorization": f"Bearer {registered['token']}"}
+    client.post("/api/auth/email/challenges", json={}, headers=headers)
+    code = auth_session.mail_provider.messages[-1].code
+    verified = client.post(
+        "/api/auth/email/verify",
+        json={"email": "check@example.com", "code": code},
+        headers=headers,
+    ).json()
+    with auth_session() as session:
+        user = session.query(PlatformUser).filter_by(username="rechecked").one()
+        user.email_verified_at = None
+        session.commit()
+
+    response = client.get(
+        "/api/analysis/sessions",
+        headers={"Authorization": f"Bearer {verified['token']}"},
+    )
+    assert response.status_code == 403
+
+
+def test_gate_disabled_uses_explicit_demo_mode(auth_session, monkeypatch):
+    client = TestClient(app)
+    monkeypatch.setattr(settings, "auth_email_gate_enabled", False)
+    monkeypatch.setattr(settings, "demo_mode_enabled", False)
+    assert client.get("/api/analysis/sessions").status_code == 401
+
+    monkeypatch.setattr(settings, "demo_mode_enabled", True)
+    assert client.get("/api/analysis/sessions").status_code == 200
+
+
+def test_startup_guard_rejects_gate_with_capture_provider(monkeypatch):
+    monkeypatch.setattr(settings, "auth_email_gate_enabled", True)
+    monkeypatch.setattr(settings, "mail_provider", "capture")
+    monkeypatch.setattr(settings, "auth_email_gate_allow_capture", False)
+
+    with pytest.raises(RuntimeError, match="AUTH_EMAIL_GATE_ALLOW_CAPTURE=true"):
+        validate_email_gate_configuration()
+
+    monkeypatch.setattr(settings, "auth_email_gate_allow_capture", True)
+    validate_email_gate_configuration()
