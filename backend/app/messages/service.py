@@ -399,7 +399,8 @@ def _report_scope_allows(
     )
     requested_dimensions = (report.scope_json or {}).get("dimensions") or {}
     dimensions_allowed = all(
-        set(values) <= set(resolved.dimensions.get(dimension, ()))
+        set(values if isinstance(values, list) else [values])
+        <= set(resolved.dimensions.get(dimension, ()))
         for dimension, values in requested_dimensions.items()
     )
     return report.source_id in resolved.data_source_ids and dimensions_allowed

@@ -577,6 +577,29 @@ def test_weekly_message_list_and_detail_recheck_dimension_scope(message_session)
             )
 
 
+def test_weekly_scope_accepts_legacy_scalar_dimension_values(message_session):
+    _seed_report_event(message_session)
+    with message_session() as session:
+        report = session.get(Report, "report-1")
+        report.scope_json = {
+            **(report.scope_json or {}),
+            "dimensions": {"plant": "east"},
+        }
+        session.flush()
+
+        consume_published_event(
+            session,
+            event_id="event-report",
+            worker_id="worker-a",
+            now=datetime(2026, 8, 10, 9, 0),
+        )
+
+        assert {row.user_id for row in session.query(MessageRecipient).all()} == {
+            "user-a-id",
+            "user-b-id",
+        }
+
+
 def test_withdrawn_before_consumption_still_creates_terminal_history(message_session):
     with message_session() as session:
         session.add(_user("user-a-id", "user-a"))
