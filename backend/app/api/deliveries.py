@@ -49,11 +49,17 @@ def get_deliveries(
 
 
 @router.post("/{delivery_id}/retry")
-def retry_email_delivery(delivery_id: str, user: dict = Depends(require_user)):
+def retry_email_delivery(
+    delivery_id: str,
+    confirm_unknown: bool = Query(default=False, alias="confirmUnknown"),
+    user: dict = Depends(require_user),
+):
     _require_admin(user)
     try:
         with PlatformSession() as session:
-            row = retry_delivery(session, delivery_id)
+            row = retry_delivery(
+                session, delivery_id, confirm_unknown=confirm_unknown
+            )
             result = serialize_delivery(row)
             session.commit()
     except NoResultFound as exc:

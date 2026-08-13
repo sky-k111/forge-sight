@@ -79,7 +79,11 @@ def _loop() -> None:
         except Exception:  # noqa: BLE001 - 消息故障不能阻塞 Agent Run
             log.exception("站内消息事件处理失败")
         try:
-            from app.delivery.provider import ProviderFailure, provider_from_settings
+            from app.delivery.provider import (
+                ProviderFailure,
+                mail_configuration_fingerprint,
+                provider_from_settings,
+            )
             from app.delivery.service import (
                 block_deliveries_for_configuration,
                 resume_configuration_blocked_deliveries,
@@ -91,19 +95,26 @@ def _loop() -> None:
                 PlatformSession,
                 f"mail-event:{_worker_id}",
             )
+            configuration_fingerprint = mail_configuration_fingerprint(settings)
             try:
                 mail_provider = provider_from_settings(settings)
             except ProviderFailure as exc:
                 if exc.category != "configuration":
                     raise
                 with PlatformSession() as session:
-                    blocked = block_deliveries_for_configuration(session)
+                    blocked = block_deliveries_for_configuration(
+                        session,
+                        configuration_fingerprint=configuration_fingerprint,
+                    )
                     session.commit()
                 if blocked:
                     log.error("邮件服务配置无效，已暂停 %s 条投递", blocked)
             else:
                 with PlatformSession() as session:
-                    resumed = resume_configuration_blocked_deliveries(session)
+                    resumed = resume_configuration_blocked_deliveries(
+                        session,
+                        current_configuration_fingerprint=configuration_fingerprint,
+                    )
                     session.commit()
                 if resumed:
                     log.info("邮件服务配置已恢复，重新排队 %s 条投递", resumed)
@@ -119,6 +130,7 @@ def _loop() -> None:
                         settings.mail_worker_lease_seconds,
                         settings.mail_timeout_seconds + 30,
                     ),
+                    configuration_fingerprint=configuration_fingerprint,
                 )
         except Exception:  # noqa: BLE001 - 邮件失败不能影响站内发布或 Agent Run
             log.exception("邮件投递处理失败")

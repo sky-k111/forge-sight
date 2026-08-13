@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 from sqlalchemy import create_engine
@@ -34,6 +35,7 @@ from app.delivery.service import (
     run_delivery_event_worker_once,
     run_delivery_worker_once,
     resume_configuration_blocked_deliveries,
+    retry_delivery,
 )
 from app.delivery.templates import build_announcement_mail, build_weekly_report_mail
 
@@ -618,7 +620,9 @@ def test_configuration_failure_blocks_queue_and_is_visible(delivery_session):
     _seed_announcement(delivery_session)
     with delivery_session() as session:
         consume_message_published_event(session, "event-message", "event-worker")
-        blocked = block_deliveries_for_configuration(session, "SMTP 配置无效")
+        blocked = block_deliveries_for_configuration(
+            session, "SMTP 配置无效", configuration_fingerprint="config-a"
+        )
         session.commit()
 
         delivery = session.query(ReportDelivery).filter_by(recipient_user_id="user-ok").one()
@@ -626,9 +630,122 @@ def test_configuration_failure_blocks_queue_and_is_visible(delivery_session):
         assert delivery.status == "blocked_configuration"
         assert delivery.error_category == "configuration"
         assert "SMTP 配置无效" not in str(delivery.error_json)
-        assert resume_configuration_blocked_deliveries(session) == 1
+        assert resume_configuration_blocked_deliveries(
+            session, current_configuration_fingerprint="config-a"
+        ) == 0
+        assert resume_configuration_blocked_deliveries(
+            session, current_configuration_fingerprint="config-b"
+        ) == 1
         session.commit()
         assert session.get(ReportDelivery, delivery.id).status == "queued"
+
+
+def test_runtime_authentication_failure_blocks_until_configuration_changes(
+    delivery_session,
+):
+    _seed_announcement(delivery_session)
+    with delivery_session() as session:
+        consume_message_published_event(session, "event-message", "event-worker")
+        session.commit()
+
+    provider = _FailingProvider(
+        ProviderFailure("configuration", "SMTP authentication failed", retryable=False)
+    )
+    run_delivery_worker_once(
+        delivery_session,
+        "mail-worker",
+        provider,
+        storage_root=".",
+        public_app_url="https://example.test",
+        configuration_fingerprint="bad-config",
+    )
+
+    with delivery_session() as session:
+        delivery = session.query(ReportDelivery).filter_by(recipient_user_id="user-ok").one()
+        assert delivery.status == "blocked_configuration"
+        assert delivery.error_category == "configuration"
+        assert "authentication" not in str(delivery.error_json)
+        assert resume_configuration_blocked_deliveries(
+            session, current_configuration_fingerprint="bad-config"
+        ) == 0
+        assert resume_configuration_blocked_deliveries(
+            session, current_configuration_fingerprint="fixed-config"
+        ) == 1
+
+
+def test_unknown_delivery_cannot_be_retried_while_provider_call_is_in_flight(
+    delivery_session,
+):
+    _seed_announcement(delivery_session)
+    with delivery_session() as session:
+        consume_message_published_event(session, "event-message", "event-worker")
+        session.commit()
+
+    entered = Event()
+    release = Event()
+
+    class BlockingProvider(CaptureMailProvider):
+        def send(self, message):
+            entered.set()
+            assert release.wait(timeout=5)
+            return super().send(message)
+
+    provider = BlockingProvider()
+    worker = Thread(
+        target=run_delivery_worker_once,
+        args=(delivery_session, "mail-worker", provider),
+        kwargs={
+            "storage_root": ".",
+            "public_app_url": "https://example.test",
+            "lease_seconds": 60,
+            "now": datetime(2026, 8, 13, 10, 0),
+        },
+    )
+    worker.start()
+    assert entered.wait(timeout=5)
+    try:
+        with delivery_session() as session:
+            delivery = session.query(ReportDelivery).filter_by(recipient_user_id="user-ok").one()
+            assert delivery.status == "unknown"
+            assert delivery.lease_expires_at == datetime(2026, 8, 13, 10, 1)
+            with pytest.raises(ValueError, match="仍在投递"):
+                retry_delivery(
+                    session,
+                    delivery.id,
+                    confirm_unknown=True,
+                    now=datetime(2026, 8, 13, 10, 0, 30),
+                )
+    finally:
+        release.set()
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert len(provider.messages) == 1
+    with delivery_session() as session:
+        delivery = session.query(ReportDelivery).filter_by(recipient_user_id="user-ok").one()
+        assert delivery.status == "sent"
+
+
+def test_expired_unknown_delivery_requires_explicit_confirmation(delivery_session):
+    _seed_announcement(delivery_session)
+    with delivery_session() as session:
+        consume_message_published_event(session, "event-message", "event-worker")
+        delivery = session.query(ReportDelivery).filter_by(recipient_user_id="user-ok").one()
+        delivery.status = "unknown"
+        delivery.lease_expires_at = datetime(2026, 8, 13, 10, 0)
+        session.commit()
+
+        with pytest.raises(ValueError, match="确认投递结果"):
+            retry_delivery(
+                session, delivery.id, now=datetime(2026, 8, 13, 10, 1)
+            )
+        retry_delivery(
+            session,
+            delivery.id,
+            confirm_unknown=True,
+            now=datetime(2026, 8, 13, 10, 1),
+        )
+        assert delivery.status == "queued"
 
 
 def test_mail_value_objects_do_not_expose_attachment_content_in_repr():

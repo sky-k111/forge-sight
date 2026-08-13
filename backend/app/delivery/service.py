@@ -254,7 +254,10 @@ def claim_deliveries(
 
 
 def block_deliveries_for_configuration(
-    session: Session, _detail: str = ""
+    session: Session,
+    _detail: str = "",
+    *,
+    configuration_fingerprint: str | None = None,
 ) -> int:
     """Pause runnable email jobs with a sanitized, administrator-visible reason."""
 
@@ -270,7 +273,10 @@ def block_deliveries_for_configuration(
     for row in rows:
         row.status = "blocked_configuration"
         row.error_category = "configuration"
-        row.error_json = {"message": MASKED_ERROR_SUMMARIES["configuration"]}
+        row.error_json = {
+            "message": MASKED_ERROR_SUMMARIES["configuration"],
+            "configurationFingerprint": configuration_fingerprint,
+        }
         row.next_retry_at = None
         row.lease_owner = None
         row.lease_expires_at = None
@@ -279,18 +285,26 @@ def block_deliveries_for_configuration(
     return len(rows)
 
 
-def resume_configuration_blocked_deliveries(session: Session) -> int:
+def resume_configuration_blocked_deliveries(
+    session: Session, *, current_configuration_fingerprint: str
+) -> int:
     rows = session.query(ReportDelivery).filter_by(
         channel="email", status="blocked_configuration"
     ).all()
     current = datetime.now()
-    for row in rows:
+    resumable = [
+        row
+        for row in rows
+        if (row.error_json or {}).get("configurationFingerprint")
+        != current_configuration_fingerprint
+    ]
+    for row in resumable:
         row.status = "queued"
         row.error_category = None
         row.error_json = None
         row.updated_at = current
     session.flush()
-    return len(rows)
+    return len(resumable)
 
 
 def _claimed_delivery(session: Session, delivery_id: str, worker_id: str) -> ReportDelivery:
@@ -493,8 +507,6 @@ def prepare_claimed_delivery(
         )
         session.add(attempt)
         delivery.status = "unknown"
-        delivery.lease_owner = None
-        delivery.lease_expires_at = None
         delivery.updated_at = current
         session.flush()
         return delivery, mail, attempt.id
@@ -522,6 +534,7 @@ def _finalize_provider_result(
     failure: ProviderFailure | None = None,
     duration_ms: int,
     max_attempts: int,
+    configuration_fingerprint: str | None,
     now: datetime,
 ) -> ReportDelivery:
     delivery = session.query(ReportDelivery).filter_by(id=delivery_id).with_for_update().one()
@@ -538,6 +551,28 @@ def _finalize_provider_result(
             attempt.error_category = "outcome_unknown"
             attempt.error_json = delivery.error_json
             attempt.finished_at = now
+            delivery.lease_owner = None
+            delivery.lease_expires_at = None
+            return delivery
+        if failure.category == "configuration":
+            delivery.status = "blocked_configuration"
+            delivery.next_retry_at = None
+            delivery.error_category = "configuration"
+            delivery.error_json = {
+                "message": MASKED_ERROR_SUMMARIES["configuration"],
+                "configurationFingerprint": configuration_fingerprint,
+            }
+            delivery.lease_owner = None
+            delivery.lease_expires_at = None
+            delivery.updated_at = now
+            attempt.status = "failed"
+            attempt.error_category = "configuration"
+            attempt.error_json = delivery.error_json
+            attempt.finished_at = now
+            block_deliveries_for_configuration(
+                session,
+                configuration_fingerprint=configuration_fingerprint,
+            )
             return delivery
         _record_failure(session, delivery, attempt, failure, now, max_attempts)
         return delivery
@@ -548,6 +583,8 @@ def _finalize_provider_result(
     delivery.error_category = None
     delivery.error_json = None
     delivery.next_retry_at = None
+    delivery.lease_owner = None
+    delivery.lease_expires_at = None
     delivery.updated_at = now
     attempt.status = "sent"
     attempt.provider_message_id = outcome.provider_message_id[:160]
@@ -565,6 +602,7 @@ def run_delivery_worker_once(
     attachment_max_bytes: int = 10 * 1024 * 1024,
     max_attempts: int = 3,
     lease_seconds: int = 60,
+    configuration_fingerprint: str | None = None,
     now: datetime | None = None,
 ) -> bool:
     current = now or datetime.now()
@@ -612,6 +650,7 @@ def run_delivery_worker_once(
             failure=failure,
             duration_ms=duration,
             max_attempts=max_attempts,
+            configuration_fingerprint=configuration_fingerprint,
             now=current,
         )
         session.commit()
@@ -669,11 +708,22 @@ def list_deliveries(
     return [serialize_delivery(row) for row in rows]
 
 
-def retry_delivery(session: Session, delivery_id: str, *, now: datetime | None = None) -> ReportDelivery:
+def retry_delivery(
+    session: Session,
+    delivery_id: str,
+    *,
+    confirm_unknown: bool = False,
+    now: datetime | None = None,
+) -> ReportDelivery:
     current = now or datetime.now()
     row = session.query(ReportDelivery).filter_by(id=delivery_id, channel="email").with_for_update().one()
     if row.status not in {"failed", "retry_wait", "waiting_attachment", "unknown"}:
         raise ValueError("只有失败或等待中的邮件投递可以重发")
+    if row.status == "unknown":
+        if row.lease_expires_at is not None and row.lease_expires_at > current:
+            raise ValueError("邮件仍在投递，当前不能重发")
+        if not confirm_unknown:
+            raise ValueError("投递结果未知，需确认投递结果后再重发")
     row.status = "queued"
     row.next_retry_at = current
     row.error_category = None

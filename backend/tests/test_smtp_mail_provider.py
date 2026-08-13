@@ -114,3 +114,43 @@ def test_smtp_response_codes_classify_temporary_and_permanent_failures(
 
     assert caught.value.retryable is retryable
     assert caught.value.category == category
+
+
+@pytest.mark.parametrize(
+    ("code", "retryable", "category"),
+    [(450, True, "rate_limited"), (550, False, "invalid_address")],
+)
+def test_recipient_refusal_uses_recipient_response_code(
+    monkeypatch, code, retryable, category
+):
+    import app.delivery.provider as module
+
+    class RejectingRecipientSmtp(_FakeSmtp):
+        def send_message(self, _message):
+            raise smtplib.SMTPRecipientsRefused(
+                {"recipient@example.test": (code, b"provider detail")}
+            )
+
+    monkeypatch.setattr(module.smtplib, "SMTP", RejectingRecipientSmtp)
+    provider = SmtpMailProvider(
+        SmtpConfig(
+            host="smtp.example.test",
+            port=587,
+            username="sender@example.test",
+            password="secret",
+            from_address="sender@example.test",
+        )
+    )
+
+    with pytest.raises(ProviderFailure) as caught:
+        provider.send(
+            OutgoingMail(
+                to="recipient@example.test",
+                subject="test",
+                text_body="text",
+                html_body="<p>text</p>",
+            )
+        )
+
+    assert caught.value.retryable is retryable
+    assert caught.value.category == category

@@ -90,14 +90,21 @@ def authorize_report_view(
     username = str(user.get("username") or "")
     if not stable_id:
         raise FileAccessDenied("无权查看此周报")
-    owner = session.query(PlatformUser).filter_by(username=report.owner_id).first()
+    owner = session.get(PlatformUser, report.owner_id)
     if owner is not None:
+        # Stable user ids take precedence over usernames. Otherwise a user
+        # whose username equals another user's id could claim that report.
         is_owner = owner.id == stable_id
         scope_identity = stable_id
     else:
-        # Legacy/test databases may not yet have a PlatformUser row for owner_id.
-        is_owner = report.owner_id in {stable_id, username}
-        scope_identity = report.owner_id if is_owner else stable_id
+        owner = session.query(PlatformUser).filter_by(username=report.owner_id).first()
+        if owner is not None:
+            is_owner = owner.id == stable_id
+            scope_identity = stable_id
+        else:
+            # Legacy/test databases may not yet have a PlatformUser row.
+            is_owner = report.owner_id in {stable_id, username}
+            scope_identity = report.owner_id if is_owner else stable_id
     has_relationship = is_owner or _is_recipient(session, version.id, {stable_id})
     if not has_relationship:
         raise FileAccessDenied("无权查看此周报")

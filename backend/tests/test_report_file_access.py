@@ -13,6 +13,7 @@ from app.db.models import (
     DataScopePolicy,
     Message,
     MessageRecipient,
+    PlatformUser,
     Report,
     ReportFile,
     ReportVersion,
@@ -262,3 +263,45 @@ def test_report_detail_api_rejects_forwarded_link_for_unrelated_user(
     assert denied_export.status_code == 404
     assert allowed.status_code == 200
     assert allowed.json()["version"]["id"] == "version-1"
+
+
+def test_report_owner_stable_id_cannot_be_claimed_by_colliding_username(file_session):
+    session_factory, storage_root = file_session
+    with session_factory() as session:
+        report = session.get(Report, "report-1")
+        report.owner_id = "stable-owner-id"
+        session.add_all(
+            [
+                PlatformUser(
+                    id="stable-owner-id",
+                    username="real-owner",
+                    password_hash="test-only",
+                ),
+                PlatformUser(
+                    id="attacker-id",
+                    username="stable-owner-id",
+                    password_hash="test-only",
+                ),
+                DataScopePolicy(
+                    id="policy-attacker",
+                    subject_type="user",
+                    subject_id="attacker-id",
+                    business_key="weekly_report",
+                    effect="allow",
+                    data_source_ids_json=[1],
+                ),
+            ]
+        )
+        session.commit()
+
+        with pytest.raises(FileAccessDenied):
+            resolve_download(
+                session,
+                "file-ready",
+                {
+                    "id": "attacker-id",
+                    "username": "stable-owner-id",
+                    "role": "business",
+                },
+                storage_root,
+            )

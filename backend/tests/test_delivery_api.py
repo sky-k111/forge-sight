@@ -95,3 +95,24 @@ def test_retry_rejects_sent_delivery(delivery_api_session):
     response = TestClient(app).post("/api/v1/deliveries/delivery-1/retry")
 
     assert response.status_code == 409
+
+
+def test_retry_unknown_delivery_requires_explicit_confirmation(delivery_api_session):
+    factory, _audits = delivery_api_session
+    with factory() as session:
+        delivery = session.get(ReportDelivery, "delivery-1")
+        delivery.status = "unknown"
+        delivery.lease_expires_at = datetime(2026, 8, 13, 9, 1)
+        session.commit()
+    app.dependency_overrides[require_user] = lambda: _user("admin")
+    client = TestClient(app)
+
+    denied = client.post("/api/v1/deliveries/delivery-1/retry")
+    accepted = client.post(
+        "/api/v1/deliveries/delivery-1/retry",
+        params={"confirmUnknown": "true"},
+    )
+
+    assert denied.status_code == 409
+    assert accepted.status_code == 200
+    assert accepted.json()["status"] == "queued"

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
+import json
 import smtplib
 import ssl
 from dataclasses import dataclass, field
@@ -141,7 +143,10 @@ class SmtpMailProvider:
                 client.send_message(message)
             return ProviderResult(provider_message_id=str(message["Message-ID"]))
         except smtplib.SMTPRecipientsRefused as exc:
-            raise ProviderFailure("invalid_address", "SMTP rejected recipient", retryable=False) from exc
+            codes = [response[0] for response in exc.recipients.values() if response]
+            retryable = any(400 <= code < 500 for code in codes)
+            category = "rate_limited" if retryable else "invalid_address"
+            raise ProviderFailure(category, "SMTP rejected recipient", retryable=retryable) from exc
         except smtplib.SMTPAuthenticationError as exc:
             raise ProviderFailure("configuration", "SMTP authentication failed", retryable=False) from exc
         except smtplib.SMTPResponseException as exc:
@@ -180,3 +185,21 @@ def provider_from_settings(settings) -> MailProvider:
             )
         )
     raise ProviderFailure("configuration", f"Unsupported MAIL_PROVIDER: {name or '<empty>'}", retryable=False)
+
+
+def mail_configuration_fingerprint(settings) -> str:
+    """Return an opaque keyed fingerprint used only to detect config changes."""
+
+    values = {
+        "provider": settings.mail_provider.strip().lower(),
+        "host": settings.smtp_host,
+        "port": settings.smtp_port,
+        "username": settings.smtp_username,
+        "password": settings.smtp_password,
+        "fromAddress": settings.mail_from_address,
+        "fromName": settings.mail_from_name,
+        "useTls": settings.smtp_use_tls,
+    }
+    payload = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
+    key = settings.auth_token_secret.encode()
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
