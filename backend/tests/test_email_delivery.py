@@ -730,6 +730,96 @@ def test_bad_configuration_backs_off_and_cannot_reblock_verified_work(
         assert delivery.status == "queued"
 
 
+def test_verified_configuration_survives_retry_and_manual_requeue(delivery_session):
+    _seed_announcement(delivery_session)
+    now = datetime(2026, 8, 13, 10, 0)
+    with delivery_session() as session:
+        consume_message_published_event(session, "event-message", "event-worker")
+        block_deliveries_for_configuration(
+            session, configuration_fingerprint="bad-config", now=now
+        )
+        resume_configuration_blocked_deliveries(
+            session,
+            configuration_verified=True,
+            configuration_fingerprint="good-config",
+            now=now,
+        )
+        session.commit()
+
+    run_delivery_worker_once(
+        delivery_session,
+        "good-worker",
+        _FailingProvider(
+            ProviderFailure("network", "temporary", retryable=True)
+        ),
+        storage_root=".",
+        public_app_url="https://example.test",
+        configuration_fingerprint="good-config",
+        now=now,
+    )
+
+    with delivery_session() as session:
+        delivery = session.query(ReportDelivery).filter_by(recipient_user_id="user-ok").one()
+        assert delivery.status == "retry_wait"
+        assert delivery.error_json["verifiedConfigurationFingerprint"] == "good-config"
+        delivery.next_retry_at = now
+        assert delivery_work_pending(
+            session, configuration_fingerprint="bad-config", now=now
+        ) is False
+        assert block_deliveries_for_configuration(
+            session, configuration_fingerprint="bad-config", now=now
+        ) == 0
+
+        retry_delivery(session, delivery.id, now=now)
+        assert delivery.error_json == {
+            "verifiedConfigurationFingerprint": "good-config"
+        }
+        assert block_deliveries_for_configuration(
+            session, configuration_fingerprint="bad-config", now=now
+        ) == 0
+        assert delivery.status == "queued"
+
+
+def test_verified_configuration_survives_waiting_for_pdf(delivery_session, tmp_path):
+    _seed_weekly(delivery_session, tmp_path, file_status="queued")
+    now = datetime(2026, 8, 13, 10, 0)
+    with delivery_session() as session:
+        consume_message_published_event(session, "event-weekly", "event-worker")
+        block_deliveries_for_configuration(
+            session, configuration_fingerprint="bad-config", now=now
+        )
+        resume_configuration_blocked_deliveries(
+            session,
+            configuration_verified=True,
+            configuration_fingerprint="good-config",
+            now=now,
+        )
+        session.commit()
+
+    run_delivery_worker_once(
+        delivery_session,
+        "good-worker",
+        CaptureMailProvider(),
+        storage_root=tmp_path,
+        public_app_url="https://example.test",
+        configuration_fingerprint="good-config",
+        now=now,
+    )
+
+    with delivery_session() as session:
+        delivery = session.query(ReportDelivery).one()
+        assert delivery.status == "waiting_attachment"
+        assert delivery.error_json["verifiedConfigurationFingerprint"] == "good-config"
+        delivery.next_retry_at = now
+        assert delivery_work_pending(
+            session, configuration_fingerprint="bad-config", now=now
+        ) is False
+        assert block_deliveries_for_configuration(
+            session, configuration_fingerprint="bad-config", now=now
+        ) == 0
+        assert delivery.status == "waiting_attachment"
+
+
 def test_unknown_delivery_cannot_be_retried_while_provider_call_is_in_flight(
     delivery_session,
 ):

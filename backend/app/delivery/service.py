@@ -362,11 +362,22 @@ def _claimed_delivery(session: Session, delivery_id: str, worker_id: str) -> Rep
     return delivery
 
 
+def _with_verified_configuration(
+    delivery: ReportDelivery, values: dict
+) -> dict:
+    """Keep the healthy-provider assignment across non-terminal transitions."""
+
+    verified = (delivery.error_json or {}).get("verifiedConfigurationFingerprint")
+    if verified:
+        values["verifiedConfigurationFingerprint"] = verified
+    return values
+
+
 def _release_waiting(delivery: ReportDelivery, now: datetime, reason: str) -> None:
     delivery.status = "waiting_attachment"
     delivery.next_retry_at = now + timedelta(seconds=30)
     delivery.error_category = "attachment"
-    delivery.error_json = {"reason": reason}
+    delivery.error_json = _with_verified_configuration(delivery, {"reason": reason})
     delivery.lease_owner = None
     delivery.lease_expires_at = None
     delivery.updated_at = now
@@ -509,7 +520,10 @@ def _record_failure(
         seconds=_retry_delay(delivery.id, delivery.attempt_count)
     )
     delivery.error_category = failure.category
-    delivery.error_json = {"message": MASKED_ERROR_SUMMARIES.get(failure.category, "邮件投递失败")}
+    delivery.error_json = _with_verified_configuration(
+        delivery,
+        {"message": MASKED_ERROR_SUMMARIES.get(failure.category, "邮件投递失败")},
+    )
     delivery.lease_owner = None
     delivery.lease_expires_at = None
     delivery.updated_at = now
@@ -594,7 +608,9 @@ def _finalize_provider_result(
     if failure is not None:
         if failure.uncertain:
             delivery.error_category = "outcome_unknown"
-            delivery.error_json = {"message": "邮件服务结果不确定，需管理员核对后处理"}
+            delivery.error_json = _with_verified_configuration(
+                delivery, {"message": "邮件服务结果不确定，需管理员核对后处理"}
+            )
             delivery.updated_at = now
             attempt.error_category = "outcome_unknown"
             attempt.error_json = delivery.error_json
@@ -775,7 +791,7 @@ def retry_delivery(
     row.status = "queued"
     row.next_retry_at = current
     row.error_category = None
-    row.error_json = None
+    row.error_json = _with_verified_configuration(row, {}) or None
     row.lease_owner = None
     row.lease_expires_at = None
     row.updated_at = current
