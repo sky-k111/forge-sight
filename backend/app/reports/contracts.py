@@ -45,5 +45,6 @@ class SubscriptionCreate(BaseModel):
     dayOfMonth: int | None = Field(default=None, ge=1, le=28)
     sendTime: str = Field(default="09:00", pattern=r"^\d{2}:\d{2}$")
     timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=50)
-    publishPolicy: str = Field(default="after_review", pattern=r"^(after_review|auto_publish)$")
+    channel: str = Field(default="email", pattern=r"^(email|feishu)$")
+    publishPolicy: str = Field(default="auto_publish", pattern=r"^(after_review|auto_publish)$")
 

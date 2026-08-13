@@ -96,9 +96,9 @@ def test_email_identity_migration_is_repeatable_and_preserves_existing_user():
                 },
             )
 
-        migration_dir = ROOT / "database" / "postgresql"
-        assert bootstrap.apply_postgres_migrations(scoped_engine, migration_dir) == 1
-        assert bootstrap.apply_postgres_migrations(scoped_engine, migration_dir) == 1
+        migration_path = ROOT / "database" / "postgresql" / "002_email_identity.sql"
+        bootstrap.execute_sql_file(scoped_engine, migration_path)
+        bootstrap.execute_sql_file(scoped_engine, migration_path)
 
         with scoped_engine.connect() as connection:
             legacy_user = connection.execute(

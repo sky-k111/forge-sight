@@ -475,6 +475,15 @@ class Report(Base):
     """报告业务身份；具体正文冻结在 ReportVersion 中。"""
 
     __tablename__ = "report"
+    __table_args__ = (
+        UniqueConstraint(
+            "subscription_id",
+            "schedule_key",
+            "audience_scope_hash",
+            name="uq_report_schedule_audience",
+        ),
+        Index("ix_report_period_template", "period_start", "period_end", "template_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     title: Mapped[str] = mapped_column(String(200))
@@ -485,6 +494,10 @@ class Report(Base):
     status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
     owner_id: Mapped[str] = mapped_column(String(64), default="local-test-user", index=True)
     reviewer_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    subscription_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    schedule_key: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    audience_scope_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    publish_source: Mapped[str] = mapped_column(String(32), default="manual")
     period_start: Mapped[datetime] = mapped_column(DateTime)
     period_end: Mapped[datetime] = mapped_column(DateTime)
     scope_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
@@ -506,13 +519,48 @@ class ReportVersion(Base):
     report_id: Mapped[str] = mapped_column(String(40), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str] = mapped_column(String(24), default="draft")
+    supersedes_version_id: Mapped[str | None] = mapped_column(
+        String(40), ForeignKey("report_version.id", ondelete="RESTRICT"), nullable=True
+    )
     summary: Mapped[str] = mapped_column(Text, default="")
     content_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     data_snapshot_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    validation_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    workflow_version: Mapped[str] = mapped_column(String(64), default="")
+    model_snapshot_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    data_quality_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     created_by: Mapped[str] = mapped_column(String(64), default="report-agent")
     approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ReportFile(Base):
+    """由某个不可变报告版本生成的下载文件。"""
+
+    __tablename__ = "report_file"
+    __table_args__ = (
+        UniqueConstraint("version_id", "format", name="uq_report_file_version_format"),
+        CheckConstraint("format IN ('pdf', 'xlsx')", name="ck_report_file_format"),
+        CheckConstraint(
+            "status IN ('queued', 'generating', 'ready', 'failed')",
+            name="ck_report_file_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    report_id: Mapped[str] = mapped_column(String(40), index=True)
+    version_id: Mapped[str] = mapped_column(String(40), index=True)
+    format: Mapped[str] = mapped_column(String(12))
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    storage_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    checksum: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    generation_attempt: Mapped[int] = mapped_column(Integer, default=0)
+    error_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ReportSection(Base):
@@ -538,8 +586,88 @@ class ReportSection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class Message(Base):
+    """站内统一消息；周报消息固定指向发布时的版本。"""
+
+    __tablename__ = "message"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('published', 'withdrawn', 'expired')",
+            name="ck_message_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    message_type: Mapped[str] = mapped_column(String(32), index=True)
+    source: Mapped[str] = mapped_column(String(32), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    summary: Mapped[str] = mapped_column(Text, default="")
+    related_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    related_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    report_version_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    priority: Mapped[str] = mapped_column(String(16), default="normal")
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(24), default="published", index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160), unique=True)
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    published_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class MessageRecipient(Base):
+    """每个用户的消息可见性与已读状态。"""
+
+    __tablename__ = "message_recipient"
+    __table_args__ = (
+        UniqueConstraint("message_id", "user_id", name="uq_message_recipient_user"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    message_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("message.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(String(40), index=True)
+    message_status_snapshot: Mapped[str] = mapped_column(String(24), default="published")
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class Announcement(Base):
+    """管理员公告正文与接收范围快照。"""
+
+    __tablename__ = "announcement"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'published', 'withdrawn', 'expired')",
+            name="ck_announcement_status",
+        ),
+        UniqueConstraint("id", "revision", name="uq_announcement_revision"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    supersedes_announcement_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    priority: Mapped[str] = mapped_column(String(16), default="normal")
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    audience_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    audience_scope_hash: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="draft", index=True)
+    created_by: Mapped[str] = mapped_column(String(40))
+    published_by: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    withdrawn_by: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class ReportSubscription(Base):
-    """周期报告订阅。第一版外部渠道实现飞书群机器人。"""
+    """周期报告订阅；历史飞书值仍保持可读。"""
 
     __tablename__ = "report_subscription"
 
@@ -553,8 +681,8 @@ class ReportSubscription(Base):
     day_of_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
     send_time: Mapped[str] = mapped_column(String(8), default="09:00")
     timezone: Mapped[str] = mapped_column(String(50), default="Asia/Shanghai")
-    channel: Mapped[str] = mapped_column(String(24), default="feishu")
-    publish_policy: Mapped[str] = mapped_column(String(24), default="after_review")
+    channel: Mapped[str] = mapped_column(String(24), default="email")
+    publish_policy: Mapped[str] = mapped_column(String(24), default="auto_publish")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
@@ -565,6 +693,15 @@ class ReportDelivery(Base):
     """报告每一次外部发送的结果与重试记录。"""
 
     __tablename__ = "report_delivery"
+    __table_args__ = (
+        UniqueConstraint(
+            "version_id",
+            "recipient_user_id",
+            "channel",
+            name="uq_report_delivery_version_user_channel",
+        ),
+        CheckConstraint("attempt_count >= 0", name="ck_report_delivery_attempt_count"),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     report_id: Mapped[str] = mapped_column(String(40), index=True)
@@ -573,10 +710,38 @@ class ReportDelivery(Base):
     channel: Mapped[str] = mapped_column(String(24), default="feishu")
     status: Mapped[str] = mapped_column(String(24), default="queued")
     attempt: Mapped[int] = mapped_column(Integer, default=1)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    recipient_user_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    recipient_address_snapshot: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(160), nullable=True, unique=True)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    error_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     response_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     error_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class DeliveryAttempt(Base):
+    """一次服务商发送尝试；业务投递可包含多次尝试。"""
+
+    __tablename__ = "delivery_attempt"
+    __table_args__ = (
+        UniqueConstraint("delivery_id", "attempt_number", name="uq_delivery_attempt_number"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    delivery_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("report_delivery.id", ondelete="CASCADE"), index=True
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24))
+    provider_message_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    error_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class LlmCallAttempt(Base):
@@ -759,6 +924,102 @@ class PlatformUser(Base):
     )
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class OrganizationUnit(Base):
+    """企业、区域、部门等可组合的树形组织节点。"""
+
+    __tablename__ = "organization_unit"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    code: Mapped[str] = mapped_column(String(80), unique=True)
+    name: Mapped[str] = mapped_column(String(160))
+    node_type: Mapped[str] = mapped_column(String(32), index=True)
+    parent_id: Mapped[str | None] = mapped_column(
+        String(40), ForeignKey("organization_unit.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    path: Mapped[str] = mapped_column(String(500), default="", index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class UserMembership(Base):
+    """用户的组织、岗位和组织内业务角色。"""
+
+    __tablename__ = "user_membership"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "organization_id", "position_code", name="uq_user_membership_position"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(40), index=True)
+    organization_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("organization_unit.id", ondelete="RESTRICT"), index=True
+    )
+    position_code: Mapped[str] = mapped_column(String(80), default="member", index=True)
+    business_role: Mapped[str] = mapped_column(String(80), default="member", index=True)
+    effective_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    effective_to: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class DataScopePolicy(Base):
+    """用户、组织、岗位或业务角色对应的显式数据访问范围。"""
+
+    __tablename__ = "data_scope_policy"
+    __table_args__ = (
+        UniqueConstraint(
+            "subject_type", "subject_id", "business_key", name="uq_data_scope_subject_business"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    subject_type: Mapped[str] = mapped_column(String(24), index=True)
+    subject_id: Mapped[str] = mapped_column(String(80), index=True)
+    business_key: Mapped[str] = mapped_column(String(80), index=True)
+    effect: Mapped[str] = mapped_column(String(16), default="allow")
+    data_source_ids_json: Mapped[list] = mapped_column(JSON_TYPE, default=list)
+    dimensions_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    effective_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    effective_to: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(String(40), default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class DomainEventOutbox(Base):
+    """与领域状态同事务写入、可租约恢复的持久化事件。"""
+
+    __tablename__ = "domain_event_outbox"
+    __table_args__ = (
+        CheckConstraint("attempt_count >= 0", name="ck_outbox_attempt_count"),
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'retry_wait', 'completed', 'dead_letter')",
+            name="ck_outbox_status",
+        ),
+        Index("ix_outbox_claim", "status", "next_retry_at", "lease_expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(100), index=True)
+    aggregate_id: Mapped[str] = mapped_column(String(80), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160), unique=True)
+    payload_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    lease_owner: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class EmailVerificationChallenge(Base):

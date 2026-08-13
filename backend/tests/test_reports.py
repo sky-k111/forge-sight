@@ -12,9 +12,11 @@ from app.db.models import (
     AnalysisTask,
     KnowledgeMetric,
     MetricSourceBinding,
+    Report,
+    ReportVersion,
 )
 from app.reports import feishu, service
-from app.reports.contracts import ReportCreate
+from app.reports.contracts import ReportCreate, SubscriptionCreate
 from app.reports.templates import seed_report_templates
 
 
@@ -155,3 +157,52 @@ def test_feishu_signature_and_success_response(monkeypatch):
     assert captured["msg_type"] == "interactive"
     assert captured["timestamp"]
     assert captured["sign"]
+
+
+def test_create_subscription_uses_requested_channel(analysis_session):
+    seed_report_templates(analysis_session)
+
+    subscription = service.create_subscription(
+        SubscriptionCreate(name="经营周报", templateId="tpl-production-weekly", sourceId=1),
+        session_factory=analysis_session,
+    )
+
+    assert subscription["channel"] == "email"
+    assert subscription["publishPolicy"] == "auto_publish"
+
+
+def test_legacy_feishu_delivery_keeps_feishu_channel(analysis_session, monkeypatch):
+    with analysis_session() as session:
+        report = Report(
+            id="report-published",
+            title="经营周报",
+            template_id="tpl-weekly",
+            source_id=1,
+            status="published",
+            period_start=datetime(2026, 8, 3),
+            period_end=datetime(2026, 8, 10),
+            current_version_id="version-published",
+        )
+        session.add_all(
+            [
+                report,
+                ReportVersion(
+                    id="version-published",
+                    report_id=report.id,
+                    version=1,
+                    status="published",
+                ),
+            ]
+        )
+        session.commit()
+    monkeypatch.setattr(
+        service.feishu,
+        "send_report",
+        lambda *_args, **_kwargs: feishu.FeishuResult(ok=True, response_id="req-1"),
+    )
+
+    delivery = service.deliver_to_feishu(
+        "report-published", session_factory=analysis_session
+    )
+
+    assert delivery["channel"] == "feishu"

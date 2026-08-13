@@ -575,7 +575,7 @@ def create_subscription(payload, session_factory=PlatformSession) -> dict:
             day_of_month=payload.dayOfMonth if payload.cadence == "monthly" else None,
             send_time=payload.sendTime,
             timezone=payload.timezone,
-            channel="feishu",
+            channel=payload.channel,
             publish_policy=payload.publishPolicy,
             enabled=True,
         )
