@@ -98,7 +98,10 @@ def _loop() -> None:
             )
             configuration_fingerprint = mail_configuration_fingerprint(settings)
             with PlatformSession() as session:
-                pending = delivery_work_pending(session)
+                pending = delivery_work_pending(
+                    session,
+                    configuration_fingerprint=configuration_fingerprint,
+                )
             mail_provider = None
             if pending:
                 try:
@@ -120,6 +123,7 @@ def _loop() -> None:
                     resumed = resume_configuration_blocked_deliveries(
                         session,
                         configuration_verified=True,
+                        configuration_fingerprint=configuration_fingerprint,
                     )
                     session.commit()
                 if resumed:

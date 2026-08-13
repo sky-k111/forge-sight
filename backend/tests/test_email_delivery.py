@@ -32,6 +32,7 @@ from app.delivery.provider import (
 from app.delivery.service import (
     block_deliveries_for_configuration,
     consume_message_published_event,
+    delivery_work_pending,
     run_delivery_event_worker_once,
     run_delivery_worker_once,
     resume_configuration_blocked_deliveries,
@@ -634,7 +635,9 @@ def test_configuration_failure_blocks_queue_and_is_visible(delivery_session):
             session, configuration_verified=False
         ) == 0
         assert resume_configuration_blocked_deliveries(
-            session, configuration_verified=True
+            session,
+            configuration_verified=True,
+            configuration_fingerprint="config-b",
         ) == 1
         session.commit()
         assert session.get(ReportDelivery, delivery.id).status == "queued"
@@ -669,8 +672,62 @@ def test_runtime_authentication_failure_blocks_until_configuration_changes(
             session, configuration_verified=False
         ) == 0
         assert resume_configuration_blocked_deliveries(
-            session, configuration_verified=True
+            session,
+            configuration_verified=True,
+            configuration_fingerprint="fixed-config",
         ) == 1
+
+
+def test_bad_configuration_backs_off_and_cannot_reblock_verified_work(
+    delivery_session,
+):
+    _seed_announcement(delivery_session)
+    now = datetime(2026, 8, 13, 10, 0)
+    with delivery_session() as session:
+        consume_message_published_event(session, "event-message", "event-worker")
+        assert delivery_work_pending(
+            session, configuration_fingerprint="bad-config", now=now
+        ) is True
+        assert block_deliveries_for_configuration(
+            session,
+            configuration_fingerprint="bad-config",
+            now=now,
+            retry_seconds=300,
+        ) == 1
+
+        assert delivery_work_pending(
+            session,
+            configuration_fingerprint="bad-config",
+            now=datetime(2026, 8, 13, 10, 1),
+        ) is False
+        assert delivery_work_pending(
+            session,
+            configuration_fingerprint="good-config",
+            now=datetime(2026, 8, 13, 10, 1),
+        ) is True
+        assert resume_configuration_blocked_deliveries(
+            session,
+            configuration_verified=True,
+            configuration_fingerprint="good-config",
+            now=datetime(2026, 8, 13, 10, 1),
+        ) == 1
+
+        delivery = session.query(ReportDelivery).filter_by(recipient_user_id="user-ok").one()
+        assert delivery.status == "queued"
+        assert delivery.error_json == {
+            "verifiedConfigurationFingerprint": "good-config"
+        }
+        assert delivery_work_pending(
+            session,
+            configuration_fingerprint="bad-config",
+            now=datetime(2026, 8, 13, 10, 2),
+        ) is False
+        assert block_deliveries_for_configuration(
+            session,
+            configuration_fingerprint="bad-config",
+            now=datetime(2026, 8, 13, 10, 2),
+        ) == 0
+        assert delivery.status == "queued"
 
 
 def test_unknown_delivery_cannot_be_retried_while_provider_call_is_in_flight(
