@@ -12,6 +12,7 @@ from app.auth.email_verification import EmailVerificationError
 from app.auth.mail_provider import (
     CaptureMailProvider,
     SendResult,
+    SmtpVerificationMailProvider,
     get_verification_mail_provider,
 )
 from app.config import settings
@@ -83,11 +84,18 @@ def test_provider_factory_uses_capture_by_default(monkeypatch):
     assert isinstance(get_verification_mail_provider(), CaptureMailProvider)
 
 
-def test_provider_factory_rejects_unimplemented_provider(monkeypatch):
+def test_provider_factory_supports_smtp_without_exposing_credentials(monkeypatch):
     monkeypatch.setattr(settings, "mail_provider", "smtp")
+    monkeypatch.setattr(settings, "smtp_host", "smtp.example.test")
+    monkeypatch.setattr(settings, "smtp_port", 465)
+    monkeypatch.setattr(settings, "smtp_username", "sender@example.test")
+    monkeypatch.setattr(settings, "smtp_password", "never-in-repr")
+    monkeypatch.setattr(settings, "mail_from_address", "sender@example.test")
 
-    with pytest.raises(RuntimeError, match="Unsupported MAIL_PROVIDER"):
-        get_verification_mail_provider()
+    provider = get_verification_mail_provider()
+
+    assert isinstance(provider, SmtpVerificationMailProvider)
+    assert "never-in-repr" not in repr(provider)
 
 
 def test_successful_provider_send_records_sent_event(mail_session, monkeypatch):

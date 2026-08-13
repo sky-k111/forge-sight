@@ -705,6 +705,12 @@ class ReportDelivery(Base):
     __tablename__ = "report_delivery"
     __table_args__ = (
         UniqueConstraint(
+            "message_id",
+            "recipient_user_id",
+            "channel",
+            name="uq_report_delivery_message_user_channel",
+        ),
+        UniqueConstraint(
             "version_id",
             "recipient_user_id",
             "channel",
@@ -714,8 +720,9 @@ class ReportDelivery(Base):
     )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
-    report_id: Mapped[str] = mapped_column(String(40), index=True)
-    version_id: Mapped[str] = mapped_column(String(40), index=True)
+    message_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    report_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    version_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     subscription_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     channel: Mapped[str] = mapped_column(String(24), default="feishu")
     status: Mapped[str] = mapped_column(String(24), default="queued")
@@ -727,9 +734,15 @@ class ReportDelivery(Base):
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     error_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     provider_message_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    attachment_file_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    attachment_omitted: Mapped[bool] = mapped_column(Boolean, default=False)
+    lease_owner: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     response_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     error_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
@@ -750,6 +763,7 @@ class DeliveryAttempt(Base):
     provider_message_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     error_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

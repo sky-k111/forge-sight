@@ -11,6 +11,7 @@ from app.api import (
     analysis,
     auth,
     datasources,
+    deliveries,
     gateway,
     knowledge,
     messages,
@@ -106,6 +107,7 @@ app.include_router(auth.router)
 app.include_router(gateway.router)
 app.include_router(resources.router)
 app.include_router(datasources.router)
+app.include_router(deliveries.router)
 app.include_router(knowledge.router)
 app.include_router(messages.router)
 app.include_router(retrieval.router)

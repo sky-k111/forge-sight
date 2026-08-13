@@ -13,12 +13,13 @@ from app.db.models import (
     DataScopePolicy,
     Message,
     MessageRecipient,
+    PlatformUser,
     Report,
     ReportFile,
     ReportVersion,
 )
 from app.api import reports as reports_api
-from app.auth.deps import require_user
+from app.auth.deps import optional_user, require_user
 from app.main import app
 from app.reports.files import (
     FileAccessDenied,
@@ -49,7 +50,7 @@ def file_session(tmp_path):
                     title="生产经营周报 / 第32周",
                     template_id="tpl-weekly",
                     source_id=1,
-                    owner_id="owner-name",
+                    owner_id="owner-id",
                     status="published",
                     current_version_id="version-1",
                     period_start=datetime(2026, 8, 3),
@@ -95,7 +96,7 @@ def file_session(tmp_path):
                 DataScopePolicy(
                     id="policy-owner",
                     subject_type="user",
-                    subject_id="owner-name",
+                    subject_id="owner-id",
                     business_key="weekly_report",
                     effect="allow",
                     data_source_ids_json=[1],
@@ -230,3 +231,160 @@ def test_report_detail_exposes_file_state_and_opaque_download_url(file_session):
         "downloadUrl": "/api/v1/report-files/file-ready/download",
     }
     assert "storageUri" not in ready
+
+
+def test_report_detail_api_rejects_forwarded_link_for_unrelated_user(
+    file_session, monkeypatch
+):
+    session_factory, _ = file_session
+    monkeypatch.setattr(reports_api, "PlatformSession", session_factory)
+    monkeypatch.setattr(report_service, "PlatformSession", session_factory)
+    client = TestClient(app)
+    app.dependency_overrides[require_user] = lambda: {
+        "id": "stranger-id",
+        "username": "stranger",
+        "displayName": "无权限用户",
+        "role": "business",
+    }
+    try:
+        denied = client.get("/api/v1/reports/report-1")
+        denied_export = client.get("/api/v1/reports/report-1/export")
+        app.dependency_overrides[require_user] = lambda: {
+            "id": "recipient-id",
+            "username": "recipient",
+            "displayName": "接收人",
+            "role": "business",
+        }
+        allowed = client.get("/api/v1/reports/report-1")
+    finally:
+        app.dependency_overrides.pop(require_user, None)
+
+    assert denied.status_code == 404
+    assert denied_export.status_code == 404
+    assert allowed.status_code == 200
+    assert allowed.json()["version"]["id"] == "version-1"
+
+
+def test_report_owner_stable_id_cannot_be_claimed_by_colliding_username(file_session):
+    session_factory, storage_root = file_session
+    with session_factory() as session:
+        report = session.get(Report, "report-1")
+        report.owner_id = "stable-owner-id"
+        session.add_all(
+            [
+                PlatformUser(
+                    id="stable-owner-id",
+                    username="real-owner",
+                    password_hash="test-only",
+                ),
+                PlatformUser(
+                    id="attacker-id",
+                    username="stable-owner-id",
+                    password_hash="test-only",
+                ),
+                DataScopePolicy(
+                    id="policy-attacker",
+                    subject_type="user",
+                    subject_id="attacker-id",
+                    business_key="weekly_report",
+                    effect="allow",
+                    data_source_ids_json=[1],
+                ),
+            ]
+        )
+        session.commit()
+
+        with pytest.raises(FileAccessDenied):
+            resolve_download(
+                session,
+                "file-ready",
+                {
+                    "id": "attacker-id",
+                    "username": "stable-owner-id",
+                    "role": "business",
+                },
+                storage_root,
+            )
+
+
+def test_report_owned_by_colliding_username_user_uses_stable_id(file_session):
+    session_factory, storage_root = file_session
+    with session_factory() as session:
+        report = session.get(Report, "report-1")
+        report.owner_id = "business-user-id"
+        session.add_all(
+            [
+                PlatformUser(
+                    id="business-user-id",
+                    username="stable-owner-id",
+                    password_hash="test-only",
+                ),
+                PlatformUser(
+                    id="stable-owner-id",
+                    username="another-user",
+                    password_hash="test-only",
+                ),
+                DataScopePolicy(
+                    id="policy-business-owner",
+                    subject_type="user",
+                    subject_id="business-user-id",
+                    business_key="weekly_report",
+                    effect="allow",
+                    data_source_ids_json=[1],
+                ),
+            ]
+        )
+        session.commit()
+
+        resolve_download(
+            session,
+            "file-ready",
+            {
+                "id": "business-user-id",
+                "username": "stable-owner-id",
+                "role": "business",
+            },
+            storage_root,
+        )
+        with pytest.raises(FileAccessDenied):
+            resolve_download(
+                session,
+                "file-ready",
+                {
+                    "id": "stable-owner-id",
+                    "username": "another-user",
+                    "role": "business",
+                },
+                storage_root,
+            )
+
+
+def test_authenticated_report_creation_persists_stable_user_id(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        reports_api.service,
+        "create_report",
+        lambda payload: captured.append(payload) or {"id": "report-new"},
+    )
+    app.dependency_overrides[optional_user] = lambda: {
+        "id": "business-user-id",
+        "username": "stable-owner-id",
+        "displayName": "业务用户",
+        "role": "business",
+    }
+    try:
+        response = TestClient(app).post(
+            "/api/v1/reports",
+            json={
+                "templateId": "tpl-weekly",
+                "sourceId": 1,
+                "periodStart": "2026-08-03T00:00:00",
+                "periodEnd": "2026-08-10T00:00:00",
+                "ownerId": "client-supplied-value",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(optional_user, None)
+
+    assert response.status_code == 202
+    assert captured[0].ownerId == "business-user-id"

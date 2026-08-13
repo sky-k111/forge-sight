@@ -4,11 +4,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse, HTMLResponse
 
 from app.audit.service import write_audit
-from app.auth.deps import current_user_display, effective_user_id, optional_user, require_user
+from app.auth.deps import (
+    current_user_display,
+    effective_stable_user_id,
+    optional_user,
+    require_user,
+)
 from app.config import settings
 from app.db.platform import PlatformSession
+from app.db.models import Report, ReportVersion
 from app.reports import service
-from app.reports.files import FileAccessDenied, FileNotReady, resolve_download
+from app.reports.files import (
+    FileAccessDenied,
+    FileNotReady,
+    authorize_report_view,
+    resolve_download,
+)
 from app.reports.contracts import ReportCreate, ReportPublish, ReportReviewAction, SubscriptionCreate
 
 router = APIRouter(prefix="/api/v1", tags=["reports"])
@@ -20,6 +31,17 @@ def _raise(exc: Exception):
     if isinstance(exc, service.ReportConflict):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     raise exc
+
+
+def _authorize_report(report_id: str, user: dict) -> None:
+    with PlatformSession() as session:
+        report = session.get(Report, report_id)
+        if report is None:
+            raise service.ReportNotFound(f"报告 {report_id} 不存在")
+        version = session.get(ReportVersion, report.current_version_id)
+        if version is None:
+            raise service.ReportNotFound(f"报告 {report_id} 不存在")
+        authorize_report_view(session, report, version, user)
 
 
 @router.get("/report-templates")
@@ -44,7 +66,9 @@ def list_reports(
 ):
     return {
         "items": service.list_reports(
-            owner_id=effective_user_id(ownerId, user), status=statusValue, source_id=sourceId
+            owner_id=effective_stable_user_id(ownerId, user),
+            status=statusValue,
+            source_id=sourceId,
         )
     }
 
@@ -53,16 +77,21 @@ def list_reports(
 def create_report(payload: ReportCreate, user: dict | None = Depends(optional_user)):
     try:
         return service.create_report(
-            payload.model_copy(update={"ownerId": effective_user_id(payload.ownerId, user)})
+            payload.model_copy(
+                update={"ownerId": effective_stable_user_id(payload.ownerId, user)}
+            )
         )
     except Exception as exc:
         _raise(exc)
 
 
 @router.get("/reports/{report_id}")
-def get_report(report_id: str):
+def get_report(report_id: str, user: dict = Depends(require_user)):
     try:
-        return service.get_report(report_id)
+        _authorize_report(report_id, user)
+        return service.get_report(report_id, session_factory=PlatformSession)
+    except FileAccessDenied as exc:
+        raise HTTPException(status_code=404, detail="报告不存在或无权访问") from exc
     except Exception as exc:
         _raise(exc)
 
@@ -104,9 +133,16 @@ def push_report_to_feishu(report_id: str):
 
 
 @router.get("/reports/{report_id}/export", response_class=HTMLResponse)
-def export_report(report_id: str, format: str = Query(default="html", pattern=r"^html$")):
+def export_report(
+    report_id: str,
+    format: str = Query(default="html", pattern=r"^html$"),
+    user: dict = Depends(require_user),
+):
     try:
-        document = service.export_html(report_id)
+        _authorize_report(report_id, user)
+        document = service.export_html(report_id, session_factory=PlatformSession)
+    except FileAccessDenied as exc:
+        raise HTTPException(status_code=404, detail="报告不存在或无权访问") from exc
     except Exception as exc:
         _raise(exc)
     # 兼容旧 HTML 预览；正式 PDF/XLSX 统一通过 report-files 下载接口提供。
@@ -174,14 +210,23 @@ def download_report_file(file_id: str, user: dict = Depends(require_user)):
 
 
 @router.get("/report-subscriptions")
-def list_subscriptions(ownerId: str = Query(default="local-test-user", min_length=1, max_length=64)):
-    return {"items": service.list_subscriptions(ownerId)}
+def list_subscriptions(
+    ownerId: str = Query(default="local-test-user", min_length=1, max_length=64),
+    user: dict | None = Depends(optional_user),
+):
+    return {"items": service.list_subscriptions(effective_stable_user_id(ownerId, user))}
 
 
 @router.post("/report-subscriptions", status_code=status.HTTP_201_CREATED)
-def create_subscription(payload: SubscriptionCreate):
+def create_subscription(
+    payload: SubscriptionCreate, user: dict | None = Depends(optional_user)
+):
     try:
-        return service.create_subscription(payload)
+        return service.create_subscription(
+            payload.model_copy(
+                update={"ownerId": effective_stable_user_id(payload.ownerId, user)}
+            )
+        )
     except Exception as exc:
         _raise(exc)
 
