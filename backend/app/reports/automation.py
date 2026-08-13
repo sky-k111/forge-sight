@@ -433,18 +433,27 @@ def _is_temporal_label(value: object) -> bool:
     )
 
 
-def _temporal_sort_key(value: object) -> tuple[int, object]:
+def _temporal_sort_key(value: object, reference: datetime) -> tuple[int, object]:
     label = str(value).strip()
     week = re.fullmatch(r"(?:W|第?)(\d{1,2})(?:周)?", label, re.IGNORECASE)
     if week:
-        return 1, int(week.group(1))
+        candidates = []
+        for year in (reference.year - 1, reference.year, reference.year + 1):
+            try:
+                candidates.append(datetime.fromisocalendar(year, int(week.group(1)), 1))
+            except ValueError:
+                continue
+        if candidates:
+            return 0, min(candidates, key=lambda item: abs(item - reference))
     try:
         return 0, datetime.fromisoformat(label.replace("/", "-"))
     except ValueError:
         return 2, label
 
 
-def _structured_metrics(sections: list[ReportSection]) -> tuple[list[dict], list[dict], list[dict]]:
+def _structured_metrics(
+    sections: list[ReportSection], *, period_end: datetime
+) -> tuple[list[dict], list[dict], list[dict]]:
     metrics: list[dict] = []
     trends: list[dict] = []
     definitions: list[dict] = []
@@ -493,7 +502,9 @@ def _structured_metrics(sections: list[ReportSection]) -> tuple[list[dict], list
             # Grouped/category rows do not define current and comparison periods.
             continue
         if len(numeric_rows) > 1 and label_index is not None:
-            numeric_rows.sort(key=lambda row: _temporal_sort_key(row[label_index]))
+            numeric_rows.sort(
+                key=lambda row: _temporal_sort_key(row[label_index], period_end)
+            )
         key = str(resolution.get("id") or columns[numeric_index] or section.code)
         if key in seen_keys:
             continue
@@ -624,7 +635,9 @@ def build_structured_content(
         "temporaryMetrics": list(quality_source.get("temporaryMetrics") or []),
         "failedSections": [section.code for section in sections if section.status != "succeeded"],
     }
-    metrics, trends, definitions = _structured_metrics(sections)
+    metrics, trends, definitions = _structured_metrics(
+        sections, period_end=report.period_end
+    )
     anomalies, progress, recommendations = _structured_operational_items(sections)
     period_duration = report.period_end - report.period_start
     comparison_start = report.period_start - period_duration

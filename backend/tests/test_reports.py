@@ -192,6 +192,12 @@ def test_manual_weekly_publish_converts_legacy_content_before_queuing_exports(an
         assert version.content_json["schemaVersion"] == "weekly-report/v1"
         assert version.validation_json["passed"] is True
         assert {row.format for row in session.query(ReportFile).all()} == {"pdf", "xlsx"}
+        frozen_validation = version.validation_json
+
+    service.publish_report("manual-weekly", "reviewer", session_factory=analysis_session)
+    with analysis_session() as session:
+        assert session.get(ReportVersion, "manual-version").validation_json == frozen_validation
+        assert session.query(ReportFile).count() == 2
 
 
 def test_prestructured_weekly_is_revalidated_on_every_publish(analysis_session):

@@ -162,8 +162,9 @@ def _contains_sensitive_key(value: Any) -> bool:
     elif isinstance(value, str):
         return bool(
             re.search(
-                r"(?i)\b(password|token|secret|authorization(?:code)?)\b\s*[:=]"
-                r"|授权码\s*[:：=]",
+                r"(?i)(?:api[_ -]?)?(?:password|token|secret|authorization(?:[_ -]?code)?)\s*[:=]"
+                r"|(?:smtp[_ -]?)?(?:password|token|secret|authorization(?:[_ -]?code)?)\s*[:=]"
+                r"|(?:授权码|密码|密钥|令牌)\s*[:：=]",
                 value,
             )
         )
@@ -335,15 +336,20 @@ def validate_for_publish(content: dict) -> dict:
     invalid_change_rates = [
         metric.key
         for metric in comparative_metrics
-        if metric.previous_value is not None
-        and metric.change_rate is not None
-        and (
-            metric.previous_value == 0
-            or abs(
-                metric.change_rate
-                - (metric.value - metric.previous_value) / abs(metric.previous_value)
+        if (
+            (metric.previous_value is None) != (metric.change_rate is None)
+            or (
+                metric.previous_value is not None
+                and metric.change_rate is not None
+                and (
+                    metric.previous_value == 0
+                    or abs(
+                        metric.change_rate
+                        - (metric.value - metric.previous_value) / abs(metric.previous_value)
+                    )
+                    > 0.0001
+                )
             )
-            > 0.0001
         )
     ]
     if invalid_change_rates:

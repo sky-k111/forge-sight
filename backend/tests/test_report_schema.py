@@ -161,6 +161,28 @@ def test_publish_validation_recomputes_change_rate_and_requires_adjacent_compari
     assert {"V-HARD-006", "V-HARD-010"} <= codes
 
 
+def test_publish_validation_requires_previous_value_for_change_rate():
+    content = _content()
+    content["metrics"][0]["previousValue"] = None
+
+    result = validate_for_publish(content)
+
+    assert "V-HARD-010" in {item["code"] for item in result["rules"]}
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["API_TOKEN=leak", "SMTP_PASSWORD=leak", "密码：leak", "密钥：leak"],
+)
+def test_publish_validation_normalizes_common_sensitive_labels(text):
+    content = _content()
+    content["managementSummary"]["findings"][0]["text"] = text
+
+    result = validate_for_publish(content)
+
+    assert "V-HARD-009" in {item["code"] for item in result["rules"]}
+
+
 def test_confidence_is_explainable_and_switches_to_data_anomaly_variant():
     result = calculate_confidence(
         {
@@ -379,3 +401,45 @@ def test_narrative_negations_never_create_operational_state_without_structured_a
     assert content["anomalies"] == []
     assert content["progress"] == []
     assert content["recommendations"] == []
+
+
+def test_week_labels_are_ordered_across_iso_year_boundary():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1",
+        title="跨年生产周报",
+        source_id=1,
+        period_start=datetime(2025, 12, 29),
+        period_end=datetime(2026, 1, 5),
+        scope_json={},
+        audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 100})
+    section = SimpleNamespace(
+        code="output",
+        title="生产情况",
+        status="succeeded",
+        summary="跨年产量已汇总。",
+        confidence=90,
+        artifact_ids_json=["artifact-result"],
+        content_json={
+            "result": {
+                "columns": ["week", "output_qty"],
+                "rows": [["W1", 12840], ["W52", 12100]],
+            },
+            "metricResolution": {"id": "output_qty", "name": "总产量", "unit": "件"},
+        },
+    )
+
+    content = build_structured_content(
+        report=report,
+        version=version,
+        sections=[section],
+        raw_summary="跨年产量已汇总。",
+        timezone_name="Asia/Shanghai",
+    )
+
+    assert content["metrics"][0]["previousValue"] == 12100
+    assert content["metrics"][0]["value"] == 12840
+    assert [point["label"] for point in content["trends"][0]["points"]] == ["W52", "W1"]
