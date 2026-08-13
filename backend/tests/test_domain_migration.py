@@ -25,6 +25,7 @@ def test_domain_migration_is_registered_after_email_identity():
     assert [path.name for path in bootstrap.postgres_migration_paths(MIGRATION_DIR)] == [
         "002_email_identity.sql",
         "003_domain_model.sql",
+        "004_report_version_freeze.sql",
     ]
 
 
@@ -59,8 +60,8 @@ def test_domain_migration_is_repeatable_and_preserves_legacy_subscription():
                 )
             )
 
-        assert bootstrap.apply_postgres_migrations(scoped_engine, MIGRATION_DIR) == 2
-        assert bootstrap.apply_postgres_migrations(scoped_engine, MIGRATION_DIR) == 2
+        assert bootstrap.apply_postgres_migrations(scoped_engine, MIGRATION_DIR) == 3
+        assert bootstrap.apply_postgres_migrations(scoped_engine, MIGRATION_DIR) == 3
 
         with scoped_engine.connect() as connection:
             legacy = connection.execute(

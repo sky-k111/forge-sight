@@ -1,10 +1,14 @@
 """阶段六报告中心 API。"""
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
-from app.auth.deps import effective_user_id, optional_user
+from app.audit.service import write_audit
+from app.auth.deps import current_user_display, effective_user_id, optional_user, require_user
+from app.config import settings
+from app.db.platform import PlatformSession
 from app.reports import service
+from app.reports.files import FileAccessDenied, FileNotReady, resolve_download
 from app.reports.contracts import ReportCreate, ReportPublish, ReportReviewAction, SubscriptionCreate
 
 router = APIRouter(prefix="/api/v1", tags=["reports"])
@@ -109,6 +113,39 @@ def export_report(report_id: str, format: str = Query(default="html", pattern=r"
     return HTMLResponse(
         document,
         headers={"Content-Disposition": f'inline; filename="{report_id}.html"'},
+    )
+
+
+@router.get("/report-files/{file_id}/download")
+def download_report_file(file_id: str, user: dict = Depends(require_user)):
+    """Download a ready report file without exposing its storage URI."""
+
+    try:
+        with PlatformSession() as session:
+            download = resolve_download(session, file_id, user, settings.report_storage_dir)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+    except FileAccessDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except FileNotReady as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(exc), "fileStatus": exc.status, "error": exc.error},
+        ) from exc
+
+    user_name, role = current_user_display(user)
+    write_audit(
+        action="下载周报文件",
+        resource=f"report:{download.report_id}/file:{download.file_id}",
+        result="允许",
+        detail=f"version={download.version_id};format={download.path.suffix.lstrip('.')}",
+        user_name=user_name,
+        role=role,
+    )
+    return FileResponse(
+        path=download.path,
+        media_type=download.mime_type,
+        filename=download.filename,
     )
 
 

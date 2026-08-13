@@ -34,6 +34,7 @@ from app.reports.repository import (
     update_report_file,
     update_report_version,
 )
+from app.reports.schema import content_checksum
 
 
 @pytest.fixture()
@@ -160,7 +161,11 @@ def test_publish_version_and_outbox_commit_as_one_transaction(session_factory):
         assert session.get(DomainEventOutbox, "event-1").payload_json == {
             "reportId": "report-1",
             "versionId": "version-1",
+            "contentChecksum": content_checksum({"title": "经营周报"}),
         }
+        version = session.get(ReportVersion, "version-1")
+        assert version.content_checksum == content_checksum({"title": "经营周报"})
+        assert version.frozen_at is not None
 
 
 def test_replacing_current_version_sets_supersession_atomically(session_factory):

@@ -26,6 +26,7 @@ from app.db.models import (
 from app.db.platform import PlatformSession
 from app.reports.repository import get_or_create_report
 from app.reports.repository import publish_version
+from app.reports.schema import calculate_confidence, validate_for_publish
 
 
 WORKFLOW_VERSION = "weekly-agent-v1"
@@ -319,7 +320,9 @@ def _schedule_subscription(subscription_id: str, *, now: datetime, session_facto
         return report.id if created else None
 
 
-def validate_generated_version(sections: list[ReportSection]) -> dict:
+def validate_generated_version(
+    sections: list[ReportSection], structured_content: dict | None = None
+) -> dict:
     """仅做可重复的确定性校验，不让模型自行判定自己是否可发布。"""
 
     hard_errors: list[dict] = []
@@ -350,12 +353,25 @@ def validate_generated_version(sections: list[ReportSection]) -> dict:
                     "confidence": section.confidence,
                 }
             )
+    structured_validation = (
+        validate_for_publish(structured_content) if structured_content is not None else None
+    )
+    if structured_validation is not None:
+        hard_errors.extend(
+            {
+                "code": rule["code"],
+                "message": rule["message"],
+            }
+            for rule in structured_validation["rules"]
+            if rule["level"] == "error"
+        )
     return {
         "passed": not hard_errors,
         "hardErrors": hard_errors,
         "warnings": warnings,
         "checkedAt": datetime.now(timezone.utc).isoformat(),
-        "ruleVersion": "weekly-report-validation-v1",
+        "ruleVersion": "weekly-report-validation-v2",
+        "rules": structured_validation["rules"] if structured_validation else [],
     }
 
 
@@ -363,8 +379,21 @@ def compose_management_summary(raw_summary: str, sections: list[ReportSection]) 
     """把已验证章节压缩为 3–5 条管理发现，不创造新的业务数字。"""
 
     findings: list[dict] = []
-    if raw_summary.strip():
-        findings.append({"level": "confirmed", "text": raw_summary.strip()})
+    all_evidence = [
+        artifact_id
+        for section in sections
+        for artifact_id in (section.artifact_ids_json or [])
+    ]
+    scored = [section.confidence for section in sections if section.confidence]
+    if raw_summary.strip() and all_evidence:
+        findings.append(
+            {
+                "level": "confirmed",
+                "text": raw_summary.strip(),
+                "evidenceArtifactIds": all_evidence,
+                "confidence": round(sum(scored) / len(scored)) if scored else 60,
+            }
+        )
     for section in sections:
         if not section.summary.strip():
             continue
@@ -374,6 +403,7 @@ def compose_management_summary(raw_summary: str, sections: list[ReportSection]) 
                 "sectionCode": section.code,
                 "text": section.summary.strip(),
                 "evidenceArtifactIds": list(section.artifact_ids_json or []),
+                "confidence": section.confidence,
             }
         )
         if len(findings) == 5:
@@ -383,9 +413,149 @@ def compose_management_summary(raw_summary: str, sections: list[ReportSection]) 
         "actions": [
             {
                 "text": "优先复核低可信度或数据覆盖不足的章节，并在下一周期跟踪变化。",
-                "source": "validation",
+                "priority": "medium",
+                "evidenceArtifactIds": all_evidence,
             }
         ],
+    }
+
+
+def _structured_metrics(sections: list[ReportSection]) -> tuple[list[dict], list[dict], list[dict]]:
+    metrics: list[dict] = []
+    trends: list[dict] = []
+    definitions: list[dict] = []
+    seen_keys: set[str] = set()
+    for section in sections:
+        content = section.content_json or {}
+        result = content.get("result") or {}
+        columns = [str(item) for item in (result.get("columns") or [])]
+        rows = [list(item) for item in (result.get("rows") or []) if isinstance(item, (list, tuple))]
+        if not columns or not rows:
+            continue
+        numeric_index = next(
+            (
+                index
+                for index in range(len(columns) - 1, -1, -1)
+                if any(
+                    index < len(row)
+                    and isinstance(row[index], (int, float))
+                    and not isinstance(row[index], bool)
+                    for row in rows
+                )
+            ),
+            None,
+        )
+        if numeric_index is None:
+            continue
+        numeric_rows = [
+            row
+            for row in rows
+            if numeric_index < len(row)
+            and isinstance(row[numeric_index], (int, float))
+            and not isinstance(row[numeric_index], bool)
+        ]
+        if not numeric_rows:
+            continue
+        resolution = content.get("metricResolution") or {}
+        key = str(resolution.get("id") or columns[numeric_index] or section.code)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        values = [float(row[numeric_index]) for row in numeric_rows]
+        previous = values[-2] if len(values) >= 2 else None
+        change_rate = (
+            (values[-1] - previous) / abs(previous)
+            if previous not in {None, 0}
+            else None
+        )
+        trend = (
+            "unknown"
+            if change_rate is None
+            else "up"
+            if change_rate > 0.001
+            else "down"
+            if change_rate < -0.001
+            else "flat"
+        )
+        name = str(resolution.get("name") or columns[numeric_index])
+        unit = str(resolution.get("unit") or "数值")
+        evidence = list(section.artifact_ids_json or [])
+        metrics.append(
+            {
+                "key": key,
+                "name": name,
+                "value": values[-1],
+                "unit": unit,
+                "previousValue": previous,
+                "changeRate": change_rate,
+                "trend": trend,
+                "evidenceArtifactIds": evidence,
+                "confidence": section.confidence,
+            }
+        )
+        if len(numeric_rows) >= 2:
+            label_index = next((index for index in range(len(columns)) if index != numeric_index), None)
+            trends.append(
+                {
+                    "metricKey": key,
+                    "label": f"{name}趋势",
+                    "unit": unit,
+                    "points": [
+                        {
+                            "label": str(row[label_index]) if label_index is not None and label_index < len(row) else str(index + 1),
+                            "value": float(row[numeric_index]),
+                        }
+                        for index, row in enumerate(numeric_rows[-12:])
+                    ],
+                }
+            )
+        definition = resolution.get("definition")
+        if definition:
+            definitions.append({"name": name, "definition": str(definition)})
+    return metrics, trends, definitions
+
+
+def build_structured_content(
+    *,
+    report: Report,
+    version: ReportVersion,
+    sections: list[ReportSection],
+    raw_summary: str,
+    timezone_name: str,
+) -> dict:
+    """Build the single weekly-report document consumed by every renderer."""
+
+    quality_source = version.data_quality_json or {}
+    data_quality = {
+        "coverage": int(quality_source.get("coverageScore") or 0),
+        "delayedSources": list(quality_source.get("delayedSources") or []),
+        "missingMetrics": list(quality_source.get("missingMetrics") or []),
+        "temporaryMetrics": list(quality_source.get("temporaryMetrics") or []),
+        "failedSections": [section.code for section in sections if section.status != "succeeded"],
+    }
+    metrics, trends, definitions = _structured_metrics(sections)
+    return {
+        "schemaVersion": "weekly-report/v1",
+        "identity": {
+            "reportId": report.id,
+            "versionId": version.id,
+            "title": report.title,
+            "reportType": "weekly",
+            "periodStart": report.period_start.isoformat(),
+            "periodEnd": report.period_end.isoformat(),
+            "timezone": timezone_name,
+        },
+        "managementSummary": compose_management_summary(raw_summary, sections),
+        "metrics": metrics,
+        "trends": trends,
+        "anomalies": [],
+        "progress": [],
+        "recommendations": [],
+        "dataQuality": data_quality,
+        "appendix": {
+            "sources": [f"data-source:{report.source_id}"],
+            "definitions": definitions,
+        },
     }
 
 
@@ -400,8 +570,23 @@ def finalize_automatic_report(
 ) -> bool:
     """校验并原子发布订阅生成的当前版本；返回是否已发布。"""
 
-    validation = validate_generated_version(sections)
+    structured_content = build_structured_content(
+        report=report,
+        version=version,
+        sections=sections,
+        raw_summary=raw_summary,
+        timezone_name=timezone_name,
+    )
+    confidence = calculate_confidence(structured_content["dataQuality"])
+    validation = validate_generated_version(sections, structured_content)
     version.validation_json = validation
+    version.schema_version = structured_content["schemaVersion"]
+    version.confidence_score = confidence["score"]
+    version.confidence_algorithm_version = confidence["algorithmVersion"]
+    version.data_quality_json = {
+        **(version.data_quality_json or {}),
+        "confidence": confidence,
+    }
     version.workflow_version = WORKFLOW_VERSION
     if not validation["passed"]:
         report.status = "validation_failed"
@@ -412,11 +597,7 @@ def finalize_automatic_report(
         }
         return False
 
-    management_summary = compose_management_summary(raw_summary, sections)
-    version.content_json = {
-        **(version.content_json or {}),
-        "managementSummary": management_summary,
-    }
+    version.content_json = structured_content
     report.status = "composing"
     version.status = "composing"
     report.publish_source = "agent"

@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     public_app_url: str = "http://127.0.0.1:3001"
 
     modeling_storage_dir: str = "modeling_artifacts"
+    report_storage_dir: str = "report_artifacts"
 
     # —— 认证 ——
     auth_token_secret: str = "dev-insecure-secret-change-me"  # 生产必须从 .env 覆盖

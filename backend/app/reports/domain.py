@@ -23,6 +23,7 @@ class ReportFileStatus(StrEnum):
     GENERATING = "generating"
     READY = "ready"
     FAILED = "failed"
+    DEAD_LETTER = "dead_letter"
 
 
 class ReportVersionStatus(StrEnum):
