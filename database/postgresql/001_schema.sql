@@ -195,6 +195,33 @@ CREATE TABLE IF NOT EXISTS analysis_task (
 );
 CREATE INDEX IF NOT EXISTS ix_analysis_task_run_id ON analysis_task (run_id);
 
+CREATE TABLE IF NOT EXISTS announcement (
+	id VARCHAR(40) NOT NULL,
+	supersedes_announcement_id VARCHAR(40),
+	revision INTEGER NOT NULL,
+	title VARCHAR(200) NOT NULL,
+	body TEXT NOT NULL,
+	priority VARCHAR(16) NOT NULL,
+	is_pinned BOOLEAN NOT NULL,
+	audience_json JSONB NOT NULL,
+	audience_scope_hash VARCHAR(64) NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	created_by VARCHAR(40) NOT NULL,
+	published_by VARCHAR(40),
+	withdrawn_by VARCHAR(40),
+	valid_from TIMESTAMP WITHOUT TIME ZONE,
+	expires_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	published_at TIMESTAMP WITHOUT TIME ZONE,
+	withdrawn_at TIMESTAMP WITHOUT TIME ZONE,
+	PRIMARY KEY (id),
+	CONSTRAINT ck_announcement_status CHECK (status IN ('draft', 'published', 'withdrawn', 'expired')),
+	CONSTRAINT uq_announcement_revision UNIQUE (id, revision)
+);
+CREATE INDEX IF NOT EXISTS ix_announcement_audience_scope_hash ON announcement (audience_scope_hash);
+CREATE INDEX IF NOT EXISTS ix_announcement_expires_at ON announcement (expires_at);
+CREATE INDEX IF NOT EXISTS ix_announcement_status ON announcement (status);
+
 CREATE TABLE IF NOT EXISTS audit_log (
 	id SERIAL NOT NULL,
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
@@ -233,6 +260,27 @@ CREATE TABLE IF NOT EXISTS business_rule (
 	UNIQUE (name)
 );
 
+CREATE TABLE IF NOT EXISTS data_scope_policy (
+	id VARCHAR(40) NOT NULL,
+	subject_type VARCHAR(24) NOT NULL,
+	subject_id VARCHAR(80) NOT NULL,
+	business_key VARCHAR(80) NOT NULL,
+	effect VARCHAR(16) NOT NULL,
+	data_source_ids_json JSONB NOT NULL,
+	dimensions_json JSONB NOT NULL,
+	effective_from TIMESTAMP WITHOUT TIME ZONE,
+	effective_to TIMESTAMP WITHOUT TIME ZONE,
+	enabled BOOLEAN NOT NULL,
+	created_by VARCHAR(40) NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_data_scope_subject_business UNIQUE (subject_type, subject_id, business_key)
+);
+CREATE INDEX IF NOT EXISTS ix_data_scope_policy_business_key ON data_scope_policy (business_key);
+CREATE INDEX IF NOT EXISTS ix_data_scope_policy_subject_id ON data_scope_policy (subject_id);
+CREATE INDEX IF NOT EXISTS ix_data_scope_policy_subject_type ON data_scope_policy (subject_type);
+
 CREATE TABLE IF NOT EXISTS data_source (
 	id SERIAL NOT NULL,
 	name VARCHAR(100) NOT NULL,
@@ -264,6 +312,31 @@ CREATE TABLE IF NOT EXISTS data_table (
 	CONSTRAINT uq_source_table UNIQUE (source_id, name)
 );
 CREATE INDEX IF NOT EXISTS ix_data_table_source_id ON data_table (source_id);
+
+CREATE TABLE IF NOT EXISTS domain_event_outbox (
+	id VARCHAR(40) NOT NULL,
+	event_type VARCHAR(100) NOT NULL,
+	aggregate_id VARCHAR(80) NOT NULL,
+	idempotency_key VARCHAR(160) NOT NULL,
+	payload_json JSONB NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	lease_owner VARCHAR(100),
+	lease_expires_at TIMESTAMP WITHOUT TIME ZONE,
+	attempt_count INTEGER NOT NULL,
+	next_retry_at TIMESTAMP WITHOUT TIME ZONE,
+	acknowledged_at TIMESTAMP WITHOUT TIME ZONE,
+	error_summary VARCHAR(500),
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT ck_outbox_attempt_count CHECK (attempt_count >= 0),
+	CONSTRAINT ck_outbox_status CHECK (status IN ('pending', 'processing', 'retry_wait', 'completed', 'dead_letter')),
+	UNIQUE (idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS ix_domain_event_outbox_aggregate_id ON domain_event_outbox (aggregate_id);
+CREATE INDEX IF NOT EXISTS ix_domain_event_outbox_event_type ON domain_event_outbox (event_type);
+CREATE INDEX IF NOT EXISTS ix_domain_event_outbox_status ON domain_event_outbox (status);
+CREATE INDEX IF NOT EXISTS ix_outbox_claim ON domain_event_outbox (status, next_retry_at, lease_expires_at);
 
 CREATE TABLE IF NOT EXISTS governed_model (
 	id VARCHAR(40) NOT NULL,
@@ -392,6 +465,33 @@ CREATE TABLE IF NOT EXISTS llm_model_price (
 CREATE INDEX IF NOT EXISTS ix_llm_model_price_model ON llm_model_price (model);
 CREATE INDEX IF NOT EXISTS ix_llm_model_price_provider ON llm_model_price (provider);
 
+CREATE TABLE IF NOT EXISTS message (
+	id VARCHAR(40) NOT NULL,
+	message_type VARCHAR(32) NOT NULL,
+	source VARCHAR(32) NOT NULL,
+	title VARCHAR(200) NOT NULL,
+	summary TEXT NOT NULL,
+	related_type VARCHAR(40),
+	related_id VARCHAR(40),
+	report_version_id VARCHAR(40),
+	priority VARCHAR(16) NOT NULL,
+	is_pinned BOOLEAN NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	idempotency_key VARCHAR(160) NOT NULL,
+	valid_from TIMESTAMP WITHOUT TIME ZONE,
+	expires_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	published_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT ck_message_status CHECK (status IN ('published', 'withdrawn', 'expired')),
+	UNIQUE (idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS ix_message_expires_at ON message (expires_at);
+CREATE INDEX IF NOT EXISTS ix_message_message_type ON message (message_type);
+CREATE INDEX IF NOT EXISTS ix_message_report_version_id ON message (report_version_id);
+CREATE INDEX IF NOT EXISTS ix_message_source ON message (source);
+CREATE INDEX IF NOT EXISTS ix_message_status ON message (status);
+
 CREATE TABLE IF NOT EXISTS metric_field_binding (
 	id SERIAL NOT NULL,
 	binding_id INTEGER NOT NULL,
@@ -489,6 +589,24 @@ CREATE INDEX IF NOT EXISTS ix_modeling_task_source_id ON modeling_task (source_i
 CREATE INDEX IF NOT EXISTS ix_modeling_task_status ON modeling_task (status);
 CREATE INDEX IF NOT EXISTS ix_modeling_task_task_type ON modeling_task (task_type);
 
+CREATE TABLE IF NOT EXISTS organization_unit (
+	id VARCHAR(40) NOT NULL,
+	code VARCHAR(80) NOT NULL,
+	name VARCHAR(160) NOT NULL,
+	node_type VARCHAR(32) NOT NULL,
+	parent_id VARCHAR(40),
+	path VARCHAR(500) NOT NULL,
+	enabled BOOLEAN NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	UNIQUE (code),
+	FOREIGN KEY(parent_id) REFERENCES organization_unit (id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS ix_organization_unit_node_type ON organization_unit (node_type);
+CREATE INDEX IF NOT EXISTS ix_organization_unit_parent_id ON organization_unit (parent_id);
+CREATE INDEX IF NOT EXISTS ix_organization_unit_path ON organization_unit (path);
+
 CREATE TABLE IF NOT EXISTS platform_user (
 	id VARCHAR(40) NOT NULL,
 	username VARCHAR(50) NOT NULL,
@@ -518,6 +636,10 @@ CREATE TABLE IF NOT EXISTS report (
 	status VARCHAR(32) NOT NULL,
 	owner_id VARCHAR(64) NOT NULL,
 	reviewer_id VARCHAR(64),
+	subscription_id VARCHAR(40),
+	schedule_key VARCHAR(80),
+	audience_scope_hash VARCHAR(64),
+	publish_source VARCHAR(32) NOT NULL,
 	period_start TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	period_end TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	scope_json JSONB NOT NULL,
@@ -527,12 +649,17 @@ CREATE TABLE IF NOT EXISTS report (
 	error_json JSONB,
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
-	PRIMARY KEY (id)
+	PRIMARY KEY (id),
+	CONSTRAINT uq_report_schedule_audience UNIQUE (subscription_id, schedule_key, audience_scope_hash)
 );
 CREATE INDEX IF NOT EXISTS ix_report_analysis_run_id ON report (analysis_run_id);
+CREATE INDEX IF NOT EXISTS ix_report_audience_scope_hash ON report (audience_scope_hash);
 CREATE INDEX IF NOT EXISTS ix_report_owner_id ON report (owner_id);
+CREATE INDEX IF NOT EXISTS ix_report_period_template ON report (period_start, period_end, template_id);
+CREATE INDEX IF NOT EXISTS ix_report_schedule_key ON report (schedule_key);
 CREATE INDEX IF NOT EXISTS ix_report_source_id ON report (source_id);
 CREATE INDEX IF NOT EXISTS ix_report_status ON report (status);
+CREATE INDEX IF NOT EXISTS ix_report_subscription_id ON report (subscription_id);
 CREATE INDEX IF NOT EXISTS ix_report_template_id ON report (template_id);
 
 CREATE TABLE IF NOT EXISTS report_delivery (
@@ -543,14 +670,49 @@ CREATE TABLE IF NOT EXISTS report_delivery (
 	channel VARCHAR(24) NOT NULL,
 	status VARCHAR(24) NOT NULL,
 	attempt INTEGER NOT NULL,
+	attempt_count INTEGER NOT NULL,
+	recipient_user_id VARCHAR(40),
+	recipient_address_snapshot VARCHAR(254),
+	idempotency_key VARCHAR(160),
+	next_retry_at TIMESTAMP WITHOUT TIME ZONE,
+	error_category VARCHAR(64),
+	provider_message_id VARCHAR(160),
 	response_id VARCHAR(120),
 	error_json JSONB,
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	sent_at TIMESTAMP WITHOUT TIME ZONE,
-	PRIMARY KEY (id)
+	PRIMARY KEY (id),
+	CONSTRAINT uq_report_delivery_version_user_channel UNIQUE (version_id, recipient_user_id, channel),
+	CONSTRAINT ck_report_delivery_attempt_count CHECK (attempt_count >= 0),
+	UNIQUE (idempotency_key)
 );
+CREATE INDEX IF NOT EXISTS ix_report_delivery_next_retry_at ON report_delivery (next_retry_at);
+CREATE INDEX IF NOT EXISTS ix_report_delivery_recipient_user_id ON report_delivery (recipient_user_id);
 CREATE INDEX IF NOT EXISTS ix_report_delivery_report_id ON report_delivery (report_id);
 CREATE INDEX IF NOT EXISTS ix_report_delivery_version_id ON report_delivery (version_id);
+
+CREATE TABLE IF NOT EXISTS report_file (
+	id VARCHAR(40) NOT NULL,
+	report_id VARCHAR(40) NOT NULL,
+	version_id VARCHAR(40) NOT NULL,
+	format VARCHAR(12) NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	storage_uri TEXT,
+	mime_type VARCHAR(120),
+	file_size BIGINT,
+	checksum VARCHAR(128),
+	generation_attempt INTEGER NOT NULL,
+	error_json JSONB,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	generated_at TIMESTAMP WITHOUT TIME ZONE,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_report_file_version_format UNIQUE (version_id, format),
+	CONSTRAINT ck_report_file_format CHECK (format IN ('pdf', 'xlsx')),
+	CONSTRAINT ck_report_file_status CHECK (status IN ('queued', 'generating', 'ready', 'failed'))
+);
+CREATE INDEX IF NOT EXISTS ix_report_file_report_id ON report_file (report_id);
+CREATE INDEX IF NOT EXISTS ix_report_file_status ON report_file (status);
+CREATE INDEX IF NOT EXISTS ix_report_file_version_id ON report_file (version_id);
 
 CREATE TABLE IF NOT EXISTS report_section (
 	id VARCHAR(40) NOT NULL,
@@ -619,15 +781,21 @@ CREATE TABLE IF NOT EXISTS report_version (
 	report_id VARCHAR(40) NOT NULL,
 	version INTEGER NOT NULL,
 	status VARCHAR(24) NOT NULL,
+	supersedes_version_id VARCHAR(40),
 	summary TEXT NOT NULL,
 	content_json JSONB NOT NULL,
 	data_snapshot_json JSONB NOT NULL,
+	validation_json JSONB NOT NULL,
+	workflow_version VARCHAR(64) NOT NULL,
+	model_snapshot_json JSONB NOT NULL,
+	data_quality_json JSONB NOT NULL,
 	created_by VARCHAR(64) NOT NULL,
 	approved_by VARCHAR(64),
 	generated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	published_at TIMESTAMP WITHOUT TIME ZONE,
 	PRIMARY KEY (id),
-	CONSTRAINT uq_report_version UNIQUE (report_id, version)
+	CONSTRAINT uq_report_version UNIQUE (report_id, version),
+	FOREIGN KEY(supersedes_version_id) REFERENCES report_version (id) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS ix_report_version_report_id ON report_version (report_id);
 
@@ -660,6 +828,22 @@ CREATE TABLE IF NOT EXISTS table_relation (
 );
 CREATE INDEX IF NOT EXISTS ix_table_relation_source_id ON table_relation (source_id);
 
+CREATE TABLE IF NOT EXISTS delivery_attempt (
+	id VARCHAR(40) NOT NULL,
+	delivery_id VARCHAR(40) NOT NULL,
+	attempt_number INTEGER NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	provider_message_id VARCHAR(160),
+	error_category VARCHAR(64),
+	error_json JSONB,
+	started_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	finished_at TIMESTAMP WITHOUT TIME ZONE,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_delivery_attempt_number UNIQUE (delivery_id, attempt_number),
+	FOREIGN KEY(delivery_id) REFERENCES report_delivery (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_delivery_attempt_delivery_id ON delivery_attempt (delivery_id);
+
 CREATE TABLE IF NOT EXISTS email_verification_challenge (
 	id VARCHAR(40) NOT NULL,
 	user_id VARCHAR(40) NOT NULL,
@@ -684,6 +868,42 @@ CREATE TABLE IF NOT EXISTS email_verification_challenge (
 CREATE INDEX IF NOT EXISTS ix_email_verification_challenge_email_created ON email_verification_challenge (email_canonical, created_at);
 CREATE INDEX IF NOT EXISTS ix_email_verification_challenge_user ON email_verification_challenge (user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active ON email_verification_challenge (user_id) WHERE consumed_at IS NULL AND superseded_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS message_recipient (
+	id VARCHAR(40) NOT NULL,
+	message_id VARCHAR(40) NOT NULL,
+	user_id VARCHAR(40) NOT NULL,
+	message_status_snapshot VARCHAR(24) NOT NULL,
+	is_read BOOLEAN NOT NULL,
+	read_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_message_recipient_user UNIQUE (message_id, user_id),
+	FOREIGN KEY(message_id) REFERENCES message (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_message_recipient_is_read ON message_recipient (is_read);
+CREATE INDEX IF NOT EXISTS ix_message_recipient_message_id ON message_recipient (message_id);
+CREATE INDEX IF NOT EXISTS ix_message_recipient_user_id ON message_recipient (user_id);
+
+CREATE TABLE IF NOT EXISTS user_membership (
+	id VARCHAR(40) NOT NULL,
+	user_id VARCHAR(40) NOT NULL,
+	organization_id VARCHAR(40) NOT NULL,
+	position_code VARCHAR(80) NOT NULL,
+	business_role VARCHAR(80) NOT NULL,
+	effective_from TIMESTAMP WITHOUT TIME ZONE,
+	effective_to TIMESTAMP WITHOUT TIME ZONE,
+	enabled BOOLEAN NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_user_membership_position UNIQUE (user_id, organization_id, position_code),
+	FOREIGN KEY(organization_id) REFERENCES organization_unit (id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS ix_user_membership_business_role ON user_membership (business_role);
+CREATE INDEX IF NOT EXISTS ix_user_membership_organization_id ON user_membership (organization_id);
+CREATE INDEX IF NOT EXISTS ix_user_membership_position_code ON user_membership (position_code);
+CREATE INDEX IF NOT EXISTS ix_user_membership_user_id ON user_membership (user_id);
 
 CREATE TABLE IF NOT EXISTS email_verification_event (
 	id VARCHAR(40) NOT NULL,
