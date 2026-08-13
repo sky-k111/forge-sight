@@ -29,8 +29,9 @@ AS $freeze$
 BEGIN
     IF TG_OP = 'DELETE' THEN
         IF OLD.status = 'published' THEN
-            RAISE EXCEPTION 'published report version % cannot be deleted', OLD.id
-                USING ERRCODE = '55000';
+            RAISE EXCEPTION USING
+                ERRCODE = '55000',
+                MESSAGE = 'published report version cannot be deleted';
         END IF;
         RETURN OLD;
     END IF;
@@ -49,8 +50,9 @@ BEGIN
         OR NEW.confidence_algorithm_version IS DISTINCT FROM OLD.confidence_algorithm_version
         OR NEW.frozen_at IS DISTINCT FROM OLD.frozen_at
     ) THEN
-        RAISE EXCEPTION 'published report version % is immutable', OLD.id
-            USING ERRCODE = '55000';
+        RAISE EXCEPTION USING
+            ERRCODE = '55000',
+            MESSAGE = 'published report version is immutable';
     END IF;
     RETURN NEW;
 END
