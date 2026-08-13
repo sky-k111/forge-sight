@@ -55,16 +55,26 @@ def safe_database_name(url: str, label: str) -> str:
 
 
 def split_sql(script: str) -> list[str]:
-    """Split generated SQL without breaking quoted semicolons."""
+    """Split SQL without breaking quoted or PostgreSQL dollar-quoted semicolons."""
     statements: list[str] = []
     buffer: list[str] = []
     quote: str | None = None
+    dollar_quote: str | None = None
     line_comment = False
     block_comment = False
     index = 0
     while index < len(script):
         char = script[index]
         following = script[index + 1] if index + 1 < len(script) else ""
+        if dollar_quote:
+            if script.startswith(dollar_quote, index):
+                buffer.append(dollar_quote)
+                index += len(dollar_quote)
+                dollar_quote = None
+            else:
+                buffer.append(char)
+                index += 1
+            continue
         if line_comment:
             if char == "\n":
                 line_comment = False
@@ -103,6 +113,14 @@ def split_sql(script: str) -> list[str]:
         if char in {"'", '"', "`"}:
             quote = char
             buffer.append(char)
+        elif char == "$":
+            match = re.match(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$", script[index:])
+            if match:
+                dollar_quote = match.group(0)
+                buffer.append(dollar_quote)
+                index += len(dollar_quote)
+                continue
+            buffer.append(char)
         elif char == ";":
             statement = "".join(buffer).strip()
             if statement:
@@ -123,6 +141,25 @@ def execute_sql_file(engine, path: Path) -> int:
         for statement in statements:
             connection.exec_driver_sql(statement)
     return len(statements)
+
+
+def postgres_migration_paths(directory: Path = DATABASE / "postgresql") -> list[Path]:
+    """Return numbered PostgreSQL increments; 000/001 are bootstrap artifacts."""
+    migrations: list[Path] = []
+    for path in directory.glob("*.sql"):
+        prefix = path.stem.split("_", 1)[0]
+        if prefix.isdigit() and int(prefix) >= 2:
+            migrations.append(path)
+    return sorted(migrations, key=lambda path: (int(path.stem.split("_", 1)[0]), path.name))
+
+
+def apply_postgres_migrations(engine, directory: Path = DATABASE / "postgresql") -> int:
+    """Apply all idempotent PostgreSQL increments in numeric order."""
+    migrations = postgres_migration_paths(directory)
+    for path in migrations:
+        statement_count = execute_sql_file(engine, path)
+        print(f"[PostgreSQL] applied {path.name} ({statement_count} statements)")
+    return len(migrations)
 
 
 def initialize_mysql(
@@ -214,6 +251,7 @@ def initialize_postgres(
     from app.db.platform import Base, platform_engine
 
     Base.metadata.create_all(platform_engine)
+    apply_postgres_migrations(platform_engine)
     print(f"[PostgreSQL] platform schema ready ({len(Base.metadata.tables)} tables)")
     if not seed_baseline:
         return
