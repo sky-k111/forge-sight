@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     auth_admin_password: str = "admin123"                     # 仅演示默认值，生产必改
     auth_admin_display_name: str = "系统管理员"
 
+    # —— 邮箱验证 ——
+    email_code_secret: str = ""                                # 生产必须配置
+    email_code_ttl_seconds: int = 600
+    email_code_resend_seconds: int = 60
+    email_code_max_attempts: int = 5
+    email_hourly_limit_email: int = 5
+    email_hourly_limit_account: int = 5
+    email_hourly_limit_ip: int = 10
+
     cors_origins: str = (
         "http://localhost:3000,http://127.0.0.1:3000,"
         "http://localhost:3001,http://127.0.0.1:3001,"
