@@ -24,7 +24,7 @@ ForgeSight 让业务人员无需掌握 SQL 和数据建模技能，也能用自�
 | 数据治理 | 管理主题、对象、规则、指标口径和数据源语义 |
 | 智能建模 | 支持训练、评估、预测和模型治理闭环 |
 | 安全执行 | 只读账号、写意图拦截、超时、行数与成本门控 |
-| 持续触达 | 规划中的周报 Agent、消息中心、邮箱推送和文件下载 |
+| 持续触达 | 周报 Agent、消息中心、邮箱推送和受控文件下载 |
 
 ## 系统架构
 
@@ -157,7 +157,7 @@ flowchart LR
     Q[Q 邮箱绑定与验证<br/>已完成] --> M[M 业务数据模型与迁移<br/>已完成]
     M --> R[R 智能生成与自动发布<br/>已完成]
     M --> V[V 版本管理与文件导出<br/>已完成]
-    M --> N[N 消息中心与公告<br/>待合并]
+    M --> N[N 消息中心与公告<br/>已完成]
     Q --> N
     Q --> E[E 邮件投递与重试]
     R --> E
@@ -176,9 +176,9 @@ flowchart LR
     classDef core fill:#FFF7ED,stroke:#EA580C,color:#7C2D12,stroke-width:1.5px;
     classDef delivery fill:#ECFDF5,stroke:#059669,color:#064E3B,stroke-width:1.5px;
     classDef quality fill:#F5F3FF,stroke:#7C3AED,color:#4C1D95,stroke-width:1.5px;
-    class Q,M,R,V done;
-    class N core;
-    class E,U delivery;
+    class Q,M,R,V,N done;
+    class E core;
+    class U delivery;
     class T quality;
 ```
 
@@ -309,9 +309,11 @@ forge-sight/
 │   │   ├── api/                   # HTTP 与 SSE 接口
 │   │   ├── auth/                  # 身份认证与权限
 │   │   ├── db/                    # SQLAlchemy 模型与数据库会话
+│   │   ├── delivery/              # 邮件模板、SMTP、投递队列与重试
 │   │   ├── gateway/               # SQL 安全执行网关
 │   │   ├── knowledge/             # 业务知识与指标口径
 │   │   ├── metadata/              # 元数据扫描与语义理解
+│   │   ├── messages/              # 消息中心与管理员公告
 │   │   ├── modeling/              # 训练、评估、预测与模型治理
 │   │   ├── reports/               # 报告模板与生成服务
 │   │   └── retrieval/             # 语义检索与上下文组装
@@ -366,5 +368,5 @@ npm run build
 
 - 智能问析、知识管理、数据资源、报告流程和安全审计已接入后端。
 - 用户注册登录、历史会话、检查点分支和智能建模已实现。
-- 周报 Agent、消息中心、邮箱绑定与邮件投递已完成需求和任务拆分，
+- 周报 Agent、消息中心、邮箱绑定与文件导出已完成；邮件投递后端已进入待合并状态，
   开发状态以 [任务中心](docs/tasks/README.md) 为准。

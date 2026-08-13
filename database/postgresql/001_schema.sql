@@ -664,8 +664,9 @@ CREATE INDEX IF NOT EXISTS ix_report_template_id ON report (template_id);
 
 CREATE TABLE IF NOT EXISTS report_delivery (
 	id VARCHAR(40) NOT NULL,
-	report_id VARCHAR(40) NOT NULL,
-	version_id VARCHAR(40) NOT NULL,
+	message_id VARCHAR(40),
+	report_id VARCHAR(40),
+	version_id VARCHAR(40),
 	subscription_id VARCHAR(40),
 	channel VARCHAR(24) NOT NULL,
 	status VARCHAR(24) NOT NULL,
@@ -677,16 +678,26 @@ CREATE TABLE IF NOT EXISTS report_delivery (
 	next_retry_at TIMESTAMP WITHOUT TIME ZONE,
 	error_category VARCHAR(64),
 	provider_message_id VARCHAR(160),
+	attachment_file_id VARCHAR(40),
+	attachment_omitted BOOLEAN NOT NULL,
+	lease_owner VARCHAR(100),
+	lease_expires_at TIMESTAMP WITHOUT TIME ZONE,
+	last_duration_ms INTEGER,
 	response_id VARCHAR(120),
 	error_json JSONB,
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	sent_at TIMESTAMP WITHOUT TIME ZONE,
 	PRIMARY KEY (id),
+	CONSTRAINT uq_report_delivery_message_user_channel UNIQUE (message_id, recipient_user_id, channel),
 	CONSTRAINT uq_report_delivery_version_user_channel UNIQUE (version_id, recipient_user_id, channel),
 	CONSTRAINT ck_report_delivery_attempt_count CHECK (attempt_count >= 0),
 	UNIQUE (idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS ix_report_delivery_next_retry_at ON report_delivery (next_retry_at);
+CREATE INDEX IF NOT EXISTS ix_report_delivery_message_id ON report_delivery (message_id);
+CREATE INDEX IF NOT EXISTS ix_report_delivery_lease_owner ON report_delivery (lease_owner);
+CREATE INDEX IF NOT EXISTS ix_report_delivery_lease_expires_at ON report_delivery (lease_expires_at);
 CREATE INDEX IF NOT EXISTS ix_report_delivery_recipient_user_id ON report_delivery (recipient_user_id);
 CREATE INDEX IF NOT EXISTS ix_report_delivery_report_id ON report_delivery (report_id);
 CREATE INDEX IF NOT EXISTS ix_report_delivery_version_id ON report_delivery (version_id);
@@ -848,6 +859,7 @@ CREATE TABLE IF NOT EXISTS delivery_attempt (
 	provider_message_id VARCHAR(160),
 	error_category VARCHAR(64),
 	error_json JSONB,
+	duration_ms INTEGER,
 	started_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	finished_at TIMESTAMP WITHOUT TIME ZONE,
 	PRIMARY KEY (id),

@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     mail_from_address: str = ""
     mail_from_name: str = "ForgeSight"
     mail_timeout_seconds: int = 10
+    mail_attachment_max_bytes: int = 10 * 1024 * 1024
+    mail_max_attempts: int = 3
+    mail_worker_lease_seconds: int = 60
+    smtp_host: str = ""
+    smtp_port: int = 465
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
 
     cors_origins: str = (
         "http://localhost:3000,http://127.0.0.1:3000,"

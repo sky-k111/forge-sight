@@ -78,6 +78,29 @@ def _loop() -> None:
                 session.commit()
         except Exception:  # noqa: BLE001 - 消息故障不能阻塞 Agent Run
             log.exception("站内消息事件处理失败")
+        try:
+            from app.delivery.provider import provider_from_settings
+            from app.delivery.service import (
+                run_delivery_event_worker_once,
+                run_delivery_worker_once,
+            )
+
+            run_delivery_event_worker_once(
+                PlatformSession,
+                f"mail-event:{_worker_id}",
+            )
+            run_delivery_worker_once(
+                PlatformSession,
+                f"mail-send:{_worker_id}",
+                provider_from_settings(settings),
+                storage_root=settings.report_storage_dir,
+                public_app_url=settings.public_app_url,
+                attachment_max_bytes=settings.mail_attachment_max_bytes,
+                max_attempts=settings.mail_max_attempts,
+                lease_seconds=settings.mail_worker_lease_seconds,
+            )
+        except Exception:  # noqa: BLE001 - 邮件失败不能影响站内发布或 Agent Run
+            log.exception("邮件投递处理失败")
         run_id = _claim_run()
         if run_id is None:
             _stop.wait(settings.agent_worker_poll_seconds)
