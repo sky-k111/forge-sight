@@ -27,8 +27,13 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $freeze$
 BEGIN
+    IF OLD.status = 'published' AND TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'published report version % cannot be deleted', OLD.id
+            USING ERRCODE = '55000';
+    END IF;
     IF OLD.status = 'published' AND (
-        NEW.summary IS DISTINCT FROM OLD.summary
+        NEW.status IS DISTINCT FROM OLD.status
+        OR NEW.summary IS DISTINCT FROM OLD.summary
         OR NEW.content_json IS DISTINCT FROM OLD.content_json
         OR NEW.data_snapshot_json IS DISTINCT FROM OLD.data_snapshot_json
         OR NEW.validation_json IS DISTINCT FROM OLD.validation_json
@@ -50,6 +55,6 @@ $freeze$;
 
 DROP TRIGGER IF EXISTS trg_report_version_immutable ON report_version;
 CREATE TRIGGER trg_report_version_immutable
-BEFORE UPDATE ON report_version
+BEFORE UPDATE OR DELETE ON report_version
 FOR EACH ROW
 EXECUTE FUNCTION prevent_published_report_version_mutation();
