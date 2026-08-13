@@ -69,7 +69,12 @@ def _seed_report_event(factory):
             period_start=datetime(2026, 8, 3),
             period_end=datetime(2026, 8, 10),
             current_version_id="version-1",
-            scope_json={"audience": {"userIds": ["user-a", "user-b", "user-disabled", "missing"]}},
+            scope_json={
+                "audience": {
+                    "userIds": ["user-a", "user-b", "user-disabled", "missing"]
+                },
+                "dimensions": {"plant": ["east"]},
+            },
         )
         version = ReportVersion(
             id="version-1",
@@ -99,23 +104,26 @@ def _seed_report_event(factory):
                 DataScopePolicy(
                     id="policy-a",
                     subject_type="user",
-                    subject_id="user-a",
+                    subject_id="user-a-id",
                     business_key="weekly_report",
                     data_source_ids_json=[1],
+                    dimensions_json={"plant": ["east"]},
                 ),
                 DataScopePolicy(
                     id="policy-b",
                     subject_type="user",
-                    subject_id="user-b",
+                    subject_id="user-b-id",
                     business_key="weekly_report",
                     data_source_ids_json=[1],
+                    dimensions_json={"plant": ["east"]},
                 ),
                 DataScopePolicy(
                     id="policy-disabled",
                     subject_type="user",
-                    subject_id="user-disabled",
+                    subject_id="user-disabled-id",
                     business_key="weekly_report",
                     data_source_ids_json=[1],
+                    dimensions_json={"plant": ["east"]},
                 ),
             ]
         )
@@ -231,7 +239,7 @@ def test_inbox_filter_cursor_unread_and_read_state_are_user_scoped(message_sessi
                 MessageRecipient(
                     id="recipient-notice-a",
                     message_id=notice.id,
-                    user_id="user-a",
+                    user_id="user-a-id",
                 ),
             ]
         )
@@ -239,27 +247,33 @@ def test_inbox_filter_cursor_unread_and_read_state_are_user_scoped(message_sessi
 
         first_page = list_user_messages(
             session,
-            identity_keys={"user-a-id", "user-a"},
+            identity_keys={"user-a-id"},
+            scope_identity_keys={"user-a-id"},
             limit=1,
             now=datetime(2026, 8, 12),
         )
+        notice.status = "withdrawn"
+        session.commit()
         second_page = list_user_messages(
             session,
-            identity_keys={"user-a-id", "user-a"},
+            identity_keys={"user-a-id"},
+            scope_identity_keys={"user-a-id"},
             limit=1,
             cursor=first_page["nextCursor"],
             now=datetime(2026, 8, 12),
         )
         reports_only = list_user_messages(
             session,
-            identity_keys={"user-a-id", "user-a"},
+            identity_keys={"user-a-id"},
+            scope_identity_keys={"user-a-id"},
             message_type="weekly_report",
             read=False,
             now=datetime(2026, 8, 12),
         )
         after_notice = list_user_messages(
             session,
-            identity_keys={"user-a-id", "user-a"},
+            identity_keys={"user-a-id"},
+            scope_identity_keys={"user-a-id"},
             published_from=datetime(2026, 8, 11),
             now=datetime(2026, 8, 12),
         )
@@ -268,29 +282,44 @@ def test_inbox_filter_cursor_unread_and_read_state_are_user_scoped(message_sessi
         assert second_page["items"][0]["id"] != "message-notice"
         assert reports_only["items"][0]["type"] == "weekly_report"
         assert [item["id"] for item in after_notice["items"]] == ["message-notice"]
-        assert unread_count(session, {"user-a-id", "user-a"}, now=datetime(2026, 8, 12)) == 2
-        assert unread_count(session, {"user-b-id", "user-b"}, now=datetime(2026, 8, 12)) == 1
+        assert unread_count(
+            session,
+            {"user-a-id"},
+            scope_identity_keys={"user-a-id"},
+            now=datetime(2026, 8, 12),
+        ) == 1
+        assert unread_count(
+            session,
+            {"user-b-id"},
+            scope_identity_keys={"user-b-id"},
+            now=datetime(2026, 8, 12),
+        ) == 1
 
         first_read = mark_message_read(
             session,
             "message-notice",
-            {"user-a-id", "user-a"},
+            {"user-a-id"},
             now=datetime(2026, 8, 12, 10, 0),
         )
         repeated = mark_message_read(
             session,
             "message-notice",
-            {"user-a-id", "user-a"},
+            {"user-a-id"},
             now=datetime(2026, 8, 12, 11, 0),
         )
 
         assert first_read["readAt"] == repeated["readAt"] == "2026-08-12T10:00:00"
-        assert unread_count(session, {"user-a-id", "user-a"}, now=datetime(2026, 8, 12)) == 1
+        assert unread_count(
+            session,
+            {"user-a-id"},
+            scope_identity_keys={"user-a-id"},
+            now=datetime(2026, 8, 12),
+        ) == 1
         with pytest.raises(PermissionError):
             mark_message_read(
                 session,
                 "message-notice",
-                {"user-b-id", "user-b"},
+                {"user-b-id"},
                 now=datetime(2026, 8, 12),
             )
 
@@ -403,7 +432,7 @@ def test_announcement_content_and_admin_lifecycle_are_safe_and_immutable(message
         assert withdrawn.withdrawal_reason == "维护窗口取消"
         assert session.query(DomainEventOutbox).filter_by(
             event_type="announcement.withdrawn"
-        ).count() == 1
+        ).count() == 0
 
 
 def test_expiration_updates_announcement_and_message_without_deleting_history(message_session):
@@ -441,7 +470,13 @@ def test_expiration_updates_announcement_and_message_without_deleting_history(me
         assert count == 1
         assert session.get(Announcement, announcement.id).status == "expired"
         assert session.get(Message, message.id).status == "expired"
-        assert session.get(Message, message.id).is_pinned is False
+        assert session.get(Message, message.id).is_pinned is True
+        card = serialize_message_card(
+            session.get(Message, message.id),
+            SimpleNamespace(is_read=False, read_at=None),
+            now=datetime(2026, 8, 12),
+        )
+        assert card["isPinned"] is False
 
 
 def test_message_worker_filters_events_and_moves_repeated_failures_to_dead_letter(message_session):
@@ -504,6 +539,145 @@ def test_weekly_message_detail_rechecks_current_report_data_scope(message_sessio
             get_user_message(
                 session,
                 message.id,
-                {"user-a-id", "user-a"},
+                {"user-a-id"},
+                scope_identity_keys={"user-a-id"},
                 now=datetime(2026, 8, 11),
             )
+
+
+def test_weekly_message_list_and_detail_recheck_dimension_scope(message_session):
+    _seed_report_event(message_session)
+    with message_session() as session:
+        consume_published_event(
+            session,
+            event_id="event-report",
+            worker_id="worker-a",
+            now=datetime(2026, 8, 10, 9, 0),
+        )
+        message = session.query(Message).filter_by(message_type="weekly_report").one()
+        policy = session.get(DataScopePolicy, "policy-a")
+        policy.dimensions_json = {"plant": ["west"]}
+        session.flush()
+
+        inbox = list_user_messages(
+            session,
+            identity_keys={"user-a-id"},
+            scope_identity_keys={"user-a-id"},
+            now=datetime(2026, 8, 11),
+        )
+
+        assert inbox["items"] == []
+        with pytest.raises(PermissionError):
+            get_user_message(
+                session,
+                message.id,
+                {"user-a-id"},
+                scope_identity_keys={"user-a-id"},
+                now=datetime(2026, 8, 11),
+            )
+
+
+def test_withdrawn_before_consumption_still_creates_terminal_history(message_session):
+    with message_session() as session:
+        session.add(_user("user-a-id", "user-a"))
+        draft = create_announcement(
+            session,
+            title="临时公告",
+            body="这条公告稍后撤回。",
+            audience={"userIds": ["user-a"]},
+            created_by="admin",
+        )
+        publish_announcement(
+            session,
+            draft.id,
+            published_by="admin",
+            now=datetime(2026, 8, 13, 9, 0),
+        )
+        withdraw_announcement(
+            session,
+            draft.id,
+            withdrawn_by="admin",
+            reason="信息有误",
+            now=datetime(2026, 8, 13, 9, 1),
+        )
+        event = session.query(DomainEventOutbox).filter_by(
+            event_type="announcement.published"
+        ).one()
+        event.status = "processing"
+        event.lease_owner = "worker-a"
+        session.commit()
+
+        message = consume_published_event(
+            session,
+            event_id=event.id,
+            worker_id="worker-a",
+            now=datetime(2026, 8, 13, 9, 2),
+        )
+        session.commit()
+
+        assert message.status == "withdrawn"
+        assert session.query(MessageRecipient).one().user_id == "user-a-id"
+        assert session.query(DomainEventOutbox).filter_by(
+            event_type="message.published"
+        ).count() == 0
+        assert session.get(DomainEventOutbox, event.id).status == "completed"
+
+
+def test_recipient_expansion_commits_in_resumable_batches(message_session):
+    with message_session() as session:
+        session.add_all([_user(f"user-{index}-id", f"user-{index}") for index in range(3)])
+        draft = create_announcement(
+            session,
+            title="批量公告",
+            body="分批展开接收人。",
+            audience={"userIds": [f"user-{index}" for index in range(3)]},
+            created_by="admin",
+        )
+        publish_announcement(
+            session,
+            draft.id,
+            published_by="admin",
+            now=datetime(2026, 8, 13, 9, 0),
+        )
+        event = session.query(DomainEventOutbox).filter_by(
+            event_type="announcement.published"
+        ).one()
+        event.status = "processing"
+        event.lease_owner = "worker-a"
+        session.commit()
+
+        consume_published_event(
+            session,
+            event_id=event.id,
+            worker_id="worker-a",
+            recipient_batch_size=1,
+            now=datetime(2026, 8, 13, 9, 1),
+        )
+        session.commit()
+
+        event = session.get(DomainEventOutbox, event.id)
+        assert event.status == "pending"
+        assert session.query(MessageRecipient).count() == 1
+        assert session.query(DomainEventOutbox).filter_by(
+            event_type="message.published"
+        ).count() == 0
+
+        for worker_id, minute in (("worker-b", 2), ("worker-c", 3)):
+            event.status = "processing"
+            event.lease_owner = worker_id
+            event.attempt_count += 1
+            session.commit()
+            consume_published_event(
+                session,
+                event_id=event.id,
+                worker_id=worker_id,
+                recipient_batch_size=1,
+                now=datetime(2026, 8, 13, 9, minute),
+            )
+            session.commit()
+
+        assert session.get(DomainEventOutbox, event.id).status == "completed"
+        assert session.query(MessageRecipient).count() == 3
+        assert session.query(DomainEventOutbox).filter_by(
+            event_type="message.published"
+        ).count() == 1

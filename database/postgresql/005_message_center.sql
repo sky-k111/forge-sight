@@ -3,6 +3,68 @@
 ALTER TABLE IF EXISTS announcement
     ADD COLUMN IF NOT EXISTS withdrawal_reason VARCHAR(500);
 
+-- N07: recipient authorization uses only platform_user.id. Convert unambiguous
+-- legacy username rows before the API stops consulting the username namespace.
+-- If a username collides with another user's stable ID, keep the stable-ID
+-- interpretation; this prevents an account-name collision from granting access.
+DELETE FROM message_recipient AS legacy
+USING platform_user AS owner, message_recipient AS stable
+WHERE legacy.user_id = owner.username
+  AND legacy.user_id <> owner.id
+  AND NOT EXISTS (
+      SELECT 1 FROM platform_user AS id_owner WHERE id_owner.id = legacy.user_id
+  )
+  AND stable.message_id = legacy.message_id
+  AND stable.user_id = owner.id
+  AND stable.id <> legacy.id;
+
+UPDATE message_recipient AS recipient
+SET user_id = owner.id
+FROM platform_user AS owner
+WHERE recipient.user_id = owner.username
+  AND recipient.user_id <> owner.id
+  AND NOT EXISTS (
+      SELECT 1 FROM platform_user AS id_owner WHERE id_owner.id = recipient.user_id
+  );
+
+DELETE FROM user_membership AS legacy
+USING platform_user AS owner, user_membership AS stable
+WHERE legacy.user_id = owner.username
+  AND legacy.user_id <> owner.id
+  AND NOT EXISTS (
+      SELECT 1 FROM platform_user AS id_owner WHERE id_owner.id = legacy.user_id
+  )
+  AND stable.user_id = owner.id
+  AND stable.organization_id = legacy.organization_id
+  AND stable.position_code = legacy.position_code
+  AND stable.id <> legacy.id;
+
+UPDATE user_membership AS membership
+SET user_id = owner.id
+FROM platform_user AS owner
+WHERE membership.user_id = owner.username
+  AND membership.user_id <> owner.id
+  AND NOT EXISTS (
+      SELECT 1 FROM platform_user AS id_owner WHERE id_owner.id = membership.user_id
+  );
+
+UPDATE data_scope_policy AS policy
+SET subject_id = owner.id
+FROM platform_user AS owner
+WHERE policy.subject_type = 'user'
+  AND policy.subject_id = owner.username
+  AND policy.subject_id <> owner.id
+  AND NOT EXISTS (
+      SELECT 1 FROM platform_user AS id_owner WHERE id_owner.id = policy.subject_id
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM data_scope_policy AS canonical
+      WHERE canonical.subject_type = 'user'
+        AND canonical.subject_id = owner.id
+        AND canonical.business_key = policy.business_key
+  );
+
 CREATE OR REPLACE FUNCTION protect_frozen_announcement()
 RETURNS trigger
 LANGUAGE plpgsql

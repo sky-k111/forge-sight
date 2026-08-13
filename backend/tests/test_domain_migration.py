@@ -63,6 +63,41 @@ def test_domain_migration_is_repeatable_and_preserves_legacy_subscription():
                     "TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
                 )
             )
+            connection.execute(
+                text(
+                    "INSERT INTO platform_user "
+                    "(id, username, password_hash, display_name, role, title, enabled, created_at) "
+                    "VALUES "
+                    "('stable-user-id', 'legacy-user-name', 'hash', '旧用户', 'business', "
+                    "'成员', TRUE, CURRENT_TIMESTAMP), "
+                    "('attacker-id', 'stable-user-id', 'hash', '碰撞用户', 'business', "
+                    "'成员', TRUE, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO message "
+                    "(id, message_type, source, title, summary, priority, is_pinned, "
+                    "status, idempotency_key, created_at, published_at) VALUES "
+                    "('legacy-message', 'admin_announcement', 'admin', '旧消息', '', "
+                    "'normal', FALSE, 'published', 'legacy-message', CURRENT_TIMESTAMP, "
+                    "CURRENT_TIMESTAMP), "
+                    "('collision-message', 'admin_announcement', 'admin', '碰撞消息', '', "
+                    "'normal', FALSE, 'published', 'collision-message', CURRENT_TIMESTAMP, "
+                    "CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO message_recipient "
+                    "(id, message_id, user_id, message_status_snapshot, is_read, created_at) "
+                    "VALUES "
+                    "('legacy-recipient', 'legacy-message', 'legacy-user-name', "
+                    "'published', FALSE, CURRENT_TIMESTAMP), "
+                    "('collision-recipient', 'collision-message', 'stable-user-id', "
+                    "'published', FALSE, CURRENT_TIMESTAMP)"
+                )
+            )
 
         migration_count = len(bootstrap.postgres_migration_paths(MIGRATION_DIR))
         assert bootstrap.apply_postgres_migrations(scoped_engine, MIGRATION_DIR) == migration_count
@@ -184,8 +219,20 @@ def test_domain_migration_is_repeatable_and_preserves_legacy_subscription():
                     )
                 ).scalars()
             )
+            recipient_owners = dict(
+                connection.execute(
+                    text(
+                        "SELECT message_id, user_id FROM message_recipient "
+                        "WHERE message_id IN ('legacy-message', 'collision-message')"
+                    )
+                ).all()
+            )
 
         assert legacy == ("feishu", "after_review")
+        assert recipient_owners == {
+            "legacy-message": "stable-user-id",
+            "collision-message": "stable-user-id",
+        }
         assert {
             "report_file",
             "message",

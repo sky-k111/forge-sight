@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
@@ -267,23 +267,6 @@ def withdraw_announcement(
         related_type="announcement", related_id=row.id
     ):
         message.status = "withdrawn"
-        message.is_pinned = False
-    key = f"announcement.withdrawn:{row.id}:r{row.revision}"
-    if session.query(DomainEventOutbox).filter_by(idempotency_key=key).first() is None:
-        session.add(
-            DomainEventOutbox(
-                id=new_id("evt"),
-                event_type="announcement.withdrawn",
-                aggregate_id=row.id,
-                idempotency_key=key,
-                payload_json={
-                    "announcementId": row.id,
-                    "revision": row.revision,
-                    "reason": row.withdrawal_reason,
-                    "withdrawnAt": now.isoformat(),
-                },
-            )
-        )
     session.flush()
     return row
 
@@ -305,7 +288,6 @@ def expire_announcements(session: Session, *, now: datetime | None = None) -> in
             related_type="announcement", related_id=row.id
         ):
             message.status = "expired"
-            message.is_pinned = False
     session.flush()
     return len(rows)
 
@@ -402,16 +384,40 @@ def _get_or_create_recipient(
         )
 
 
+def _report_scope_allows(
+    session: Session,
+    report: Report,
+    identity_keys: set[str],
+    *,
+    now: datetime,
+) -> bool:
+    resolved = resolve_audience_scope(
+        session,
+        "weekly_report",
+        {"userIds": sorted(identity_keys)},
+        now=now,
+    )
+    requested_dimensions = (report.scope_json or {}).get("dimensions") or {}
+    dimensions_allowed = all(
+        set(values) <= set(resolved.dimensions.get(dimension, ()))
+        for dimension, values in requested_dimensions.items()
+    )
+    return report.source_id in resolved.data_source_ids and dimensions_allowed
+
+
 def consume_published_event(
     session: Session,
     *,
     event_id: str,
     worker_id: str,
     now: datetime | None = None,
+    recipient_batch_size: int = 200,
+    lease_seconds: int = 60,
 ) -> Message:
-    """Expand one claimed publication event into an idempotent inbox message."""
+    """Expand one claimed publication event in resumable idempotent batches."""
 
     now = now or datetime.now()
+    recipient_batch_size = max(1, min(recipient_batch_size, 1000))
     event = (
         session.query(DomainEventOutbox)
         .filter_by(id=event_id)
@@ -420,6 +426,7 @@ def consume_published_event(
     )
     if event.status != "processing" or event.lease_owner != worker_id:
         raise ValueError("Outbox 事件未被当前消息 Worker 领取")
+    event.lease_expires_at = now + timedelta(seconds=max(10, lease_seconds))
     if event.event_type not in {
         "report.version.published",
         "announcement.published",
@@ -436,15 +443,28 @@ def consume_published_event(
         if report is None or version is None or version.report_id != report.id:
             raise ValueError("周报发布事件缺少有效报告版本")
         idempotency_key = f"inbox:report-version:{version.id}"
+        message_status = "published"
     else:
         announcement = session.get(
             Announcement, payload.get("announcementId") or event.aggregate_id
         )
-        if announcement is None or announcement.status != "published":
+        if announcement is None or announcement.status not in {
+            "published",
+            "withdrawn",
+            "expired",
+        }:
             raise ValueError("公告发布事件缺少有效公告版本")
         idempotency_key = (
             f"inbox:announcement:{announcement.id}:r{announcement.revision}"
         )
+        message_status = announcement.status
+        if (
+            message_status == "published"
+            and announcement.expires_at
+            and announcement.expires_at <= now
+        ):
+            message_status = "expired"
+
     message = session.query(Message).filter_by(idempotency_key=idempotency_key).first()
     if message is None:
         if report is not None and version is not None:
@@ -459,7 +479,7 @@ def consume_published_event(
                 report_version_id=version.id,
                 priority="normal",
                 is_pinned=False,
-                status="published",
+                status=message_status,
                 idempotency_key=idempotency_key,
                 valid_from=now,
                 published_at=version.published_at or now,
@@ -476,13 +496,15 @@ def consume_published_event(
                 related_id=announcement.id,
                 priority=announcement.priority,
                 is_pinned=announcement.is_pinned,
-                status="published",
+                status=message_status,
                 idempotency_key=idempotency_key,
                 valid_from=announcement.valid_from or announcement.published_at or now,
                 expires_at=announcement.expires_at,
                 published_at=announcement.published_at or now,
             )
         message = get_or_create_message(session, **message_values)
+    elif message_status in {"withdrawn", "expired"}:
+        message.status = message_status
 
     if report is not None:
         audience = (report.scope_json or {}).get("audience") or {
@@ -494,80 +516,118 @@ def consume_published_event(
         audience = announcement.audience_json or {}
         business_key = "admin_announcement"
     resolved = resolve_audience_scope(session, business_key, audience, now=now)
-    skipped: dict[str, str] = {}
-    seen_users: set[str] = set()
-    for user_id in resolved.user_ids:
-        user = _platform_user(session, user_id)
-        if user is None:
-            skipped[user_id] = "user_not_found"
-            continue
-        if not user.enabled:
-            skipped[user_id] = "user_disabled"
-            continue
-        if user.id in seen_users:
-            continue
-        seen_users.add(user.id)
-        if report is not None:
-            individual_scope = resolve_audience_scope(
-                session,
-                "weekly_report",
-                {"userIds": [user.id, user.username]},
-                now=now,
-            )
-            if report.source_id not in individual_scope.data_source_ids:
-                skipped[user_id] = "data_scope_denied"
-                continue
-        _get_or_create_recipient(session, message.id, user.id)
+    previous_progress = payload.get("messageProcessing") or {}
+    processed_identity_keys = {
+        str(value) for value in previous_progress.get("processedIdentityKeys") or []
+    }
+    skipped = dict(previous_progress.get("skipped") or {})
+    pending_identity_keys = [
+        identity
+        for identity in resolved.user_ids
+        if identity not in processed_identity_keys
+    ]
 
+    for identity in pending_identity_keys[:recipient_batch_size]:
+        try:
+            with session.begin_nested():
+                user = _platform_user(session, identity)
+                if user is None:
+                    skipped[identity] = "user_not_found"
+                elif not user.enabled:
+                    skipped[identity] = "user_disabled"
+                elif report is not None and not _report_scope_allows(
+                    session,
+                    report,
+                    {user.id},
+                    now=now,
+                ):
+                    skipped[identity] = "data_scope_denied"
+                else:
+                    _get_or_create_recipient(session, message.id, user.id)
+        except Exception as exc:  # noqa: BLE001 - one recipient cannot abort the batch
+            skipped[identity] = f"recipient_error:{type(exc).__name__}"
+        processed_identity_keys.add(identity)
+
+    remaining_count = sum(
+        identity not in processed_identity_keys for identity in resolved.user_ids
+    )
+    recipient_count = (
+        session.query(MessageRecipient).filter_by(message_id=message.id).count()
+    )
     event.payload_json = {
         **payload,
         "messageProcessing": {
             "messageId": message.id,
-            "recipientCount": session.query(MessageRecipient)
-            .filter_by(message_id=message.id)
-            .count(),
+            "recipientCount": recipient_count,
+            "processedIdentityKeys": sorted(processed_identity_keys),
+            "remainingCount": remaining_count,
             "skipped": skipped,
         },
     }
-    downstream_key = f"message.published:{message.id}"
-    if (
-        session.query(DomainEventOutbox)
-        .filter_by(idempotency_key=downstream_key)
-        .first()
-        is None
-    ):
-        session.add(
-            DomainEventOutbox(
-                id=new_id("evt"),
-                event_type="message.published",
-                aggregate_id=message.id,
-                idempotency_key=downstream_key,
-                payload_json={
-                    "messageId": message.id,
-                    "messageType": message.message_type,
-                    "recipientCount": session.query(MessageRecipient)
-                    .filter_by(message_id=message.id)
-                    .count(),
-                    "publishedAt": message.published_at.isoformat(),
-                },
+    if remaining_count:
+        event.status = "pending"
+        event.lease_owner = None
+        event.lease_expires_at = None
+        event.next_retry_at = now
+        event.error_summary = None
+        event.attempt_count = max(0, event.attempt_count - 1)
+        session.flush()
+        return message
+
+    if _effective_status(message, now) == "published":
+        downstream_key = f"message.published:{message.id}"
+        if (
+            session.query(DomainEventOutbox)
+            .filter_by(idempotency_key=downstream_key)
+            .first()
+            is None
+        ):
+            session.add(
+                DomainEventOutbox(
+                    id=new_id("evt"),
+                    event_type="message.published",
+                    aggregate_id=message.id,
+                    idempotency_key=downstream_key,
+                    payload_json={
+                        "messageId": message.id,
+                        "messageType": message.message_type,
+                        "recipientCount": recipient_count,
+                        "publishedAt": message.published_at.isoformat(),
+                    },
+                )
             )
-        )
     complete_outbox_event(session, event.id, worker_id, now=now)
     return message
 
 
-def _encode_cursor(message_id: str) -> str:
+def _message_sort_key(message: Message) -> tuple[bool, datetime, str]:
+    return bool(message.is_pinned), message.published_at, message.id
+
+
+def _encode_cursor(message: Message) -> str:
+    payload = {
+        "isPinned": bool(message.is_pinned),
+        "publishedAt": message.published_at.isoformat(),
+        "messageId": message.id,
+    }
     return base64.urlsafe_b64encode(
-        json.dumps({"messageId": message_id}, separators=(",", ":")).encode()
+        json.dumps(payload, separators=(",", ":")).encode()
     ).rstrip(b"=").decode()
 
 
-def _decode_cursor(cursor: str | None) -> str | None:
+def _decode_cursor(cursor: str | None) -> tuple[bool, datetime, str] | None:
     if not cursor:
         return None
     try:
         raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
-        return str(json.loads(raw)["messageId"])
+        payload = json.loads(raw)
+        if not isinstance(payload["isPinned"], bool):
+            raise ValueError("invalid pin value")
+        return (
+            payload["isPinned"],
+            datetime.fromisoformat(str(payload["publishedAt"])),
+            str(payload["messageId"]),
+        )
     except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
         raise ValueError("消息分页游标无效") from exc
 
@@ -593,6 +653,7 @@ def list_user_messages(
     session: Session,
     *,
     identity_keys: set[str],
+    scope_identity_keys: set[str] | None = None,
     message_type: str | None = None,
     read: bool | None = None,
     priority: str | None = None,
@@ -608,9 +669,16 @@ def list_user_messages(
     now = now or datetime.now()
     rows = _recipient_rows(session, identity_keys)
     filtered = []
+    scope_keys = scope_identity_keys or identity_keys
     for message, recipient in rows:
         if message.valid_from and message.valid_from > now:
             continue
+        if message.message_type == "weekly_report":
+            report = session.get(Report, message.related_id)
+            if report is None or not _report_scope_allows(
+                session, report, scope_keys, now=now
+            ):
+                continue
         if message_type and message.message_type != message_type:
             continue
         if read is not None and recipient.is_read is not read:
@@ -625,20 +693,12 @@ def list_user_messages(
         if keyword.strip() and keyword.strip().casefold() not in searchable:
             continue
         filtered.append((message, recipient))
-    filtered.sort(
-        key=lambda item: (
-            bool(item[0].is_pinned and _effective_status(item[0], now) == "published"),
-            item[0].published_at,
-            item[0].id,
-        ),
-        reverse=True,
-    )
-    after_id = _decode_cursor(cursor)
-    if after_id:
-        positions = [index for index, (message, _) in enumerate(filtered) if message.id == after_id]
-        if not positions:
-            raise ValueError("消息分页游标已失效")
-        filtered = filtered[positions[0] + 1 :]
+    filtered.sort(key=lambda item: _message_sort_key(item[0]), reverse=True)
+    after_key = _decode_cursor(cursor)
+    if after_key:
+        filtered = [
+            item for item in filtered if _message_sort_key(item[0]) < after_key
+        ]
     page = filtered[: max(1, min(limit, 100))]
     has_more = len(filtered) > len(page)
     return {
@@ -646,22 +706,36 @@ def list_user_messages(
             serialize_message_card(message, recipient, now=now)
             for message, recipient in page
         ],
-        "nextCursor": _encode_cursor(page[-1][0].id) if page and has_more else None,
+        "nextCursor": _encode_cursor(page[-1][0]) if page and has_more else None,
     }
 
 
 def unread_count(
-    session: Session, identity_keys: set[str], *, now: datetime | None = None
+    session: Session,
+    identity_keys: set[str],
+    *,
+    scope_identity_keys: set[str] | None = None,
+    now: datetime | None = None,
 ) -> int:
     now = now or datetime.now()
-    return sum(
-        1
-        for message, recipient in _recipient_rows(session, identity_keys)
-        if not recipient.is_read
-        and message.status == "published"
-        and (message.valid_from is None or message.valid_from <= now)
-        and (message.expires_at is None or message.expires_at > now)
-    )
+    scope_keys = scope_identity_keys or identity_keys
+    count = 0
+    for message, recipient in _recipient_rows(session, identity_keys):
+        if (
+            recipient.is_read
+            or message.status != "published"
+            or (message.valid_from is not None and message.valid_from > now)
+            or (message.expires_at is not None and message.expires_at <= now)
+        ):
+            continue
+        if message.message_type == "weekly_report":
+            report = session.get(Report, message.related_id)
+            if report is None or not _report_scope_allows(
+                session, report, scope_keys, now=now
+            ):
+                continue
+        count += 1
+    return count
 
 
 def mark_message_read(
@@ -699,6 +773,7 @@ def get_user_message(
     message_id: str,
     identity_keys: set[str],
     *,
+    scope_identity_keys: set[str] | None = None,
     now: datetime | None = None,
     mark_read: bool = True,
 ) -> dict:
@@ -721,13 +796,12 @@ def get_user_message(
         version = session.get(ReportVersion, message.report_version_id)
         if report is None or version is None or version.report_id != report.id:
             raise PermissionError("周报版本不存在或不可访问")
-        current_scope = resolve_audience_scope(
+        if not _report_scope_allows(
             session,
-            "weekly_report",
-            {"userIds": sorted(identity_keys)},
+            report,
+            scope_identity_keys or identity_keys,
             now=now,
-        )
-        if report.source_id not in current_scope.data_source_ids:
+        ):
             raise PermissionError("当前数据权限不允许读取此周报消息")
     if mark_read:
         mark_message_read(session, message_id, identity_keys, now=now)
@@ -799,7 +873,8 @@ def run_message_worker_once(
     session_factory,
     worker_id: str,
     now: datetime | None = None,
-    limit: int = 20,
+    limit: int = 1,
+    recipient_batch_size: int = 200,
     max_attempts: int = 5,
     retry_seconds: int = 60,
 ) -> dict[str, int]:
@@ -827,9 +902,13 @@ def run_message_worker_once(
                     event_id=event_id,
                     worker_id=worker_id,
                     now=now,
+                    recipient_batch_size=recipient_batch_size,
                 )
                 session.commit()
-                processed += 1
+                with session_factory() as status_session:
+                    completed = status_session.get(DomainEventOutbox, event_id)
+                    if completed is not None and completed.status == "completed":
+                        processed += 1
             except Exception as exc:  # noqa: BLE001 - event retry state is the boundary
                 session.rollback()
                 fail_outbox_event(

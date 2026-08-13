@@ -176,8 +176,8 @@ flowchart LR
     classDef core fill:#FFF7ED,stroke:#EA580C,color:#7C2D12,stroke-width:1.5px;
     classDef delivery fill:#ECFDF5,stroke:#059669,color:#064E3B,stroke-width:1.5px;
     classDef quality fill:#F5F3FF,stroke:#7C3AED,color:#4C1D95,stroke-width:1.5px;
-    class Q,M,R done;
-    class V,N core;
+    class Q,M,R,V done;
+    class N core;
     class E,U delivery;
     class T quality;
 ```

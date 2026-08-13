@@ -48,11 +48,15 @@ INBOX_RESPONSE_EXAMPLE = {
 
 
 def _identity_keys(user: dict) -> set[str]:
-    return {
-        str(value)
-        for value in (user.get("id"), user.get("username"))
-        if value
-    }
+    """Return only the stable identity namespace used by recipient rows."""
+
+    return {str(user["id"])} if user.get("id") else set()
+
+
+def _scope_identity_keys(user: dict) -> set[str]:
+    """Keep policy resolution in the same stable identity namespace."""
+
+    return _identity_keys(user)
 
 
 def _require_admin(user: dict) -> None:
@@ -113,6 +117,7 @@ def list_messages(
             return service.list_user_messages(
                 session,
                 identity_keys=_identity_keys(user),
+                scope_identity_keys=_scope_identity_keys(user),
                 message_type=message_type,
                 read=read_value,
                 priority=priority,
@@ -129,7 +134,13 @@ def list_messages(
 @router.get("/messages/unread-count")
 def get_unread_count(user: dict = Depends(require_user)):
     with PlatformSession() as session:
-        return {"count": service.unread_count(session, _identity_keys(user))}
+        return {
+            "count": service.unread_count(
+                session,
+                _identity_keys(user),
+                scope_identity_keys=_scope_identity_keys(user),
+            )
+        }
 
 
 @router.get("/messages/{message_id}")
@@ -137,7 +148,11 @@ def get_message(message_id: str, user: dict = Depends(require_user)):
     try:
         with PlatformSession() as session:
             result = service.get_user_message(
-                session, message_id, _identity_keys(user), mark_read=True
+                session,
+                message_id,
+                _identity_keys(user),
+                scope_identity_keys=_scope_identity_keys(user),
+                mark_read=True,
             )
             session.commit()
         _audit(user, action="读取站内消息", resource=f"message:{message_id}")

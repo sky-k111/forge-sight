@@ -42,6 +42,13 @@ def api_session(monkeypatch):
                     display_name="管理员",
                     role="admin",
                 ),
+                PlatformUser(
+                    id="attacker-id",
+                    username="user-a-id",
+                    password_hash="test",
+                    display_name="碰撞用户",
+                    role="business",
+                ),
                 Message(
                     id="message-1",
                     message_type="admin_announcement",
@@ -56,7 +63,7 @@ def api_session(monkeypatch):
                 MessageRecipient(
                     id="recipient-1",
                     message_id="message-1",
-                    user_id="user-a",
+                    user_id="user-a-id",
                 ),
             ]
         )
@@ -91,6 +98,24 @@ def test_authenticated_user_can_list_count_and_mark_only_own_messages(api_sessio
     assert count.json() == {"count": 1}
     assert detail.json()["isRead"] is True
     assert repeated.json()["readAt"] == detail.json()["readAt"]
+
+
+def test_username_equal_to_another_user_id_cannot_access_their_messages(api_session):
+    app.dependency_overrides[require_user] = lambda: {
+        "id": "attacker-id",
+        "username": "user-a-id",
+        "displayName": "碰撞用户",
+        "role": "business",
+    }
+    client = TestClient(app)
+
+    inbox = client.get("/api/v1/messages")
+    detail = client.get("/api/v1/messages/message-1")
+    read = client.post("/api/v1/messages/message-1/read")
+
+    assert inbox.json()["items"] == []
+    assert detail.status_code == 404
+    assert read.status_code == 404
 
 
 def test_announcement_writes_are_admin_only_and_return_frozen_publish_contract(api_session):
