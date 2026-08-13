@@ -444,6 +444,19 @@ def _finalize_report(session, report: Report, run: AnalysisRun) -> None:
         "artifactChecksums": {item.id: item.checksum for item in all_artifacts},
         "generatedAt": datetime.now().isoformat(),
     }
+    if report.subscription_id and run.status == "succeeded":
+        subscription = session.query(ReportSubscription).filter_by(id=report.subscription_id).first()
+        if subscription and subscription.publish_policy == "auto_publish":
+            from app.reports.automation import finalize_automatic_report
+
+            finalize_automatic_report(
+                session,
+                report=report,
+                version=version,
+                sections=sections,
+                raw_summary=summary,
+                timezone_name=subscription.timezone,
+            )
 
 
 def submit_review(report_id: str, user_id: str, session_factory=PlatformSession) -> dict:
@@ -579,6 +592,10 @@ def create_subscription(payload, session_factory=PlatformSession) -> dict:
             publish_policy=payload.publishPolicy,
             enabled=True,
         )
+        if row.cadence == "weekly":
+            from app.reports.automation import initialize_next_run
+
+            row.next_run_at = initialize_next_run(row)
         session.add(row)
         session.commit()
         return _subscription_dict(row)

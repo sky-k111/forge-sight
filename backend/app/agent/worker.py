@@ -50,6 +50,12 @@ def _claim_run() -> str | None:
 
 def _loop() -> None:
     while not _stop.is_set():
+        try:
+            from app.reports.automation import scan_due_subscriptions
+
+            scan_due_subscriptions()
+        except Exception:  # noqa: BLE001 - 单个调度故障不能阻塞既有 Agent 队列
+            log.exception("周期周报到期扫描失败")
         run_id = _claim_run()
         if run_id is None:
             _stop.wait(settings.agent_worker_poll_seconds)
