@@ -5,6 +5,8 @@
 > 赛题背景：【A07】企业数据底座智能问析 Agent 系统（杭州自动化技术研究院）
 >
 > 赛题原文与逐项实现映射见 [docs/competition/](docs/competition/README.md)。
+> 当前需求、未完成任务、已完成任务与详细执行步骤统一从
+> [docs/tasks/](docs/tasks/README.md) 进入。
 
 ## ✨ 核心特性
 
