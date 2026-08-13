@@ -23,11 +23,14 @@ SPEC.loader.exec_module(bootstrap)
 
 
 def test_domain_migration_is_registered_after_email_identity():
-    assert [path.name for path in bootstrap.postgres_migration_paths(MIGRATION_DIR)] == [
-        "002_email_identity.sql",
-        "003_domain_model.sql",
-        "004_report_version_freeze.sql",
-    ]
+    names = [path.name for path in bootstrap.postgres_migration_paths(MIGRATION_DIR)]
+
+    assert names[:2] == ["002_email_identity.sql", "003_domain_model.sql"]
+    assert "004_report_version_freeze.sql" in names
+    assert "005_message_center.sql" in names
+    assert names.index("003_domain_model.sql") < names.index(
+        "004_report_version_freeze.sql"
+    ) < names.index("005_message_center.sql")
 
 
 @pytest.mark.skipif(
@@ -61,8 +64,9 @@ def test_domain_migration_is_repeatable_and_preserves_legacy_subscription():
                 )
             )
 
-        assert bootstrap.apply_postgres_migrations(scoped_engine, MIGRATION_DIR) == 3
-        assert bootstrap.apply_postgres_migrations(scoped_engine, MIGRATION_DIR) == 3
+        migration_count = len(bootstrap.postgres_migration_paths(MIGRATION_DIR))
+        assert bootstrap.apply_postgres_migrations(scoped_engine, MIGRATION_DIR) == migration_count
+        assert bootstrap.apply_postgres_migrations(scoped_engine, MIGRATION_DIR) == migration_count
 
         with scoped_engine.begin() as connection:
             connection.execute(
@@ -103,6 +107,59 @@ def test_domain_migration_is_repeatable_and_preserves_legacy_subscription():
             connection.execute(
                 text("DELETE FROM report_version WHERE id = 'frozen-version'")
             )
+
+        with scoped_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO announcement "
+                    "(id, revision, title, body, priority, is_pinned, audience_json, "
+                    "audience_scope_hash, status, created_by, published_by, created_at, published_at) "
+                    "VALUES ('frozen-announcement', 1, '公告', '冻结正文', 'normal', FALSE, "
+                    "'{}'::jsonb, 'scope-a', 'published', 'admin', 'admin', "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+        with pytest.raises(DBAPIError), scoped_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE announcement SET body = '篡改正文' "
+                    "WHERE id = 'frozen-announcement'"
+                )
+            )
+        with pytest.raises(DBAPIError), scoped_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE announcement SET withdrawal_reason = '越权写入' "
+                    "WHERE id = 'frozen-announcement'"
+                )
+            )
+        with scoped_engine.begin() as connection:
+            changed = connection.execute(
+                text(
+                    "UPDATE announcement SET status = 'withdrawn', withdrawn_by = 'admin', "
+                    "withdrawn_at = CURRENT_TIMESTAMP, withdrawal_reason = '取消发布' "
+                    "WHERE id = 'frozen-announcement'"
+                )
+            )
+            assert changed.rowcount == 1
+        with pytest.raises(DBAPIError), scoped_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM announcement WHERE id = 'frozen-announcement'")
+            )
+        with scoped_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO announcement "
+                    "(id, revision, title, body, priority, is_pinned, audience_json, "
+                    "audience_scope_hash, status, created_by, created_at) "
+                    "VALUES ('draft-announcement', 1, '草稿', '可删除', 'normal', FALSE, "
+                    "'{}'::jsonb, 'scope-draft', 'draft', 'admin', CURRENT_TIMESTAMP)"
+                )
+            )
+            deleted = connection.execute(
+                text("DELETE FROM announcement WHERE id = 'draft-announcement'")
+            )
+            assert deleted.rowcount == 1
 
         with scoped_engine.connect() as connection:
             legacy = connection.execute(

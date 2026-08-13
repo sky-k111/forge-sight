@@ -66,6 +66,18 @@ def _loop() -> None:
             )
         except Exception:  # noqa: BLE001 - PDF 与 Excel 失败互相隔离并由任务状态重试
             log.exception("周报文件生成失败")
+        try:
+            from app.messages.service import expire_announcements, run_message_worker_once
+
+            run_message_worker_once(
+                session_factory=PlatformSession,
+                worker_id=f"message:{_worker_id}",
+            )
+            with PlatformSession() as session:
+                expire_announcements(session)
+                session.commit()
+        except Exception:  # noqa: BLE001 - 消息故障不能阻塞 Agent Run
+            log.exception("站内消息事件处理失败")
         run_id = _claim_run()
         if run_id is None:
             _stop.wait(settings.agent_worker_poll_seconds)

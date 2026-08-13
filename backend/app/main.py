@@ -13,6 +13,7 @@ from app.api import (
     datasources,
     gateway,
     knowledge,
+    messages,
     model_governance,
     modeling,
     overview,
@@ -106,6 +107,7 @@ app.include_router(gateway.router)
 app.include_router(resources.router)
 app.include_router(datasources.router)
 app.include_router(knowledge.router)
+app.include_router(messages.router)
 app.include_router(retrieval.router)
 app.include_router(analysis.router)
 app.include_router(overview.router)
