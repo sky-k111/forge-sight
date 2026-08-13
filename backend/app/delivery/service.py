@@ -253,6 +253,24 @@ def claim_deliveries(
     return rows
 
 
+def delivery_work_pending(session: Session, *, now: datetime | None = None) -> bool:
+    """Avoid opening an SMTP connection when no delivery can make progress."""
+
+    current = now or datetime.now()
+    due = or_(ReportDelivery.next_retry_at.is_(None), ReportDelivery.next_retry_at <= current)
+    eligible = or_(
+        ReportDelivery.status == "blocked_configuration",
+        and_(ReportDelivery.status.in_(("queued", "retry_wait", "waiting_attachment")), due),
+        and_(ReportDelivery.status == "sending", ReportDelivery.lease_expires_at <= current),
+    )
+    return (
+        session.query(ReportDelivery.id)
+        .filter(ReportDelivery.channel == "email", eligible)
+        .first()
+        is not None
+    )
+
+
 def block_deliveries_for_configuration(
     session: Session,
     _detail: str = "",
@@ -286,25 +304,21 @@ def block_deliveries_for_configuration(
 
 
 def resume_configuration_blocked_deliveries(
-    session: Session, *, current_configuration_fingerprint: str
+    session: Session, *, configuration_verified: bool
 ) -> int:
+    if not configuration_verified:
+        return 0
     rows = session.query(ReportDelivery).filter_by(
         channel="email", status="blocked_configuration"
     ).all()
     current = datetime.now()
-    resumable = [
-        row
-        for row in rows
-        if (row.error_json or {}).get("configurationFingerprint")
-        != current_configuration_fingerprint
-    ]
-    for row in resumable:
+    for row in rows:
         row.status = "queued"
         row.error_category = None
         row.error_json = None
         row.updated_at = current
     session.flush()
-    return len(resumable)
+    return len(rows)
 
 
 def _claimed_delivery(session: Session, delivery_id: str, worker_id: str) -> ReportDelivery:

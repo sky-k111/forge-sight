@@ -54,6 +54,8 @@ class ProviderFailure(RuntimeError):
 class MailProvider(Protocol):
     def send(self, message: OutgoingMail) -> ProviderResult: ...
 
+    def verify_configuration(self) -> None: ...
+
 
 @dataclass
 class CaptureMailProvider:
@@ -62,6 +64,9 @@ class CaptureMailProvider:
     def send(self, message: OutgoingMail) -> ProviderResult:
         self.messages.append(message)
         return ProviderResult(provider_message_id=f"capture-{len(self.messages)}")
+
+    def verify_configuration(self) -> None:
+        return None
 
 
 def _safe_header(value: str, name: str) -> str:
@@ -123,6 +128,28 @@ class SmtpMailProvider:
                 filename=_safe_header(item.filename, "attachment filename"),
             )
         return message
+
+    def verify_configuration(self) -> None:
+        """Connect and authenticate without sending a message."""
+
+        config = self._config
+        context = ssl.create_default_context()
+        try:
+            smtp_class = smtplib.SMTP_SSL if config.use_tls and config.port == 465 else smtplib.SMTP
+            kwargs = {"host": config.host, "port": config.port, "timeout": config.timeout_seconds}
+            if smtp_class is smtplib.SMTP_SSL:
+                kwargs["context"] = context
+            with smtp_class(**kwargs) as client:
+                if config.use_tls and config.port != 465:
+                    client.starttls(context=context)
+                if config.username:
+                    client.login(config.username, config.password)
+        except smtplib.SMTPAuthenticationError as exc:
+            raise ProviderFailure(
+                "configuration", "SMTP authentication failed", retryable=False
+            ) from exc
+        except (TimeoutError, OSError, smtplib.SMTPException) as exc:
+            raise ProviderFailure("network", type(exc).__name__, retryable=True) from exc
 
     def send(self, mail: OutgoingMail) -> ProviderResult:
         message = self._mime(mail)

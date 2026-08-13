@@ -18,7 +18,6 @@ from app.db.models import (
     DomainEventOutbox,
     Message,
     MessageRecipient,
-    PlatformUser,
     Report,
     ReportFile,
     ReportVersion,
@@ -87,24 +86,11 @@ def authorize_report_view(
     if user.get("role") == "admin":
         return
     stable_id = str(user.get("id") or "")
-    username = str(user.get("username") or "")
     if not stable_id:
         raise FileAccessDenied("无权查看此周报")
-    owner = session.get(PlatformUser, report.owner_id)
-    if owner is not None:
-        # Stable user ids take precedence over usernames. Otherwise a user
-        # whose username equals another user's id could claim that report.
-        is_owner = owner.id == stable_id
-        scope_identity = stable_id
-    else:
-        owner = session.query(PlatformUser).filter_by(username=report.owner_id).first()
-        if owner is not None:
-            is_owner = owner.id == stable_id
-            scope_identity = stable_id
-        else:
-            # Legacy/test databases may not yet have a PlatformUser row.
-            is_owner = report.owner_id in {stable_id, username}
-            scope_identity = report.owner_id if is_owner else stable_id
+    # owner_id is normalized to immutable PlatformUser.id by migration 007.
+    is_owner = report.owner_id == stable_id
+    scope_identity = stable_id
     has_relationship = is_owner or _is_recipient(session, version.id, {stable_id})
     if not has_relationship:
         raise FileAccessDenied("无权查看此周报")

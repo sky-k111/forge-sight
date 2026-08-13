@@ -154,3 +154,28 @@ def test_recipient_refusal_uses_recipient_response_code(
 
     assert caught.value.retryable is retryable
     assert caught.value.category == category
+
+
+def test_smtp_health_check_classifies_authentication_failure(monkeypatch):
+    import app.delivery.provider as module
+
+    class AuthenticationFailureSmtp(_FakeSmtp):
+        def login(self, _username, _password):
+            raise smtplib.SMTPAuthenticationError(535, b"credentials rejected")
+
+    monkeypatch.setattr(module.smtplib, "SMTP", AuthenticationFailureSmtp)
+    provider = SmtpMailProvider(
+        SmtpConfig(
+            host="smtp.example.test",
+            port=587,
+            username="sender@example.test",
+            password="secret",
+            from_address="sender@example.test",
+        )
+    )
+
+    with pytest.raises(ProviderFailure) as caught:
+        provider.verify_configuration()
+
+    assert caught.value.category == "configuration"
+    assert caught.value.retryable is False

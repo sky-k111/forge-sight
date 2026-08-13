@@ -631,10 +631,10 @@ def test_configuration_failure_blocks_queue_and_is_visible(delivery_session):
         assert delivery.error_category == "configuration"
         assert "SMTP 配置无效" not in str(delivery.error_json)
         assert resume_configuration_blocked_deliveries(
-            session, current_configuration_fingerprint="config-a"
+            session, configuration_verified=False
         ) == 0
         assert resume_configuration_blocked_deliveries(
-            session, current_configuration_fingerprint="config-b"
+            session, configuration_verified=True
         ) == 1
         session.commit()
         assert session.get(ReportDelivery, delivery.id).status == "queued"
@@ -666,10 +666,10 @@ def test_runtime_authentication_failure_blocks_until_configuration_changes(
         assert delivery.error_category == "configuration"
         assert "authentication" not in str(delivery.error_json)
         assert resume_configuration_blocked_deliveries(
-            session, current_configuration_fingerprint="bad-config"
+            session, configuration_verified=False
         ) == 0
         assert resume_configuration_blocked_deliveries(
-            session, current_configuration_fingerprint="fixed-config"
+            session, configuration_verified=True
         ) == 1
 
 

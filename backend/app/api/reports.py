@@ -4,7 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse, HTMLResponse
 
 from app.audit.service import write_audit
-from app.auth.deps import current_user_display, effective_user_id, optional_user, require_user
+from app.auth.deps import (
+    current_user_display,
+    effective_stable_user_id,
+    optional_user,
+    require_user,
+)
 from app.config import settings
 from app.db.platform import PlatformSession
 from app.db.models import Report, ReportVersion
@@ -61,7 +66,9 @@ def list_reports(
 ):
     return {
         "items": service.list_reports(
-            owner_id=effective_user_id(ownerId, user), status=statusValue, source_id=sourceId
+            owner_id=effective_stable_user_id(ownerId, user),
+            status=statusValue,
+            source_id=sourceId,
         )
     }
 
@@ -70,7 +77,9 @@ def list_reports(
 def create_report(payload: ReportCreate, user: dict | None = Depends(optional_user)):
     try:
         return service.create_report(
-            payload.model_copy(update={"ownerId": effective_user_id(payload.ownerId, user)})
+            payload.model_copy(
+                update={"ownerId": effective_stable_user_id(payload.ownerId, user)}
+            )
         )
     except Exception as exc:
         _raise(exc)
@@ -201,14 +210,23 @@ def download_report_file(file_id: str, user: dict = Depends(require_user)):
 
 
 @router.get("/report-subscriptions")
-def list_subscriptions(ownerId: str = Query(default="local-test-user", min_length=1, max_length=64)):
-    return {"items": service.list_subscriptions(ownerId)}
+def list_subscriptions(
+    ownerId: str = Query(default="local-test-user", min_length=1, max_length=64),
+    user: dict | None = Depends(optional_user),
+):
+    return {"items": service.list_subscriptions(effective_stable_user_id(ownerId, user))}
 
 
 @router.post("/report-subscriptions", status_code=status.HTTP_201_CREATED)
-def create_subscription(payload: SubscriptionCreate):
+def create_subscription(
+    payload: SubscriptionCreate, user: dict | None = Depends(optional_user)
+):
     try:
-        return service.create_subscription(payload)
+        return service.create_subscription(
+            payload.model_copy(
+                update={"ownerId": effective_stable_user_id(payload.ownerId, user)}
+            )
+        )
     except Exception as exc:
         _raise(exc)
 

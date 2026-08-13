@@ -106,6 +106,14 @@ def effective_user_id(raw: str | None, user: dict | None) -> str:
     return raw or "local-test-user"
 
 
+def effective_stable_user_id(raw: str | None, user: dict | None) -> str:
+    """Use the immutable account id for persisted ownership relationships."""
+
+    if user:
+        return user["id"]
+    return raw or "local-test-user"
+
+
 def current_user_display(user: dict | None) -> tuple[str, str]:
     """返回 (user_name, role) 供审计使用；未登录为演示用户。"""
     if user:

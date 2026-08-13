@@ -28,9 +28,13 @@ def test_domain_migration_is_registered_after_email_identity():
     assert names[:2] == ["002_email_identity.sql", "003_domain_model.sql"]
     assert "004_report_version_freeze.sql" in names
     assert "005_message_center.sql" in names
+    assert "006_email_delivery.sql" in names
+    assert "007_stable_report_owner.sql" in names
     assert names.index("003_domain_model.sql") < names.index(
         "004_report_version_freeze.sql"
-    ) < names.index("005_message_center.sql")
+    ) < names.index("005_message_center.sql") < names.index(
+        "006_email_delivery.sql"
+    ) < names.index("007_stable_report_owner.sql")
 
 
 @pytest.mark.skipif(
@@ -72,6 +76,18 @@ def test_domain_migration_is_repeatable_and_preserves_legacy_subscription():
                     "'成员', TRUE, CURRENT_TIMESTAMP), "
                     "('attacker-id', 'stable-user-id', 'hash', '碰撞用户', 'business', "
                     "'成员', TRUE, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO report "
+                    "(id, title, template_id, source_id, report_type, topic, status, "
+                    "owner_id, publish_source, period_start, period_end, scope_json, "
+                    "created_at, updated_at) VALUES "
+                    "('report-1', '碰撞用户周报', 'tpl-weekly', 1, 'weekly', '生产', "
+                    "'draft', 'stable-user-id', 'manual', CURRENT_TIMESTAMP, "
+                    "CURRENT_TIMESTAMP + INTERVAL '7 days', '{}'::jsonb, "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
                 )
             )
             connection.execute(
@@ -227,12 +243,16 @@ def test_domain_migration_is_repeatable_and_preserves_legacy_subscription():
                     )
                 ).all()
             )
+            report_owner = connection.execute(
+                text("SELECT owner_id FROM report WHERE id = 'report-1'")
+            ).scalar_one()
 
         assert legacy == ("feishu", "after_review")
         assert recipient_owners == {
             "legacy-message": "stable-user-id",
             "collision-message": "stable-user-id",
         }
+        assert report_owner == "attacker-id"
         assert {
             "report_file",
             "message",

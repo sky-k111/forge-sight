@@ -86,6 +86,7 @@ def _loop() -> None:
             )
             from app.delivery.service import (
                 block_deliveries_for_configuration,
+                delivery_work_pending,
                 resume_configuration_blocked_deliveries,
                 run_delivery_event_worker_once,
                 run_delivery_worker_once,
@@ -96,24 +97,29 @@ def _loop() -> None:
                 f"mail-event:{_worker_id}",
             )
             configuration_fingerprint = mail_configuration_fingerprint(settings)
-            try:
-                mail_provider = provider_from_settings(settings)
-            except ProviderFailure as exc:
-                if exc.category != "configuration":
-                    raise
-                with PlatformSession() as session:
-                    blocked = block_deliveries_for_configuration(
-                        session,
-                        configuration_fingerprint=configuration_fingerprint,
-                    )
-                    session.commit()
-                if blocked:
-                    log.error("邮件服务配置无效，已暂停 %s 条投递", blocked)
-            else:
+            with PlatformSession() as session:
+                pending = delivery_work_pending(session)
+            mail_provider = None
+            if pending:
+                try:
+                    mail_provider = provider_from_settings(settings)
+                    mail_provider.verify_configuration()
+                except ProviderFailure as exc:
+                    if exc.category not in {"configuration", "network"}:
+                        raise
+                    with PlatformSession() as session:
+                        blocked = block_deliveries_for_configuration(
+                            session,
+                            configuration_fingerprint=configuration_fingerprint,
+                        )
+                        session.commit()
+                    if blocked:
+                        log.error("邮件服务配置无效，已暂停 %s 条投递", blocked)
+            if mail_provider is not None:
                 with PlatformSession() as session:
                     resumed = resume_configuration_blocked_deliveries(
                         session,
-                        current_configuration_fingerprint=configuration_fingerprint,
+                        configuration_verified=True,
                     )
                     session.commit()
                 if resumed:
