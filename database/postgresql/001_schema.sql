@@ -265,6 +265,32 @@ CREATE TABLE IF NOT EXISTS data_table (
 );
 CREATE INDEX IF NOT EXISTS ix_data_table_source_id ON data_table (source_id);
 
+CREATE TABLE IF NOT EXISTS governed_model (
+	id VARCHAR(40) NOT NULL,
+	task_id VARCHAR(40) NOT NULL,
+	name VARCHAR(120) NOT NULL,
+	version INTEGER NOT NULL,
+	algorithm VARCHAR(30) NOT NULL,
+	status VARCHAR(16) NOT NULL,
+	owner_id VARCHAR(64) NOT NULL,
+	metrics_json JSONB NOT NULL,
+	features_json JSONB NOT NULL,
+	model_path TEXT NOT NULL,
+	feature_names_json JSONB NOT NULL,
+	feature_encoders_json JSONB NOT NULL,
+	feature_importance_json JSONB NOT NULL,
+	call_count INTEGER NOT NULL,
+	reviewed_by VARCHAR(64),
+	reviewed_at TIMESTAMP WITHOUT TIME ZONE,
+	published_at TIMESTAMP WITHOUT TIME ZONE,
+	retired_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_governed_model_status ON governed_model (status);
+CREATE INDEX IF NOT EXISTS ix_governed_model_task_id ON governed_model (task_id);
+
 CREATE TABLE IF NOT EXISTS knowledge_metric (
 	id VARCHAR(20) NOT NULL,
 	name VARCHAR(100) NOT NULL,
@@ -407,6 +433,80 @@ CREATE TABLE IF NOT EXISTS metric_table_binding (
 	CONSTRAINT uq_metric_binding_table UNIQUE (binding_id, table_name)
 );
 CREATE INDEX IF NOT EXISTS ix_metric_table_binding_binding_id ON metric_table_binding (binding_id);
+
+CREATE TABLE IF NOT EXISTS modeling_evaluation (
+	id VARCHAR(40) NOT NULL,
+	task_id VARCHAR(40) NOT NULL,
+	result_json JSONB NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_modeling_eval_task UNIQUE (task_id)
+);
+CREATE INDEX IF NOT EXISTS ix_modeling_evaluation_task_id ON modeling_evaluation (task_id);
+
+CREATE TABLE IF NOT EXISTS modeling_inference_log (
+	id VARCHAR(40) NOT NULL,
+	task_id VARCHAR(40) NOT NULL,
+	model_id VARCHAR(40) NOT NULL,
+	input_json JSONB NOT NULL,
+	output_json JSONB NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_modeling_inference_log_model_id ON modeling_inference_log (model_id);
+CREATE INDEX IF NOT EXISTS ix_modeling_inference_log_task_id ON modeling_inference_log (task_id);
+
+CREATE TABLE IF NOT EXISTS modeling_task (
+	id VARCHAR(40) NOT NULL,
+	title VARCHAR(120) NOT NULL,
+	source VARCHAR(10) NOT NULL,
+	source_id INTEGER NOT NULL,
+	owner_id VARCHAR(64) NOT NULL,
+	goal TEXT NOT NULL,
+	task_type VARCHAR(20) NOT NULL,
+	dataset_name VARCHAR(100) NOT NULL,
+	dataset_sql TEXT NOT NULL,
+	target_field VARCHAR(64) NOT NULL,
+	target_label VARCHAR(100) NOT NULL,
+	features_json JSONB NOT NULL,
+	candidates_json JSONB NOT NULL,
+	selected_model VARCHAR(30),
+	status VARCHAR(16) NOT NULL,
+	error_json JSONB,
+	run_id VARCHAR(40),
+	modeling_proposal_json JSONB NOT NULL,
+	sample_count INTEGER NOT NULL,
+	metric VARCHAR(100) NOT NULL,
+	trained_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_modeling_task_owner_id ON modeling_task (owner_id);
+CREATE INDEX IF NOT EXISTS ix_modeling_task_run_id ON modeling_task (run_id);
+CREATE INDEX IF NOT EXISTS ix_modeling_task_source_id ON modeling_task (source_id);
+CREATE INDEX IF NOT EXISTS ix_modeling_task_status ON modeling_task (status);
+CREATE INDEX IF NOT EXISTS ix_modeling_task_task_type ON modeling_task (task_type);
+
+CREATE TABLE IF NOT EXISTS platform_user (
+	id VARCHAR(40) NOT NULL,
+	username VARCHAR(50) NOT NULL,
+	password_hash VARCHAR(256) NOT NULL,
+	display_name VARCHAR(50) NOT NULL,
+	role VARCHAR(20) NOT NULL,
+	title VARCHAR(100) NOT NULL,
+	enabled BOOLEAN NOT NULL,
+	email VARCHAR(254),
+	email_canonical VARCHAR(254),
+	email_verified_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT ck_platform_user_email_pair CHECK ((email IS NULL AND email_canonical IS NULL) OR (email IS NOT NULL AND email_canonical IS NOT NULL)),
+	CONSTRAINT ck_platform_user_verified_email CHECK (email_verified_at IS NULL OR email IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_platform_user_username ON platform_user (username);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_user_email ON platform_user (email_canonical) WHERE email_canonical IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS report (
 	id VARCHAR(40) NOT NULL,
@@ -559,3 +659,48 @@ CREATE TABLE IF NOT EXISTS table_relation (
 	PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS ix_table_relation_source_id ON table_relation (source_id);
+
+CREATE TABLE IF NOT EXISTS email_verification_challenge (
+	id VARCHAR(40) NOT NULL,
+	user_id VARCHAR(40) NOT NULL,
+	purpose VARCHAR(24) NOT NULL,
+	email VARCHAR(254) NOT NULL,
+	email_canonical VARCHAR(254) NOT NULL,
+	code_hash VARCHAR(256),
+	expires_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	attempt_count INTEGER DEFAULT 0 NOT NULL,
+	send_count INTEGER DEFAULT 1 NOT NULL,
+	last_sent_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	consumed_at TIMESTAMP WITHOUT TIME ZONE,
+	superseded_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT ck_email_challenge_purpose CHECK (purpose IN ('bind', 'verify', 'change')),
+	CONSTRAINT ck_email_challenge_attempt_count CHECK (attempt_count >= 0),
+	CONSTRAINT ck_email_challenge_send_count CHECK (send_count >= 0),
+	CONSTRAINT ck_email_challenge_active_hash CHECK (consumed_at IS NOT NULL OR superseded_at IS NOT NULL OR code_hash IS NOT NULL),
+	FOREIGN KEY(user_id) REFERENCES platform_user (id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS ix_email_verification_challenge_email_created ON email_verification_challenge (email_canonical, created_at);
+CREATE INDEX IF NOT EXISTS ix_email_verification_challenge_user ON email_verification_challenge (user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active ON email_verification_challenge (user_id) WHERE consumed_at IS NULL AND superseded_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS email_verification_event (
+	id VARCHAR(40) NOT NULL,
+	user_id VARCHAR(40) NOT NULL,
+	email_canonical VARCHAR(254) NOT NULL,
+	purpose VARCHAR(24) NOT NULL,
+	challenge_id VARCHAR(40),
+	event_type VARCHAR(24) NOT NULL,
+	outcome VARCHAR(32) DEFAULT '' NOT NULL,
+	ip VARCHAR(45) DEFAULT '' NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT ck_email_event_purpose CHECK (purpose IN ('bind', 'verify', 'change')),
+	FOREIGN KEY(user_id) REFERENCES platform_user (id) ON DELETE RESTRICT,
+	FOREIGN KEY(challenge_id) REFERENCES email_verification_challenge (id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS ix_email_verification_event_challenge_time ON email_verification_event (challenge_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_email_verification_event_email_time ON email_verification_event (email_canonical, created_at);
+CREATE INDEX IF NOT EXISTS ix_email_verification_event_ip_time ON email_verification_event (ip, created_at);
+CREATE INDEX IF NOT EXISTS ix_email_verification_event_user_time ON email_verification_event (user_id, created_at);

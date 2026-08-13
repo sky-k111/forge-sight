@@ -8,9 +8,18 @@ from sqlalchemy.pool import StaticPool
 from app.agent import service as analysis_service
 from app.agent import usage as usage_service
 from app.agent import runner as runner_service
+from app.config import settings
 from app.db.models import Base, DataSource, DataTable, TableField, TableRelation
 from app.knowledge import seed, service
 from app.retrieval import service as retrieval_service
+
+
+@pytest.fixture(autouse=True)
+def explicit_test_demo_mode(monkeypatch):
+    """Existing API tests intentionally exercise the documented local demo mode."""
+    monkeypatch.setattr(settings, "auth_email_gate_enabled", False)
+    monkeypatch.setattr(settings, "auth_email_gate_allow_capture", True)
+    monkeypatch.setattr(settings, "demo_mode_enabled", True)
 
 
 @pytest.fixture()

@@ -28,14 +28,20 @@ async function request(path, options = {}) {
       }
     }
     let detail = `HTTP ${response.status}`;
+    let errorCode = `HTTP_${response.status}`;
+    let retryAfterSeconds;
     try {
       const body = await response.json();
       if (body?.detail) detail = typeof body.detail === "string" ? body.detail : detail;
+      if (body?.errorCode) errorCode = body.errorCode;
+      retryAfterSeconds = body?.retryAfterSeconds;
     } catch {
       // 保留默认错误信息
     }
     const error = new Error(detail);
-    error.code = `HTTP_${response.status}`;
+    error.code = errorCode;
+    error.status = response.status;
+    if (retryAfterSeconds !== undefined) error.retryAfterSeconds = retryAfterSeconds;
     throw error;
   }
   return response.json();

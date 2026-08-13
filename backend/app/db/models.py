@@ -2,7 +2,21 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -713,6 +727,24 @@ class PlatformUser(Base):
     """平台用户（登录名统一小写）。表在平台库 forge_sight_app；业务库红线不受影响。"""
 
     __tablename__ = "platform_user"
+    __table_args__ = (
+        CheckConstraint(
+            "(email IS NULL AND email_canonical IS NULL) OR "
+            "(email IS NOT NULL AND email_canonical IS NOT NULL)",
+            name="ck_platform_user_email_pair",
+        ),
+        CheckConstraint(
+            "email_verified_at IS NULL OR email IS NOT NULL",
+            name="ck_platform_user_verified_email",
+        ),
+        Index(
+            "uq_platform_user_email",
+            "email_canonical",
+            unique=True,
+            postgresql_where=text("email_canonical IS NOT NULL"),
+            sqlite_where=text("email_canonical IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True, comment="登录名（统一小写）")
@@ -721,4 +753,96 @@ class PlatformUser(Base):
     role: Mapped[str] = mapped_column(String(20), default="business", comment="business / admin")
     title: Mapped[str] = mapped_column(String(100), default="", comment="岗位展示，如 业务人员")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="停用后无法登录")
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True, comment="可投递邮箱")
+    email_canonical: Mapped[str | None] = mapped_column(
+        String(254), nullable=True, comment="邮箱唯一比较值"
+    )
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class EmailVerificationChallenge(Base):
+    """单次邮箱所有权验证挑战；每个用户同时最多存在一条活动记录。"""
+
+    __tablename__ = "email_verification_challenge"
+    __table_args__ = (
+        CheckConstraint(
+            "purpose IN ('bind', 'verify', 'change')",
+            name="ck_email_challenge_purpose",
+        ),
+        CheckConstraint("attempt_count >= 0", name="ck_email_challenge_attempt_count"),
+        CheckConstraint("send_count >= 0", name="ck_email_challenge_send_count"),
+        CheckConstraint(
+            "consumed_at IS NOT NULL OR superseded_at IS NOT NULL OR code_hash IS NOT NULL",
+            name="ck_email_challenge_active_hash",
+        ),
+        Index(
+            "uq_email_verification_challenge_active",
+            "user_id",
+            unique=True,
+            postgresql_where=text("consumed_at IS NULL AND superseded_at IS NULL"),
+            sqlite_where=text("consumed_at IS NULL AND superseded_at IS NULL"),
+        ),
+        Index("ix_email_verification_challenge_user", "user_id"),
+        Index(
+            "ix_email_verification_challenge_email_created",
+            "email_canonical",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("platform_user.id", ondelete="RESTRICT"),
+    )
+    purpose: Mapped[str] = mapped_column(String(24))
+    email: Mapped[str] = mapped_column(String(254), comment="可投递目标邮箱快照")
+    email_canonical: Mapped[str] = mapped_column(String(254), comment="邮箱唯一比较值")
+    code_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    send_count: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
+    last_sent_at: Mapped[datetime] = mapped_column(DateTime)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class EmailVerificationEvent(Base):
+    """邮箱验证的不可变安全事件，是滚动频控窗口的事实源。"""
+
+    __tablename__ = "email_verification_event"
+    __table_args__ = (
+        CheckConstraint(
+            "purpose IN ('bind', 'verify', 'change')",
+            name="ck_email_event_purpose",
+        ),
+        Index(
+            "ix_email_verification_event_email_time",
+            "email_canonical",
+            "created_at",
+        ),
+        Index("ix_email_verification_event_user_time", "user_id", "created_at"),
+        Index("ix_email_verification_event_ip_time", "ip", "created_at"),
+        Index(
+            "ix_email_verification_event_challenge_time", "challenge_id", "created_at"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("platform_user.id", ondelete="RESTRICT"),
+    )
+    email_canonical: Mapped[str] = mapped_column(String(254))
+    purpose: Mapped[str] = mapped_column(String(24))
+    challenge_id: Mapped[str | None] = mapped_column(
+        String(40),
+        ForeignKey("email_verification_challenge.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(24))
+    outcome: Mapped[str] = mapped_column(String(32), default="", server_default=text("''"))
+    ip: Mapped[str] = mapped_column(String(45), default="", server_default=text("''"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

@@ -5,8 +5,74 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException
+from starlette.responses import JSONResponse
 
+from app.config import settings
 from app.auth.service import decode_token, get_user_by_username, user_payload
+
+
+PUBLIC_AUTH_PATHS = {
+    "/api/auth/register",
+    "/api/auth/login",
+}
+RESTRICTED_AUTH_PATHS = {
+    "/api/auth/me",
+    "/api/auth/logout",
+    "/api/auth/email/challenges",
+    "/api/auth/email/change",
+    "/api/auth/email/verify",
+}
+
+
+def _gate_error(status_code: int, detail: str, error_code: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": detail, "errorCode": error_code},
+    )
+
+
+def email_gate_response(path: str, authorization: str | None) -> JSONResponse | None:
+    """Return a denial response for protected API paths, otherwise None."""
+    if not path.startswith("/api/") or path in PUBLIC_AUTH_PATHS:
+        return None
+    if path in RESTRICTED_AUTH_PATHS:
+        return None
+
+    claims = None
+    user = None
+    if authorization and authorization.startswith("Bearer "):
+        claims = decode_token(authorization.removeprefix("Bearer ").strip())
+        if claims:
+            user = get_user_by_username(claims.get("sub", ""))
+            if user is not None and not user.enabled:
+                user = None
+
+    if settings.auth_email_gate_enabled:
+        if user is None:
+            return _gate_error(401, "请先登录", "AUTH_REQUIRED")
+        is_full = (
+            claims.get("auth_scope") == "full"
+            and user.email_verified_at is not None
+        )
+        if not is_full:
+            return _gate_error(403, "请先完成邮箱验证", "EMAIL_VERIFICATION_REQUIRED")
+        return None
+
+    if user is not None or settings.demo_mode_enabled:
+        return None
+    return _gate_error(401, "请先登录", "AUTH_REQUIRED")
+
+
+def validate_email_gate_configuration() -> None:
+    if (
+        settings.auth_email_gate_enabled
+        and settings.mail_provider.strip().lower() == "capture"
+        and not settings.auth_email_gate_allow_capture
+    ):
+        raise RuntimeError(
+            "AUTH_EMAIL_GATE_ENABLED cannot be used with capture mail unless "
+            "AUTH_EMAIL_GATE_ALLOW_CAPTURE=true"
+        )
 
 
 def optional_user(authorization: str | None = Header(default=None)) -> dict | None:

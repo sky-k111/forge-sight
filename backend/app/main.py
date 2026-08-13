@@ -3,7 +3,7 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
@@ -29,6 +29,9 @@ log = logging.getLogger(__name__)
 
 
 def create_platform_tables():
+    from app.auth.deps import validate_email_gate_configuration
+
+    validate_email_gate_configuration()
     Base.metadata.create_all(platform_engine)
     # 确保默认数据源存在；资源目录为空时自动做首次元数据扫描
     from app.db.models import DataTable
@@ -84,6 +87,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def enforce_email_identity_gate(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    from app.auth.deps import email_gate_response
+
+    denied = email_gate_response(request.url.path, request.headers.get("Authorization"))
+    if denied is not None:
+        return denied
+    return await call_next(request)
 
 app.include_router(security.router)
 app.include_router(auth.router)

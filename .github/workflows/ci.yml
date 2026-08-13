@@ -26,9 +26,24 @@ jobs:
     name: Backend Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: forge_sight_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d forge_sight_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       BUSINESS_DB_URL: sqlite+pysqlite:///./ci-business.db
       PLATFORM_DB_URL: sqlite+pysqlite:///./ci-platform.db
+      POSTGRES_TEST_URL: postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/forge_sight_ci
     defaults:
       run:
         working-directory: backend
@@ -115,6 +130,7 @@ jobs:
           npx --yes markdownlint-cli2@0.18.1
           ".github/**/*.md"
           "docs/CI_AND_PR_WORKFLOW.md"
+          "docs/tasks/GPT_DEVELOPMENT_WORKFLOW.md"
 
   ci-gate:
     name: CI Gate
