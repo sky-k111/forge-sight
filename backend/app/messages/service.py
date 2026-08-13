@@ -873,7 +873,6 @@ def run_message_worker_once(
     session_factory,
     worker_id: str,
     now: datetime | None = None,
-    limit: int = 1,
     recipient_batch_size: int = 200,
     max_attempts: int = 5,
     retry_seconds: int = 60,
@@ -886,7 +885,7 @@ def run_message_worker_once(
             session,
             worker_id,
             now=now,
-            limit=limit,
+            limit=1,
             event_types=("report.version.published", "announcement.published"),
         )
         event_ids = [row.id for row in claimed]
@@ -904,11 +903,11 @@ def run_message_worker_once(
                     now=now,
                     recipient_batch_size=recipient_batch_size,
                 )
+                completed = session.get(DomainEventOutbox, event_id)
+                is_completed = completed is not None and completed.status == "completed"
                 session.commit()
-                with session_factory() as status_session:
-                    completed = status_session.get(DomainEventOutbox, event_id)
-                    if completed is not None and completed.status == "completed":
-                        processed += 1
+                if is_completed:
+                    processed += 1
             except Exception as exc:  # noqa: BLE001 - event retry state is the boundary
                 session.rollback()
                 fail_outbox_event(
