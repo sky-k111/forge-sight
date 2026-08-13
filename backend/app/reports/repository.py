@@ -320,6 +320,7 @@ def claim_outbox_events(
     now: datetime | None = None,
     lease_seconds: int = 60,
     limit: int = 20,
+    event_types: tuple[str, ...] | None = None,
 ) -> list[DomainEventOutbox]:
     """领取可处理事件；过期 processing 租约可以被其他 Worker 恢复。"""
 
@@ -334,9 +335,11 @@ def claim_outbox_events(
             DomainEventOutbox.lease_expires_at <= now,
         ),
     )
+    query = session.query(DomainEventOutbox).filter(eligible)
+    if event_types:
+        query = query.filter(DomainEventOutbox.event_type.in_(event_types))
     rows = (
-        session.query(DomainEventOutbox)
-        .filter(eligible)
+        query
         .order_by(DomainEventOutbox.created_at, DomainEventOutbox.id)
         .with_for_update(skip_locked=True)
         .limit(limit)

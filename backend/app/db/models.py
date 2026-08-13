@@ -673,6 +673,7 @@ class Announcement(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    withdrawal_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
 class ReportSubscription(Base):
