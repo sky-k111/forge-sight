@@ -41,6 +41,13 @@ Backend tests use pytest and follow `test_*.py` / `test_*` naming. Frontend test
 
 Recent history mixes release labels and concise `feat:` messages. Prefer clear imperative Conventional Commit subjects, for example `fix: reject unsafe gateway queries`. Keep commits scoped to one concern. Pull requests should explain the user-visible change, list validation commands, link the relevant issue or phase document, and include screenshots for UI changes. Call out schema, environment-variable, or API-contract changes explicitly.
 
+## AI Development Ownership
+
+- GPT is the single implementation and review owner for the Q, M, R, V, N, E, U, and T task series. Do not delegate repository changes to another AI unless the project owner explicitly changes this rule first.
+- Follow `docs/tasks/GPT_DEVELOPMENT_WORKFLOW.md` for task order, branch scope, checkpoints, review evidence, and takeover history.
+- Keep one large task per branch and Draft PR. Finish backend contracts before dependent UI, PDF, or email-template integration, but keep all layers under the same owner.
+- Record an explicit self-review after CI. The project owner remains the only person who decides whether to merge.
+
 ## Security & Configuration
 
 Never commit `backend/.env`, credentials, webhook secrets, or local database dumps. Preserve the business database's read-only access model, and route environment-specific values through `app/config.py` and `.env`.

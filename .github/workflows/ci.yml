@@ -115,6 +115,7 @@ jobs:
           npx --yes markdownlint-cli2@0.18.1
           ".github/**/*.md"
           "docs/CI_AND_PR_WORKFLOW.md"
+          "docs/tasks/GPT_DEVELOPMENT_WORKFLOW.md"
 
   ci-gate:
     name: CI Gate
