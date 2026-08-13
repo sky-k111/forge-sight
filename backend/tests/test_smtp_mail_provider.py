@@ -1,6 +1,16 @@
 """E01: SMTP transport and MIME behavior without real network access."""
 
-from app.delivery.provider import MailAttachment, OutgoingMail, SmtpConfig, SmtpMailProvider
+import smtplib
+
+import pytest
+
+from app.delivery.provider import (
+    MailAttachment,
+    OutgoingMail,
+    ProviderFailure,
+    SmtpConfig,
+    SmtpMailProvider,
+)
 
 
 class _FakeSmtp:
@@ -66,3 +76,41 @@ def test_starttls_smtp_builds_plain_html_and_pdf_mime(monkeypatch):
     assert attachment.get_payload(decode=True) == b"pdf"
     assert result.provider_message_id.startswith("<")
     assert "@example.test>" in result.provider_message_id
+
+
+@pytest.mark.parametrize(
+    ("code", "retryable", "category"),
+    [(421, True, "rate_limited"), (450, True, "rate_limited"), (550, False, "invalid_address"), (553, False, "invalid_address")],
+)
+def test_smtp_response_codes_classify_temporary_and_permanent_failures(
+    monkeypatch, code, retryable, category
+):
+    import app.delivery.provider as module
+
+    class RejectingSmtp(_FakeSmtp):
+        def send_message(self, _message):
+            raise smtplib.SMTPResponseException(code, b"provider detail")
+
+    monkeypatch.setattr(module.smtplib, "SMTP", RejectingSmtp)
+    provider = SmtpMailProvider(
+        SmtpConfig(
+            host="smtp.example.test",
+            port=587,
+            username="sender@example.test",
+            password="secret",
+            from_address="sender@example.test",
+        )
+    )
+
+    with pytest.raises(ProviderFailure) as caught:
+        provider.send(
+            OutgoingMail(
+                to="recipient@example.test",
+                subject="test",
+                text_body="text",
+                html_body="<p>text</p>",
+            )
+        )
+
+    assert caught.value.retryable is retryable
+    assert caught.value.category == category

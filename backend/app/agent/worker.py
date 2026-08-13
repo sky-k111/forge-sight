@@ -79,8 +79,10 @@ def _loop() -> None:
         except Exception:  # noqa: BLE001 - 消息故障不能阻塞 Agent Run
             log.exception("站内消息事件处理失败")
         try:
-            from app.delivery.provider import provider_from_settings
+            from app.delivery.provider import ProviderFailure, provider_from_settings
             from app.delivery.service import (
+                block_deliveries_for_configuration,
+                resume_configuration_blocked_deliveries,
                 run_delivery_event_worker_once,
                 run_delivery_worker_once,
             )
@@ -89,16 +91,35 @@ def _loop() -> None:
                 PlatformSession,
                 f"mail-event:{_worker_id}",
             )
-            run_delivery_worker_once(
-                PlatformSession,
-                f"mail-send:{_worker_id}",
-                provider_from_settings(settings),
-                storage_root=settings.report_storage_dir,
-                public_app_url=settings.public_app_url,
-                attachment_max_bytes=settings.mail_attachment_max_bytes,
-                max_attempts=settings.mail_max_attempts,
-                lease_seconds=settings.mail_worker_lease_seconds,
-            )
+            try:
+                mail_provider = provider_from_settings(settings)
+            except ProviderFailure as exc:
+                if exc.category != "configuration":
+                    raise
+                with PlatformSession() as session:
+                    blocked = block_deliveries_for_configuration(session)
+                    session.commit()
+                if blocked:
+                    log.error("邮件服务配置无效，已暂停 %s 条投递", blocked)
+            else:
+                with PlatformSession() as session:
+                    resumed = resume_configuration_blocked_deliveries(session)
+                    session.commit()
+                if resumed:
+                    log.info("邮件服务配置已恢复，重新排队 %s 条投递", resumed)
+                run_delivery_worker_once(
+                    PlatformSession,
+                    f"mail-send:{_worker_id}",
+                    mail_provider,
+                    storage_root=settings.report_storage_dir,
+                    public_app_url=settings.public_app_url,
+                    attachment_max_bytes=settings.mail_attachment_max_bytes,
+                    max_attempts=settings.mail_max_attempts,
+                    lease_seconds=max(
+                        settings.mail_worker_lease_seconds,
+                        settings.mail_timeout_seconds + 30,
+                    ),
+                )
         except Exception:  # noqa: BLE001 - 邮件失败不能影响站内发布或 Agent Run
             log.exception("邮件投递处理失败")
         run_id = _claim_run()

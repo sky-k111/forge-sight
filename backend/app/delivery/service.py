@@ -44,6 +44,8 @@ DELIVERY_STATUSES = {
     "sent",
     "failed",
     "suppressed",
+    "unknown",
+    "blocked_configuration",
 }
 MASKED_ERROR_SUMMARIES = {
     "configuration": "邮件服务配置无效",
@@ -251,6 +253,46 @@ def claim_deliveries(
     return rows
 
 
+def block_deliveries_for_configuration(
+    session: Session, _detail: str = ""
+) -> int:
+    """Pause runnable email jobs with a sanitized, administrator-visible reason."""
+
+    rows = (
+        session.query(ReportDelivery)
+        .filter(
+            ReportDelivery.channel == "email",
+            ReportDelivery.status.in_(("queued", "retry_wait", "waiting_attachment")),
+        )
+        .all()
+    )
+    current = datetime.now()
+    for row in rows:
+        row.status = "blocked_configuration"
+        row.error_category = "configuration"
+        row.error_json = {"message": MASKED_ERROR_SUMMARIES["configuration"]}
+        row.next_retry_at = None
+        row.lease_owner = None
+        row.lease_expires_at = None
+        row.updated_at = current
+    session.flush()
+    return len(rows)
+
+
+def resume_configuration_blocked_deliveries(session: Session) -> int:
+    rows = session.query(ReportDelivery).filter_by(
+        channel="email", status="blocked_configuration"
+    ).all()
+    current = datetime.now()
+    for row in rows:
+        row.status = "queued"
+        row.error_category = None
+        row.error_json = None
+        row.updated_at = current
+    session.flush()
+    return len(rows)
+
+
 def _claimed_delivery(session: Session, delivery_id: str, worker_id: str) -> ReportDelivery:
     delivery = session.query(ReportDelivery).filter_by(id=delivery_id).with_for_update().one()
     if delivery.status != "sending" or delivery.lease_owner != worker_id:
@@ -415,18 +457,19 @@ def _record_failure(
     attempt.finished_at = now
 
 
-def send_claimed_delivery(
+def prepare_claimed_delivery(
     session: Session,
     delivery_id: str,
     worker_id: str,
-    provider: MailProvider,
     *,
     storage_root: str | Path,
     public_app_url: str,
     attachment_max_bytes: int = 10 * 1024 * 1024,
     max_attempts: int = 3,
     now: datetime | None = None,
-) -> ReportDelivery:
+) -> tuple[ReportDelivery, OutgoingMail | None, str | None]:
+    """Persist an uncertainty barrier before any provider side effect."""
+
     current = now or datetime.now()
     delivery = _claimed_delivery(session, delivery_id, worker_id)
     try:
@@ -439,50 +482,22 @@ def send_claimed_delivery(
             current,
         )
         if mail is None:
-            return delivery
+            return delivery, None, None
         delivery.attempt_count += 1
         attempt = DeliveryAttempt(
             id=new_id("dla"),
             delivery_id=delivery.id,
             attempt_number=delivery.attempt_count,
-            status="sending",
+            status="unknown",
             started_at=current,
         )
         session.add(attempt)
-        session.flush()
-        started = time.monotonic()
-        try:
-            outcome = provider.send(mail)
-        except ProviderFailure as exc:
-            duration = max(0, int((time.monotonic() - started) * 1000))
-            attempt.duration_ms = duration
-            delivery.last_duration_ms = duration
-            _record_failure(session, delivery, attempt, exc, current, max_attempts)
-            return delivery
-        except Exception as exc:  # provider bugs are retryable but never expose their message
-            duration = max(0, int((time.monotonic() - started) * 1000))
-            attempt.duration_ms = duration
-            delivery.last_duration_ms = duration
-            failure = ProviderFailure("provider_error", type(exc).__name__, retryable=True)
-            _record_failure(session, delivery, attempt, failure, current, max_attempts)
-            return delivery
-        duration = max(0, int((time.monotonic() - started) * 1000))
-        delivery.status = "sent"
-        delivery.sent_at = current
-        delivery.provider_message_id = outcome.provider_message_id[:160]
-        delivery.response_id = outcome.provider_message_id[:120]
-        delivery.error_category = None
-        delivery.error_json = None
-        delivery.next_retry_at = None
+        delivery.status = "unknown"
         delivery.lease_owner = None
         delivery.lease_expires_at = None
-        delivery.last_duration_ms = duration
         delivery.updated_at = current
-        attempt.status = "sent"
-        attempt.provider_message_id = outcome.provider_message_id[:160]
-        attempt.duration_ms = duration
-        attempt.finished_at = current
-        return delivery
+        session.flush()
+        return delivery, mail, attempt.id
     except ProviderFailure as failure:
         delivery.attempt_count += 1
         attempt = DeliveryAttempt(
@@ -495,7 +510,49 @@ def send_claimed_delivery(
         )
         session.add(attempt)
         _record_failure(session, delivery, attempt, failure, current, max_attempts)
+        return delivery, None, None
+
+
+def _finalize_provider_result(
+    session: Session,
+    delivery_id: str,
+    attempt_id: str,
+    *,
+    outcome=None,
+    failure: ProviderFailure | None = None,
+    duration_ms: int,
+    max_attempts: int,
+    now: datetime,
+) -> ReportDelivery:
+    delivery = session.query(ReportDelivery).filter_by(id=delivery_id).with_for_update().one()
+    attempt = session.query(DeliveryAttempt).filter_by(id=attempt_id).with_for_update().one()
+    if delivery.status != "unknown" or attempt.status != "unknown":
         return delivery
+    attempt.duration_ms = duration_ms
+    delivery.last_duration_ms = duration_ms
+    if failure is not None:
+        if failure.uncertain:
+            delivery.error_category = "outcome_unknown"
+            delivery.error_json = {"message": "邮件服务结果不确定，需管理员核对后处理"}
+            delivery.updated_at = now
+            attempt.error_category = "outcome_unknown"
+            attempt.error_json = delivery.error_json
+            attempt.finished_at = now
+            return delivery
+        _record_failure(session, delivery, attempt, failure, now, max_attempts)
+        return delivery
+    delivery.status = "sent"
+    delivery.sent_at = now
+    delivery.provider_message_id = outcome.provider_message_id[:160]
+    delivery.response_id = outcome.provider_message_id[:120]
+    delivery.error_category = None
+    delivery.error_json = None
+    delivery.next_retry_at = None
+    delivery.updated_at = now
+    attempt.status = "sent"
+    attempt.provider_message_id = outcome.provider_message_id[:160]
+    attempt.finished_at = now
+    return delivery
 
 
 def run_delivery_worker_once(
@@ -520,14 +577,40 @@ def run_delivery_worker_once(
             return False
         delivery_id = rows[0].id
     with session_factory() as session:
-        send_claimed_delivery(
+        _delivery, mail, attempt_id = prepare_claimed_delivery(
             session,
             delivery_id,
             worker_id,
-            provider,
             storage_root=storage_root,
             public_app_url=public_app_url,
             attachment_max_bytes=attachment_max_bytes,
+            max_attempts=max_attempts,
+            now=current,
+        )
+        session.commit()
+    if mail is None or attempt_id is None:
+        return True
+    started = time.monotonic()
+    try:
+        outcome = provider.send(mail)
+        failure = None
+    except ProviderFailure as exc:
+        outcome = None
+        failure = exc
+    except Exception as exc:
+        outcome = None
+        failure = ProviderFailure(
+            "provider_error", type(exc).__name__, retryable=False, uncertain=True
+        )
+    duration = max(0, int((time.monotonic() - started) * 1000))
+    with session_factory() as session:
+        _finalize_provider_result(
+            session,
+            delivery_id,
+            attempt_id,
+            outcome=outcome,
+            failure=failure,
+            duration_ms=duration,
             max_attempts=max_attempts,
             now=current,
         )
@@ -589,7 +672,7 @@ def list_deliveries(
 def retry_delivery(session: Session, delivery_id: str, *, now: datetime | None = None) -> ReportDelivery:
     current = now or datetime.now()
     row = session.query(ReportDelivery).filter_by(id=delivery_id, channel="email").with_for_update().one()
-    if row.status not in {"failed", "retry_wait", "waiting_attachment"}:
+    if row.status not in {"failed", "retry_wait", "waiting_attachment", "unknown"}:
         raise ValueError("只有失败或等待中的邮件投递可以重发")
     row.status = "queued"
     row.next_retry_at = current

@@ -34,11 +34,19 @@ class ProviderResult:
 
 
 class ProviderFailure(RuntimeError):
-    def __init__(self, category: str, summary: str, *, retryable: bool):
+    def __init__(
+        self,
+        category: str,
+        summary: str,
+        *,
+        retryable: bool,
+        uncertain: bool = False,
+    ):
         super().__init__(summary)
         self.category = category
         self.summary = summary
         self.retryable = retryable
+        self.uncertain = uncertain
 
 
 class MailProvider(Protocol):
@@ -118,6 +126,7 @@ class SmtpMailProvider:
         message = self._mime(mail)
         config = self._config
         context = ssl.create_default_context()
+        stage = "connect"
         try:
             smtp_class = smtplib.SMTP_SSL if config.use_tls and config.port == 465 else smtplib.SMTP
             kwargs = {"host": config.host, "port": config.port, "timeout": config.timeout_seconds}
@@ -128,6 +137,7 @@ class SmtpMailProvider:
                     client.starttls(context=context)
                 if config.username:
                     client.login(config.username, config.password)
+                stage = "send"
                 client.send_message(message)
             return ProviderResult(provider_message_id=str(message["Message-ID"]))
         except smtplib.SMTPRecipientsRefused as exc:
@@ -135,11 +145,21 @@ class SmtpMailProvider:
         except smtplib.SMTPAuthenticationError as exc:
             raise ProviderFailure("configuration", "SMTP authentication failed", retryable=False) from exc
         except smtplib.SMTPResponseException as exc:
-            retryable = exc.smtp_code in {421, 450, 451, 452} or exc.smtp_code >= 500
-            category = "rate_limited" if exc.smtp_code in {421, 450, 451, 452} else "provider_error"
+            retryable = 400 <= exc.smtp_code < 500
+            if retryable:
+                category = "rate_limited"
+            elif exc.smtp_code in {550, 551, 552, 553}:
+                category = "invalid_address"
+            else:
+                category = "provider_error"
             raise ProviderFailure(category, f"SMTP response {exc.smtp_code}", retryable=retryable) from exc
         except (TimeoutError, OSError, smtplib.SMTPException) as exc:
-            raise ProviderFailure("network", type(exc).__name__, retryable=True) from exc
+            raise ProviderFailure(
+                "network",
+                type(exc).__name__,
+                retryable=stage != "send",
+                uncertain=stage == "send",
+            ) from exc
 
 
 def provider_from_settings(settings) -> MailProvider:

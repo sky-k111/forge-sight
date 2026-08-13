@@ -40,8 +40,18 @@ def build_weekly_report_mail(
     attachment_omitted_reason: str | None = None,
 ) -> MailBody:
     lines = _summary_lines(content, fallback_summary)
-    anomalies = content.get("anomalies") or []
-    serious = next((str(item.get("title") or "").strip() for item in anomalies if isinstance(item, dict)), "未发现需重点关注的异常")
+    anomalies = [item for item in (content.get("anomalies") or []) if isinstance(item, dict)]
+    severity_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+    most_serious = max(
+        anomalies,
+        key=lambda item: severity_rank.get(str(item.get("severity") or ""), 0),
+        default=None,
+    )
+    serious = (
+        str(most_serious.get("title") or "").strip()
+        if most_serious
+        else "未发现需重点关注的异常"
+    ) or "未发现需重点关注的异常"
     quality = content.get("dataQuality") or {}
     coverage = quality.get("coverage")
     quality_text = f"数据覆盖率 {coverage}%" if isinstance(coverage, (int, float)) else "数据质量信息见完整周报"

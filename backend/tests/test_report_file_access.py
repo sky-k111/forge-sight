@@ -230,3 +230,35 @@ def test_report_detail_exposes_file_state_and_opaque_download_url(file_session):
         "downloadUrl": "/api/v1/report-files/file-ready/download",
     }
     assert "storageUri" not in ready
+
+
+def test_report_detail_api_rejects_forwarded_link_for_unrelated_user(
+    file_session, monkeypatch
+):
+    session_factory, _ = file_session
+    monkeypatch.setattr(reports_api, "PlatformSession", session_factory)
+    monkeypatch.setattr(report_service, "PlatformSession", session_factory)
+    client = TestClient(app)
+    app.dependency_overrides[require_user] = lambda: {
+        "id": "stranger-id",
+        "username": "stranger",
+        "displayName": "无权限用户",
+        "role": "business",
+    }
+    try:
+        denied = client.get("/api/v1/reports/report-1")
+        denied_export = client.get("/api/v1/reports/report-1/export")
+        app.dependency_overrides[require_user] = lambda: {
+            "id": "recipient-id",
+            "username": "recipient",
+            "displayName": "接收人",
+            "role": "business",
+        }
+        allowed = client.get("/api/v1/reports/report-1")
+    finally:
+        app.dependency_overrides.pop(require_user, None)
+
+    assert denied.status_code == 404
+    assert denied_export.status_code == 404
+    assert allowed.status_code == 200
+    assert allowed.json()["version"]["id"] == "version-1"

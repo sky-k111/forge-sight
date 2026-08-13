@@ -29,9 +29,11 @@ from app.delivery.provider import (
     ProviderFailure,
 )
 from app.delivery.service import (
+    block_deliveries_for_configuration,
     consume_message_published_event,
     run_delivery_event_worker_once,
     run_delivery_worker_once,
+    resume_configuration_blocked_deliveries,
 )
 from app.delivery.templates import build_announcement_mail, build_weekly_report_mail
 
@@ -224,12 +226,17 @@ def _seed_weekly(factory, storage_root: Path, *, file_status="ready", file_size=
 
 
 def test_templates_escape_user_content_and_include_plain_text_links():
+    content = _weekly_content()
+    content["anomalies"] = [
+        {"title": "轻微波动", "severity": "low"},
+        {"title": "关键停机", "severity": "critical"},
+    ]
     weekly = build_weekly_report_mail(
         title="周报 <一>",
         period_start=datetime(2026, 8, 3),
         period_end=datetime(2026, 8, 10),
         version=2,
-        content=_weekly_content(),
+        content=content,
         fallback_summary="摘要",
         link="https://example.test/workspace/reports/report-1",
     )
@@ -245,7 +252,8 @@ def test_templates_escape_user_content_and_include_plain_text_links():
     assert "周报 <一>" in weekly.text_body
     assert "周报 &lt;一&gt;" in weekly.html_body
     assert "https://example.test/" in weekly.text_body
-    assert "AOI 波动" in weekly.text_body
+    assert "关键停机" in weekly.text_body
+    assert "轻微波动" not in weekly.text_body
     assert "公告 &lt;重要&gt;" in announcement.html_body
     assert "内容 &amp; 提醒" in announcement.html_body
 
@@ -562,6 +570,65 @@ def test_retryable_failure_stops_after_configured_attempt_limit(delivery_session
         assert delivery.attempt_count == 3
         assert session.query(DeliveryAttempt).filter_by(delivery_id=delivery.id).count() == 3
         assert "socket detail" not in str(delivery.error_json)
+
+
+def test_external_side_effect_then_process_exit_stays_unknown_not_auto_retry(
+    delivery_session,
+):
+    _seed_announcement(delivery_session)
+    with delivery_session() as session:
+        consume_message_published_event(session, "event-message", "event-worker")
+        session.commit()
+
+    class CrashAfterSideEffect:
+        def __init__(self):
+            self.sent = []
+
+        def send(self, message):
+            self.sent.append(message)
+            raise SystemExit("simulated process exit")
+
+    provider = CrashAfterSideEffect()
+    with pytest.raises(SystemExit):
+        run_delivery_worker_once(
+            delivery_session,
+            "mail-worker",
+            provider,
+            storage_root=".",
+            public_app_url="https://example.test",
+        )
+
+    assert len(provider.sent) == 1
+    with delivery_session() as session:
+        delivery = session.query(ReportDelivery).filter_by(recipient_user_id="user-ok").one()
+        assert delivery.status == "unknown"
+        assert delivery.attempt_count == 1
+    assert run_delivery_worker_once(
+        delivery_session,
+        "another-worker",
+        provider,
+        storage_root=".",
+        public_app_url="https://example.test",
+        now=datetime(2026, 8, 14),
+    ) is False
+    assert len(provider.sent) == 1
+
+
+def test_configuration_failure_blocks_queue_and_is_visible(delivery_session):
+    _seed_announcement(delivery_session)
+    with delivery_session() as session:
+        consume_message_published_event(session, "event-message", "event-worker")
+        blocked = block_deliveries_for_configuration(session, "SMTP 配置无效")
+        session.commit()
+
+        delivery = session.query(ReportDelivery).filter_by(recipient_user_id="user-ok").one()
+        assert blocked == 1
+        assert delivery.status == "blocked_configuration"
+        assert delivery.error_category == "configuration"
+        assert "SMTP 配置无效" not in str(delivery.error_json)
+        assert resume_configuration_blocked_deliveries(session) == 1
+        session.commit()
+        assert session.get(ReportDelivery, delivery.id).status == "queued"
 
 
 def test_mail_value_objects_do_not_expose_attachment_content_in_repr():

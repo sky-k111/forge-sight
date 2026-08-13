@@ -7,8 +7,14 @@ from app.audit.service import write_audit
 from app.auth.deps import current_user_display, effective_user_id, optional_user, require_user
 from app.config import settings
 from app.db.platform import PlatformSession
+from app.db.models import Report, ReportVersion
 from app.reports import service
-from app.reports.files import FileAccessDenied, FileNotReady, resolve_download
+from app.reports.files import (
+    FileAccessDenied,
+    FileNotReady,
+    authorize_report_view,
+    resolve_download,
+)
 from app.reports.contracts import ReportCreate, ReportPublish, ReportReviewAction, SubscriptionCreate
 
 router = APIRouter(prefix="/api/v1", tags=["reports"])
@@ -20,6 +26,17 @@ def _raise(exc: Exception):
     if isinstance(exc, service.ReportConflict):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     raise exc
+
+
+def _authorize_report(report_id: str, user: dict) -> None:
+    with PlatformSession() as session:
+        report = session.get(Report, report_id)
+        if report is None:
+            raise service.ReportNotFound(f"报告 {report_id} 不存在")
+        version = session.get(ReportVersion, report.current_version_id)
+        if version is None:
+            raise service.ReportNotFound(f"报告 {report_id} 不存在")
+        authorize_report_view(session, report, version, user)
 
 
 @router.get("/report-templates")
@@ -60,9 +77,12 @@ def create_report(payload: ReportCreate, user: dict | None = Depends(optional_us
 
 
 @router.get("/reports/{report_id}")
-def get_report(report_id: str):
+def get_report(report_id: str, user: dict = Depends(require_user)):
     try:
-        return service.get_report(report_id)
+        _authorize_report(report_id, user)
+        return service.get_report(report_id, session_factory=PlatformSession)
+    except FileAccessDenied as exc:
+        raise HTTPException(status_code=404, detail="报告不存在或无权访问") from exc
     except Exception as exc:
         _raise(exc)
 
@@ -104,9 +124,16 @@ def push_report_to_feishu(report_id: str):
 
 
 @router.get("/reports/{report_id}/export", response_class=HTMLResponse)
-def export_report(report_id: str, format: str = Query(default="html", pattern=r"^html$")):
+def export_report(
+    report_id: str,
+    format: str = Query(default="html", pattern=r"^html$"),
+    user: dict = Depends(require_user),
+):
     try:
-        document = service.export_html(report_id)
+        _authorize_report(report_id, user)
+        document = service.export_html(report_id, session_factory=PlatformSession)
+    except FileAccessDenied as exc:
+        raise HTTPException(status_code=404, detail="报告不存在或无权访问") from exc
     except Exception as exc:
         _raise(exc)
     # 兼容旧 HTML 预览；正式 PDF/XLSX 统一通过 report-files 下载接口提供。
