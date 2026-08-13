@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     email_hourly_limit_account: int = 5
     email_hourly_limit_ip: int = 10
 
+    # —— 邮件 Provider 边界（实际 SMTP 由 E 任务实现） ——
+    mail_provider: str = "capture"
+    mail_from_address: str = ""
+    mail_from_name: str = "ForgeSight"
+    mail_timeout_seconds: int = 10
+
     cors_origins: str = (
         "http://localhost:3000,http://127.0.0.1:3000,"
         "http://localhost:3001,http://127.0.0.1:3001,"

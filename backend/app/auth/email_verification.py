@@ -9,6 +9,7 @@ import re
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy.exc import IntegrityError
 
@@ -20,6 +21,9 @@ from app.db.models import (
     PlatformUser,
 )
 from app.db.platform import PlatformSession
+
+if TYPE_CHECKING:
+    from app.auth.mail_provider import VerificationMailProvider
 
 
 EMAIL_RE = re.compile(
@@ -38,6 +42,7 @@ ERROR_MESSAGES = {
     "CHALLENGE_RESEND_COOLDOWN": "验证码发送过于频繁，请稍后再试",
     "CHALLENGE_RATE_LIMITED": "操作过于频繁，请稍后再试",
     "CHALLENGE_NOT_FOUND": "验证请求不存在或已失效",
+    "EMAIL_SEND_FAILED": "验证邮件发送失败，请稍后重试",
     "CODE_INVALID": "验证码不正确",
     "CODE_EXPIRED": "验证码已过期，请重新获取",
     "CODE_ATTEMPTS_EXCEEDED": "错误次数过多，请重新获取验证码",
@@ -160,6 +165,7 @@ def issue_email_challenge(
     *,
     now: datetime | None = None,
     session_factory=None,
+    provider: VerificationMailProvider | None = None,
 ) -> IssuedEmailChallenge:
     """创建或刷新活动挑战；返回的明文验证码仅供后续邮件 Provider 使用。"""
     if purpose not in PURPOSES:
@@ -238,10 +244,7 @@ def issue_email_challenge(
                     "CHALLENGE_RESEND_COOLDOWN", retry_after_seconds=retry_after
                 )
             challenge = active
-            challenge.purpose = purpose
-            challenge.email = deliverable
-            challenge.attempt_count = 0
-            challenge.send_count += 1
+            is_resend = True
         else:
             if active:
                 active.superseded_at = current_time
@@ -259,11 +262,43 @@ def issue_email_challenge(
                 created_at=current_time,
             )
             session.add(challenge)
+            is_resend = False
 
         code = generate_verification_code()
-        challenge.code_hash = _hash_code(code, challenge.id, canonical)
+        code_hash = _hash_code(code, challenge.id, canonical)
+        send_result = provider.send_code(deliverable, code, purpose) if provider else None
+        if send_result is not None and not send_result.ok:
+            if is_resend:
+                challenge.last_sent_at = current_time
+            else:
+                challenge.code_hash = code_hash
+                challenge.expires_at = current_time + timedelta(
+                    seconds=settings.email_code_ttl_seconds
+                )
+                challenge.send_count = 0
+            session.add(
+                _event(
+                    user_id=user_id,
+                    email_canonical=canonical,
+                    purpose=purpose,
+                    challenge_id=challenge.id,
+                    event_type="send_failed",
+                    outcome="provider_error",
+                    ip=ip,
+                    now=current_time,
+                )
+            )
+            session.commit()
+            raise EmailVerificationError("EMAIL_SEND_FAILED")
+
+        challenge.purpose = purpose
+        challenge.email = deliverable
+        challenge.code_hash = code_hash
         challenge.expires_at = current_time + timedelta(seconds=settings.email_code_ttl_seconds)
         challenge.last_sent_at = current_time
+        challenge.attempt_count = 0
+        if is_resend:
+            challenge.send_count += 1
         session.add(
             _event(
                 user_id=user_id,
