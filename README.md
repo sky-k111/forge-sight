@@ -1,177 +1,369 @@
-# ForgeSight · 企业数据底座智能问析 Agent 系统
+# ForgeSight · 企业数据底座智能问析 Agent
 
-面向制造业数据底座的自然语言智能分析平台。业务人员无需掌握数据库、SQL 和数据建模技能，直接用自然语言提问，系统自动完成 **数据定位 → SQL 生成 → 安全执行 → 图表展示 → 结论生成** 的完整闭环，并将每一步的分析证据（上下文、SQL、校验、结果、结论）完整呈现，供用户核对与追溯。
+> 面向制造业数据底座的自然语言智能分析平台
 
-> 赛题背景：【A07】企业数据底座智能问析 Agent 系统（杭州自动化技术研究院）
+ForgeSight 让业务人员无需掌握 SQL 和数据建模技能，也能用自然语言完成
+数据定位、安全查询、图表分析和结论追溯。系统保留从问题到结论的完整证据链，
+同时提供知识治理、数据资源理解、智能建模和报告管理能力。
+
+> 赛题背景：【A07】企业数据底座智能问析 Agent 系统
+> （杭州自动化技术研究院）
 >
-> 赛题原文与逐项实现映射见 [docs/competition/](docs/competition/README.md)。
-> 当前需求、未完成任务、已完成任务与详细执行步骤统一从
-> [docs/tasks/](docs/tasks/README.md) 进入。
+> - [赛题原文与实现映射](docs/competition/README.md)
+> - [项目需求与任务中心](docs/tasks/README.md)
+> - [开发协作规范](AGENTS.md)
 
-## ✨ 核心特性
+## 核心价值
 
-| 能力 | 说明 |
-|---|---|
-| 🤖 自然语言智能问析 | 聊天式提问，Agent 自动规划任务；SSE 流式呈现执行过程；必要时主动反问澄清，回答后自动继续 |
-| 🔍 全证据链可追溯 | 从问题到 SQL、校验（含成本门控扫描行数）、执行、结论五类产物全链路展示；SQL 可查看、复制、核对 |
-| 🔀 Checkpoint 分支分析 | 对任意分析步骤"调整条件"生成新方案；仅改展示方式时复用结果快照不重查库；原/新方案并排对比 |
-| 📊 图表自动选型 | 根据自然语言语义自动渲染折线、柱状、环形、散点、双轴组合、热力图；率指标自动识别与单位处理 |
-| 📚 业务知识管理 | 分析主题、业务对象、业务规则、指标口径（含物理实现公式与数据源绑定）全生命周期维护，指标支持发布审核流 |
-| 🗄️ 数据资源理解 | 数据源接入向导、元数据扫描、AI 语义辅助理解未登记表、表关系图、字段说明与样例预览 |
-| 📈 报告中心 | 模板覆盖度评估 → 分章节异步生成 → 管理摘要 → 业务复核 → 审批 → 发布 → 飞书推送 → PDF 导出 |
-| 🔐 用户注册登录 | 渐进式认证：未登录保持演示模式，登录后 token 身份覆盖 userId 实现**数据按人隔离**；scrypt 密码哈希 + 自签 token（零第三方依赖）；种子管理员 + 角色守卫 |
-| 🕘 历史会话 | 全部问答沉淀为会话列表，按数据源/状态双筛选，点击任意会话**恢复完整上下文继续分析**，刷新不丢 |
-| 🛡️ 安全与治理 | 只读数据库账号、SQL 执行超时与行数上限、写意图拦截、成本预算门控、结论数值核对、操作审计日志（含登录/注册/退出事件） |
-| 💰 成本透明 | 每次分析实时展示模型调用次数、Token 用量与预估费用 |
+| 能力 | 用户获得什么 |
+| :--- | :--- |
+| 自然语言问析 | 用业务语言提问，Agent 自动规划并执行分析 |
+| 全证据链 | 上下文、SQL、执行校验、查询结果和结论均可追溯 |
+| 智能可视化 | 自动选择折线、柱状、环形、散点、热力图等图表 |
+| 分支分析 | 从检查点调整条件，保留原方案并生成对比方案 |
+| 数据治理 | 管理主题、对象、规则、指标口径和数据源语义 |
+| 智能建模 | 支持训练、评估、预测和模型治理闭环 |
+| 安全执行 | 只读账号、写意图拦截、超时、行数与成本门控 |
+| 持续触达 | 规划中的周报 Agent、消息中心、邮箱推送和文件下载 |
 
-## 🏗️ 系统架构
+## 系统架构
 
+```mermaid
+flowchart LR
+    subgraph UX[体验层]
+        direction TB
+        WEB[业务工作区<br/>智能问析 · 会话 · 报告]
+        ADMIN[管理工作区<br/>知识 · 资源 · 模型 · 审计]
+    end
+
+    subgraph API[服务层 · FastAPI]
+        direction TB
+        ROUTER[API 与身份鉴权]
+        STREAM[SSE 事件流]
+        DOMAIN[领域服务<br/>知识 · 元数据 · 建模 · 报告]
+        GUARD[SQL 安全网关<br/>只读 · 超时 · 成本门控]
+    end
+
+    subgraph AI[智能编排层]
+        direction TB
+        GRAPH[LangGraph Agent]
+        CONTEXT[语义检索与上下文组装]
+        VERIFY[SQL 语法与安全校验]
+        MODEL[OpenAI 兼容模型<br/>DeepSeek · Qwen · ChatGLM]
+    end
+
+    subgraph DATA[数据层]
+        direction TB
+        MYSQL[(MySQL 8.4<br/>企业业务库 · 只读)]
+        PG[(PostgreSQL 16<br/>平台数据 · 读写)]
+    end
+
+    WEB -->|HTTP| ROUTER
+    ADMIN -->|HTTP| ROUTER
+    STREAM -.实时事件.-> WEB
+    ROUTER --> DOMAIN
+    ROUTER --> GRAPH
+    GRAPH --> CONTEXT
+    CONTEXT --> MODEL
+    MODEL --> VERIFY
+    VERIFY --> GUARD
+    GUARD -->|SELECT| MYSQL
+    DOMAIN --> PG
+    GRAPH -->|状态 · 检查点 · 事件| PG
+    PG -.持久化事件.-> STREAM
+
+    classDef experience fill:#EFF6FF,stroke:#2563EB,color:#1E3A8A,stroke-width:1.5px;
+    classDef service fill:#ECFDF5,stroke:#059669,color:#064E3B,stroke-width:1.5px;
+    classDef agent fill:#FFF7ED,stroke:#EA580C,color:#7C2D12,stroke-width:1.5px;
+    classDef storage fill:#F8FAFC,stroke:#475569,color:#0F172A,stroke-width:1.5px;
+    class WEB,ADMIN experience;
+    class ROUTER,STREAM,DOMAIN,GUARD service;
+    class GRAPH,CONTEXT,VERIFY,MODEL agent;
+    class MYSQL,PG storage;
+    style UX fill:#F8FAFC,stroke:#93C5FD,color:#1E3A8A,stroke-width:1px;
+    style API fill:#F8FAFC,stroke:#6EE7B7,color:#064E3B,stroke-width:1px;
+    style AI fill:#FFFBEB,stroke:#FDBA74,color:#7C2D12,stroke-width:1px;
+    style DATA fill:#F8FAFC,stroke:#CBD5E1,color:#0F172A,stroke-width:1px;
 ```
-┌─────────────────┐       ┌──────────────────────────────┐       ┌─────────────────┐
-│  前端 (React)    │ HTTP/ │  后端 (FastAPI)               │       │    LLM 模型      │
-│  Vite + Recharts │  SSE  │  Agent 编排 (LangGraph)      │──────▶│  DeepSeek 等    │
-│  ✓ 业务工作区    │──────▶│  问析闭环 · 澄清 · 分支      │◀──────│  (OpenAI 兼容)  │
-│  ✓ 管理工作区    │       │  知识治理 · 资源扫描 · 报告    │       └─────────────────┘
-└─────────────────┘       │  SQL 网关 · 安全审计          │
-                          └──────┬───────────────┬───────┘
-                                 │ 只读          │ 读写
-                          ┌──────▼───────┐ ┌────▼─────────┐
-                          │ MySQL 业务库  │ │ PostgreSQL    │
-                          │ forge_sight  │ │ 平台库        │
-                          │ (业务数据)    │ │ forge_sight_app│
-                          └──────────────┘ │ (知识/会话/审计)│
-                                           └──────────────┘
+
+### 数据职责
+
+- **MySQL 业务库**：保存生产工单、工序产量、质量检验、设备停机、
+  库存等企业数据，ForgeSight 仅使用只读账号访问。
+- **PostgreSQL 平台库**：保存业务知识、分析会话、Agent 检查点、
+  报告、平台用户和审计记录。
+- **LangGraph Agent**：负责分析状态机、澄清交互、错误恢复、
+  分支重放和预算控制。
+
+## 智能问析工作流
+
+```mermaid
+flowchart LR
+    Q([自然语言问题]) --> P[理解意图]
+    P --> C{信息是否充分}
+    C -->|否| ASK[发起澄清]
+    ASK --> P
+    C -->|是| R[检索业务知识]
+    R --> S[生成候选 SQL]
+    S --> G{安全与成本校验}
+    G -->|不通过| F[有限纠错]
+    F --> S
+    G -->|通过| X[只读执行]
+    X --> V[结果解释与证据生成]
+    V --> CH[图表自动选型]
+    CH --> A([结论与证据链])
+
+    classDef start fill:#1D4ED8,stroke:#1D4ED8,color:#FFFFFF,stroke-width:2px;
+    classDef process fill:#EFF6FF,stroke:#3B82F6,color:#1E3A8A,stroke-width:1.5px;
+    classDef decision fill:#FFF7ED,stroke:#F97316,color:#7C2D12,stroke-width:1.5px;
+    classDef repair fill:#FEF2F2,stroke:#EF4444,color:#7F1D1D,stroke-width:1.5px;
+    classDef result fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:2px;
+    class Q start;
+    class P,R,S,X,V,CH process;
+    class C,G decision;
+    class ASK,F repair;
+    class A result;
 ```
 
-- **MySQL 业务库**：企业业务数据底座（生产工单、工序产量、质量检验、设备停机、库存等），系统仅以只读账号访问
-- **PostgreSQL 平台库**：业务知识、分析会话、审计日志、报告与 Agent 状态、平台用户（认证）
-- **Agent 编排**：LangGraph 状态机 + 检查点（Checkpoint），支持澄清交互、分支重放与预算控制
+## 功能版图
 
-## 🧭 功能总览
+### 业务工作区
 
-**业务工作区（面向业务人员）**
-- 分析总览：数据源就绪度、可分析主题、推荐问题一键发起
-- 智能问析：核心闭环（提问 → 澄清 → 流式执行 → 结果/图表/结论 + 证据链侧栏）
-- 历史会话：全部问答按数据源/状态筛选，一键恢复上下文继续分析
-- 智能建模：候选模型对比、特征重要性、训练评估流程
-- 报告中心：报告创建向导、状态追踪、复核/发布/推送
+- **分析总览**：展示数据源就绪度、可分析主题和推荐问题。
+- **智能问析**：支持提问、澄清、流式执行、图表、结论和证据链。
+- **历史会话**：按数据源和状态筛选，恢复上下文后继续分析。
+- **智能建模**：完成算法选择、训练、评估、预测和方案对比。
+- **报告中心**：管理报告创建、生成、审批、发布和文件导出。
 
-**管理工作区（面向数据工程师/管理员）**
-- 治理总览：系统健康与治理待办
-- 业务知识：主题 / 对象 / 规则 / 指标口径维护与发布审核
-- 数据资源：数据源接入、AI 语义理解、表关系图、数据预览
-- 模型治理：模型注册表与发布策略
-- 系统配置：Agent 安全边界开关（只读、超时、行数上限、数值核对）
-- 安全审计：五层安全策略与审计日志
+### 管理工作区
 
-## 🛠️ 技术栈
+- **治理总览**：集中展示系统健康度和治理待办。
+- **业务知识**：维护主题、对象、规则和指标口径。
+- **数据资源**：接入数据源、扫描元数据并辅助理解业务语义。
+- **模型治理**：管理模型注册、评审、发布和退役。
+- **系统配置**：展示只读、超时和行数上限等默认安全边界；实际参数由
+  `backend/.env` 管理。
+- **安全审计**：记录关键操作与安全策略执行结果。
 
-| 层 | 技术 |
-|---|---|
-| 前端 | Vite 6 · React 19 · React Router 7 · Tailwind CSS v4 · Recharts 3 |
-| 后端 | Python 3.14 · FastAPI · SQLAlchemy 2.0 · LangGraph · scikit-learn |
-| 数据库 | MySQL 8（业务库，只读）· PostgreSQL 14+（平台库，读写） |
-| LLM | DeepSeek / Qwen / ChatGLM 等 OpenAI 兼容 API |
-| 部署 | Docker Compose（本地数据库）· 可部署 Netlify / 云服务器 |
+## 项目任务
 
-## 🚀 快速开始
+新需求统一进入 [项目任务中心](docs/tasks/README.md)。每个英文字母代表一个
+大任务，`字母00` 是总体计划，`字母01/02/...` 是可以独立领取的小任务。
+下图仅展示任务依赖摘要，具体任务状态和依赖以
+[任务总览与依赖](docs/tasks/TASK_INDEX.md) 为唯一依据。
 
-### 1. 启动数据库（Docker）
+```mermaid
+flowchart LR
+    Q[Q 邮箱绑定与验证] --> M[M 业务数据模型与迁移]
+    M --> R[R 智能生成与自动发布]
+    M --> V[V 版本管理与文件导出]
+    M --> N[N 消息中心与公告]
+    Q --> N
+    Q --> E[E 邮件投递与重试]
+    R --> E
+    V --> E
+    N --> E
+    Q --> U[U 前端交互与视觉设计]
+    R --> U
+    V --> U
+    N --> U
+    E --> U
+    U --> T[T 集成测试与上线验收]
+    E --> T
 
-```bash
-# 默认端口：MySQL 3307、PostgreSQL 5433（若本机 3306/5432 被占用可改）
+    classDef foundation fill:#EFF6FF,stroke:#2563EB,color:#1E3A8A,stroke-width:1.5px;
+    classDef core fill:#FFF7ED,stroke:#EA580C,color:#7C2D12,stroke-width:1.5px;
+    classDef delivery fill:#ECFDF5,stroke:#059669,color:#064E3B,stroke-width:1.5px;
+    classDef quality fill:#F5F3FF,stroke:#7C3AED,color:#4C1D95,stroke-width:1.5px;
+    class Q,M foundation;
+    class R,V,N core;
+    class E,U delivery;
+    class T quality;
+```
+
+| 状态目录 | 使用规则 |
+| :--- | :--- |
+| `docs/tasks/未完成/` | 新任务和正在实施的大任务统一放在这里 |
+| `docs/tasks/已完成/` | 仅放全部小任务验收通过并完成合并的大任务 |
+
+当前任务入口：
+
+- [需求基线](docs/tasks/REQUIREMENTS.md)
+- [任务总览与依赖](docs/tasks/TASK_INDEX.md)
+- [未完成任务](docs/tasks/未完成/README.md)
+- [已完成任务](docs/tasks/已完成/README.md)
+
+## 技术栈
+
+| 层级 | 主要技术 |
+| :--- | :--- |
+| 前端 | Vite 6 · React 19 · React Router 7 · Tailwind CSS 4 · Recharts 3 |
+| 后端 | FastAPI · SQLAlchemy 2 · LangGraph · scikit-learn · pandas |
+| 数据库 | MySQL 8.4（业务库）· PostgreSQL 16 + pgvector（平台库） |
+| 模型 | DeepSeek、Qwen、ChatGLM 等 OpenAI 兼容 API |
+| 工程 | Docker Compose · pytest · Vitest |
+
+## 快速开始
+
+### 环境要求
+
+- Windows PowerShell
+- Python 3.11 或更高版本
+- Node.js 20 或更高版本
+- Docker Desktop
+
+### 1. 启动数据库
+
+```powershell
 docker compose up -d
 ```
 
-### 2. 配置环境变量
+默认使用以下本地端口：
 
-```bash
+- MySQL：`3307`
+- PostgreSQL：`5433`
+
+### 2. 配置后端
+
+```powershell
 cd backend
-copy .env.example .env     # Windows
-# cp .env.example .env     # Linux/macOS
+Copy-Item .env.example .env
+python -m venv .venv
+.venv\Scripts\pip.exe install -r requirements.txt
 ```
 
-编辑 `.env`：
-- 若 Docker 端口有改动，同步修改四个 `*_DB_URL` 中的端口
-- **必填**：`LLM_API_KEY` 填入 DeepSeek（或任意 OpenAI 兼容）API Key
+`backend/.env.example` 使用占位值，不能直接启动。使用当前
+`docker-compose.yml` 的本地默认配置时，至少替换为：
 
-### 3. 初始化数据库（一次性）
+```dotenv
+BUSINESS_DB_URL=mysql+pymysql://forgesight_reader:forgesight_reader@127.0.0.1:3307/forge_sight?charset=utf8mb4
+PLATFORM_DB_URL=postgresql+psycopg2://postgres:forgesight_app@127.0.0.1:5433/forge_sight_app
+POSTGRES_ADMIN_DB_URL=postgresql+psycopg2://postgres:forgesight_app@127.0.0.1:5433/postgres
+ADMIN_DB_URL=mysql+pymysql://root:forgesight_root@127.0.0.1:3307/?charset=utf8mb4
+LLM_API_KEY=替换为你的模型密钥
+AUTH_TOKEN_SECRET=替换为随机长字符串
+AUTH_ADMIN_PASSWORD=替换为本地管理员密码
+```
 
-```bash
+其中 `forgesight_reader` 是初始化脚本将创建的本地只读账号密码。
+部署环境必须更换 Compose 默认密码，不得沿用上述开发值。运行初始化前，
+请确认 `backend/.env` 中已经没有任何 `CHANGE_ME`。
+
+### 3. 初始化数据库
+
+```powershell
 cd ..
 backend\.venv\Scripts\python.exe database\bootstrap.py
-# 完成：MySQL schema + 官方数据集 + 只读账号 + PostgreSQL 平台库 + 知识基线
 ```
+
+初始化脚本会创建 MySQL 业务库、只读账号、官方数据集、PostgreSQL 平台库
+以及知识基线。
 
 ### 4. 启动后端
 
-```bash
+```powershell
 cd backend
-.venv\Scripts\python.exe -m uvicorn app.main:app --reload   # http://127.0.0.1:8000
+.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
+
+- 后端地址：<http://127.0.0.1:8000>
+- 接口文档：<http://127.0.0.1:8000/docs>
 
 ### 5. 启动前端
 
-```bash
+另开一个 PowerShell 窗口：
+
+```powershell
 cd frontend-new
 npm ci
-npm run dev    # http://127.0.0.1:5173
+npm run dev
 ```
 
-浏览器打开 http://127.0.0.1:5173 即可使用；后端接口文档见 http://127.0.0.1:8000/docs。
+终端会输出实际可用地址。若默认 `5173` 已被占用，Vite 会自动选择下一个
+可用端口，请以终端显示的地址为准。使用其他端口时，还需要把该地址加入
+`backend/.env` 的 `CORS_ORIGINS`，然后重启后端。
 
-### 6. 一键启动（推荐）
+### 一键启动
 
-```bash
-.\fs.bat                  # 或 .\scripts\forge-sight.ps1：数据库 + 后端 + 前端 三个窗口
-.\fs.bat -Backend         # 只启后端
-.\fs.bat -Frontend        # 只启前端
-.\fs.bat -SkipDb          # 数据库已在运行，跳过
-.\fs.bat -Stop            # 停止后端与前端（数据库容器保留）
+```powershell
+.\fs.bat
 ```
 
-首次运行会自动安装前端依赖；若 docker 容器名被旧项目占用，脚本会自动回退直接启动已有容器（数据保留）。
+常用参数：
 
-> 认证说明：系统为**渐进式认证**——未登录时直接以演示模式使用（数据归属 `local-test-user`）；登录后数据按用户隔离。启动时自动创建种子管理员 **`admin` / `admin123`**（生产请在 `backend/.env` 配置 `AUTH_ADMIN_PASSWORD` 修改），注册用户默认 `business` 角色。
-
-## 📁 项目结构
-
+```powershell
+.\fs.bat -Backend
+.\fs.bat -Frontend
+.\fs.bat -SkipDb
+.\fs.bat -Stop
 ```
-├── backend/            # FastAPI 服务
+
+## 项目目录
+
+```text
+forge-sight/
+├── backend/                       # FastAPI 后端
 │   ├── app/
-│   │   ├── agent/      #   问析 Agent 编排（LangGraph、检查点、预算）
-│   │   ├── api/        #   路由
-│   │   ├── auth/       #   认证（scrypt 哈希、自签 token、渐进式身份覆盖）
-│   │   ├── db/         #   数据库模型与会话
-│   │   ├── gateway/    #   SQL 网关（安全执行）
-│   │   ├── knowledge/  #   业务知识（主题/对象/规则/指标）
-│   │   ├── metadata/   #   数据资源扫描与语义理解
-│   │   ├── modeling/   #   建模引擎（训练/评估/推理）与任务服务
-│   │   ├── reports/    #   报告模板与生成
-│   │   └── retrieval/  #   语义检索
-│   └── tests/
-├── database/           # 幂等可重复的初始化脚本（MySQL + PostgreSQL）
-├── frontend-new/       # Vite/React 前端
+│   │   ├── agent/                 # LangGraph 编排、状态与检查点
+│   │   ├── api/                   # HTTP 与 SSE 接口
+│   │   ├── auth/                  # 身份认证与权限
+│   │   ├── db/                    # SQLAlchemy 模型与数据库会话
+│   │   ├── gateway/               # SQL 安全执行网关
+│   │   ├── knowledge/             # 业务知识与指标口径
+│   │   ├── metadata/              # 元数据扫描与语义理解
+│   │   ├── modeling/              # 训练、评估、预测与模型治理
+│   │   ├── reports/               # 报告模板与生成服务
+│   │   └── retrieval/             # 语义检索与上下文组装
+│   ├── scripts/                   # 后端维护与可靠性脚本
+│   └── tests/                     # pytest 测试
+├── frontend-new/                  # Vite + React 前端
 │   └── src/
-│       ├── pages/      #   页面（业务/管理工作区 + auth 登录注册）
-│       ├── features/   #   问析流式订阅、事件归约、视图适配
-│       ├── components/ #   图表、证据链、布局等组件
-│       ├── lib/        #   认证存储（localStorage token/用户缓存）
-│       └── api/        #   HTTP 客户端
-└── docs/               # 阶段设计与验收文档
+│       ├── api/                   # API 客户端
+│       ├── components/            # 共享组件与数据图表
+│       ├── features/              # 流式事件与业务状态
+│       ├── pages/                 # 业务端、管理端和认证页面
+│       └── styles/                # 全局样式与设计变量
+├── database/                      # MySQL/PostgreSQL 初始化
+├── scripts/                       # 项目级启动与辅助脚本
+├── docs/
+│   ├── README.md                  # 项目文档导航
+│   ├── competition/               # 赛题原文与需求映射
+│   ├── tasks/                     # 当前项目任务中心
+│   │   ├── REQUIREMENTS.md        # 需求基线：要做什么
+│   │   ├── TASK_INDEX.md          # 任务索引：如何拆分与依赖
+│   │   ├── 未完成/                # 待实施大任务及其小任务
+│   │   └── 已完成/                # 已通过验收的大任务
+│   ├── phase-5-agent/             # 阶段五分析与验收资料
+│   └── phase-6-reports/           # 阶段六历史调研资料
+├── AGENTS.md                      # 开发与 AI 协作规范
+├── docker-compose.yml             # 本地数据库容器
+└── fs.bat                         # Windows 一键启动入口
 ```
 
-## 📌 当前状态
+## 测试与构建
 
-- 问析闭环、知识管理、数据资源、报告全流程、安全审计已接通真实后端
-- 用户注册登录（渐进式认证）与历史会话已完成
-- 智能建模已接入真实后端：6 种算法（线性回归 / 决策树 / 随机森林 / 逻辑回归 / K-Means / 孤立森林）训练/评估/推理/治理全链路；问析识别预测类需求自动生成建模提案
-- 测试：后端 114 个全绿，前端 62 个全绿（5 个测试文件）
-- 开发指南见 [AGENTS.md](AGENTS.md)，阶段设计见 [docs/](docs/)
+```powershell
+# 后端
+cd backend
+.venv\Scripts\python.exe -m pytest -q
 
-## 🔒 安全说明
+# 前端
+cd ..\frontend-new
+npm test
+npm run build
+```
 
-- `backend/.env` 包含真实凭据，**永不提交**；入库的仅 `.env.example` 模板
-- 业务库使用独立只读账号，仅授予 `SELECT` 权限
-- SQL 执行受超时、行数上限、成本门控与写意图拦截多重保护
-- 认证：scrypt 加盐哈希（密码永不明文存储）、hmac-sha256 自签 token（7 天有效期）、token 身份覆盖客户端 userId（改参偷数据无效）
+## 安全约束
+
+- 不提交 `backend/.env`、邮箱凭据、Webhook 密钥或本地数据库备份。
+- 业务数据库使用独立只读账号，只授予 `SELECT` 权限。
+- SQL 执行经过写意图拦截、语法检查、超时、行数上限和成本预算校验。
+- 密码使用 scrypt 加盐哈希；服务端身份覆盖客户端传入的用户标识。
+- 新增下载、消息和邮件能力时，必须继续执行服务端权限检查与审计。
+
+## 当前进度
+
+- 智能问析、知识管理、数据资源、报告流程和安全审计已接入后端。
+- 用户注册登录、历史会话、检查点分支和智能建模已实现。
+- 周报 Agent、消息中心、邮箱绑定与邮件投递已完成需求和任务拆分，
+  开发状态以 [任务中心](docs/tasks/README.md) 为准。
