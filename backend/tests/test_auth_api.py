@@ -1,5 +1,10 @@
 """平台用户认证 HTTP 契约：注册/登录/me/种子管理员/渐进式身份覆盖。"""
 
+import base64
+import hashlib
+import hmac
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -246,6 +251,8 @@ def test_email_challenge_verify_and_replay_flow(auth_session):
     assert challenge.json()["emailMasked"] == "V***@example.com"
     assert challenge.json()["purpose"] == "verify"
     code = auth_session.mail_provider.messages[-1].code
+    assert code not in repr(challenge.json())
+    assert "Verify@Example.com" not in repr(challenge.json())
     verified = client.post(
         "/api/auth/email/verify",
         json={"email": "verify@example.com", "code": code},
@@ -268,6 +275,8 @@ def test_email_challenge_verify_and_replay_flow(auth_session):
     assert "邮箱验证成功" in audit_actions
     assert "邮箱验证失败" in audit_actions
     assert "Verify@Example.com" not in repr(auth_session.audit_events)
+    assert code not in repr(auth_session.audit_events)
+    assert registered["token"] not in repr(auth_session.audit_events)
 
 
 def test_unbound_existing_user_gets_bind_action_and_can_submit_email(auth_session):
@@ -467,6 +476,46 @@ def test_email_gate_rechecks_full_token_against_database(auth_session, monkeypat
         headers={"Authorization": f"Bearer {verified['token']}"},
     )
     assert response.status_code == 403
+
+
+def test_email_gate_treats_legacy_token_without_scope_as_restricted(auth_session, monkeypatch):
+    monkeypatch.setattr(settings, "auth_email_gate_enabled", True)
+    with auth_session() as session:
+        session.add(
+            PlatformUser(
+                id="u_legacy_token",
+                username="legacytoken",
+                password_hash="scrypt$test",
+                display_name="legacytoken",
+                role="business",
+                title="业务人员",
+                enabled=True,
+                email="legacy@example.com",
+                email_canonical="legacy@example.com",
+                email_verified_at=auth_service.datetime.now(),
+            )
+        )
+        session.commit()
+        user = session.query(PlatformUser).filter_by(username="legacytoken").one()
+        current_token = auth_service.create_token(user)
+
+    raw, _signature = current_token.split(".")
+    payload = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+    payload.pop("auth_scope")
+    legacy_raw = auth_service._b64url(json.dumps(payload, separators=(",", ":")).encode())
+    legacy_signature = auth_service._b64url(
+        hmac.new(
+            settings.auth_token_secret.encode(), legacy_raw.encode(), hashlib.sha256
+        ).digest()
+    )
+    legacy_token = f"{legacy_raw}.{legacy_signature}"
+
+    response = TestClient(app).get(
+        "/api/analysis/sessions",
+        headers={"Authorization": f"Bearer {legacy_token}"},
+    )
+    assert response.status_code == 403
+    assert response.json()["errorCode"] == "EMAIL_VERIFICATION_REQUIRED"
 
 
 def test_gate_disabled_uses_explicit_demo_mode(auth_session, monkeypatch):
