@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 
 import httpx
+import pytest
 
 from app.db.models import (
     AnalysisArtifact,
@@ -191,6 +192,41 @@ def test_manual_weekly_publish_converts_legacy_content_before_queuing_exports(an
         assert version.content_json["schemaVersion"] == "weekly-report/v1"
         assert version.validation_json["passed"] is True
         assert {row.format for row in session.query(ReportFile).all()} == {"pdf", "xlsx"}
+
+
+def test_prestructured_weekly_is_revalidated_on_every_publish(analysis_session):
+    with analysis_session() as session:
+        report = Report(
+            id="invalid-structured-weekly",
+            title="待校验周报",
+            template_id="tpl-weekly",
+            source_id=1,
+            report_type="weekly",
+            status="approved",
+            period_start=datetime(2026, 8, 3),
+            period_end=datetime(2026, 8, 10),
+            current_version_id="invalid-structured-version",
+        )
+        version = ReportVersion(
+            id="invalid-structured-version",
+            report_id=report.id,
+            version=1,
+            status="approved",
+            content_json={"schemaVersion": "weekly-report/v1"},
+        )
+        session.add_all([report, version])
+        session.commit()
+
+    with pytest.raises(service.ReportConflict):
+        service.publish_report(
+            "invalid-structured-weekly",
+            "reviewer",
+            session_factory=analysis_session,
+        )
+
+    with analysis_session() as session:
+        assert session.get(Report, "invalid-structured-weekly").status == "approved"
+        assert session.query(ReportFile).count() == 0
 
 
 def test_feishu_signature_and_success_response(monkeypatch):

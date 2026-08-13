@@ -535,6 +535,13 @@ def publish_report(
                 **(version.data_quality_json or {}),
                 "confidence": confidence,
             }
+        if report.report_type == "weekly":
+            from app.reports.schema import validate_for_publish
+
+            current_validation = validate_for_publish(version.content_json or {})
+            if not current_validation["passed"]:
+                raise ReportConflict("周报未通过当前自动发布硬校验，不能发布或生成下载文件")
+            version.validation_json = current_validation
         report.reviewer_id = report.reviewer_id or user_id
         publish_version(
             session,

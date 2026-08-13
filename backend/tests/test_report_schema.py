@@ -149,6 +149,18 @@ def test_publish_validation_blocks_secret_labels_inside_narrative_text():
     assert "V-HARD-009" in {item["code"] for item in result["rules"]}
 
 
+def test_publish_validation_recomputes_change_rate_and_requires_adjacent_comparison():
+    content = _content()
+    content["metrics"][0]["changeRate"] = 0.99
+    content["identity"]["comparisonPeriodEnd"] = "2026-08-01T00:00:00"
+    content["identity"]["comparisonPeriodStart"] = "2026-07-25T00:00:00"
+
+    result = validate_for_publish(content)
+
+    codes = {item["code"] for item in result["rules"] if item["level"] == "error"}
+    assert {"V-HARD-006", "V-HARD-010"} <= codes
+
+
 def test_confidence_is_explainable_and_switches_to_data_anomaly_variant():
     result = calculate_confidence(
         {
@@ -260,6 +272,20 @@ def test_grouped_category_rows_are_not_misread_as_period_over_period_metrics():
                 "rows": [["一线", 12100], ["二线", 12840]],
             },
             "metricResolution": {"id": "output_qty", "name": "总产量", "unit": "件"},
+            "anomalies": [
+                {
+                    "title": "产线表现",
+                    "description": "二线出现异常波动，需继续复核。",
+                    "severity": "medium",
+                }
+            ],
+            "recommendations": [
+                {
+                    "title": "复核二线",
+                    "rationale": "依据已冻结异常证据进行复核。",
+                    "priority": "medium",
+                }
+            ],
         },
     )
 
@@ -275,3 +301,81 @@ def test_grouped_category_rows_are_not_misread_as_period_over_period_metrics():
     assert content["trends"] == []
     assert content["anomalies"][0]["title"] == "产线表现"
     assert content["recommendations"][0]["evidenceStatus"] == "verified"
+
+
+def test_temporal_rows_are_sorted_before_current_and_previous_values_are_selected():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1",
+        title="生产经营周报",
+        source_id=1,
+        period_start=datetime(2026, 8, 3),
+        period_end=datetime(2026, 8, 10),
+        scope_json={},
+        audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 100})
+    section = SimpleNamespace(
+        code="output",
+        title="生产情况",
+        status="succeeded",
+        summary="产量已汇总。",
+        confidence=90,
+        artifact_ids_json=["artifact-result"],
+        content_json={
+            "result": {
+                "columns": ["week", "output_qty"],
+                "rows": [["W32", 12840], ["W31", 12100]],
+            },
+            "metricResolution": {"id": "output_qty", "name": "总产量", "unit": "件"},
+        },
+    )
+
+    content = build_structured_content(
+        report=report,
+        version=version,
+        sections=[section],
+        raw_summary="产量已汇总。",
+        timezone_name="Asia/Shanghai",
+    )
+
+    assert content["metrics"][0]["previousValue"] == 12100
+    assert content["metrics"][0]["value"] == 12840
+    assert [point["label"] for point in content["trends"][0]["points"]] == ["W31", "W32"]
+
+
+def test_narrative_negations_never_create_operational_state_without_structured_artifacts():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1",
+        title="生产经营周报",
+        source_id=1,
+        period_start=datetime(2026, 8, 3),
+        period_end=datetime(2026, 8, 10),
+        scope_json={},
+        audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 42})
+    section = SimpleNamespace(
+        code="risk",
+        title="风险与整改",
+        status="succeeded",
+        summary="本期未发现异常，风险已解除，但整改尚未完成。",
+        confidence=90,
+        artifact_ids_json=["artifact-result"],
+        content_json={"result": {}},
+    )
+
+    content = build_structured_content(
+        report=report,
+        version=version,
+        sections=[section],
+        raw_summary=section.summary,
+        timezone_name="Asia/Shanghai",
+    )
+
+    assert content["anomalies"] == []
+    assert content["progress"] == []
+    assert content["recommendations"] == []

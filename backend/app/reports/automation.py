@@ -433,6 +433,17 @@ def _is_temporal_label(value: object) -> bool:
     )
 
 
+def _temporal_sort_key(value: object) -> tuple[int, object]:
+    label = str(value).strip()
+    week = re.fullmatch(r"(?:W|第?)(\d{1,2})(?:周)?", label, re.IGNORECASE)
+    if week:
+        return 1, int(week.group(1))
+    try:
+        return 0, datetime.fromisoformat(label.replace("/", "-"))
+    except ValueError:
+        return 2, label
+
+
 def _structured_metrics(sections: list[ReportSection]) -> tuple[list[dict], list[dict], list[dict]]:
     metrics: list[dict] = []
     trends: list[dict] = []
@@ -481,6 +492,8 @@ def _structured_metrics(sections: list[ReportSection]) -> tuple[list[dict], list
         ):
             # Grouped/category rows do not define current and comparison periods.
             continue
+        if len(numeric_rows) > 1 and label_index is not None:
+            numeric_rows.sort(key=lambda row: _temporal_sort_key(row[label_index]))
         key = str(resolution.get("id") or columns[numeric_index] or section.code)
         if key in seen_keys:
             continue
@@ -539,41 +552,55 @@ def _structured_metrics(sections: list[ReportSection]) -> tuple[list[dict], list
 
 
 def _structured_operational_items(sections: list[ReportSection]) -> tuple[list[dict], list[dict], list[dict]]:
+    """Map only explicit structured artifacts; narrative keywords are not state."""
+
     anomalies: list[dict] = []
     progress: list[dict] = []
     recommendations: list[dict] = []
     for section in sections:
-        summary = section.summary.strip()
-        if not summary or not section.artifact_ids_json:
+        content = section.content_json or {}
+        result = content.get("result") or {}
+        evidence = list(section.artifact_ids_json or [])
+        if not evidence:
             continue
-        evidence = list(section.artifact_ids_json)
-        verified = "verified"
-        if any(keyword in summary for keyword in ("异常", "不良", "波动", "风险", "偏高", "偏低")):
+        for item in content.get("anomalies") or result.get("anomalies") or []:
+            if not isinstance(item, dict) or not item.get("title") or not item.get("description"):
+                continue
             anomalies.append(
                 {
-                    "title": section.title,
-                    "description": summary,
-                    "severity": "high" if any(word in summary for word in ("严重", "高风险")) else "medium",
+                    "title": str(item["title"]),
+                    "description": str(item["description"]),
+                    "severity": item.get("severity") if item.get("severity") in {"critical", "high", "medium", "low"} else "medium",
+                    "metricKey": item.get("metricKey"),
                     "evidenceArtifactIds": evidence,
-                    "evidenceStatus": verified,
-                    "confidence": section.confidence,
+                    "evidenceStatus": "verified",
+                    "confidence": int(item.get("confidence") or section.confidence),
                 }
             )
-            recommendations.append(
-                {
-                    "title": f"跟进{section.title}",
-                    "rationale": "依据本期已冻结异常证据安排复核和改善跟踪。",
-                    "priority": "high" if section.confidence >= 80 else "medium",
-                    "evidenceArtifactIds": evidence,
-                    "evidenceStatus": verified,
-                }
-            )
-        if any(keyword in summary for keyword in ("进度", "完成", "推进", "改善")):
+        for item in content.get("progress") or result.get("progress") or []:
+            if not isinstance(item, dict) or not item.get("title"):
+                continue
+            status = item.get("status")
+            if status not in {"completed", "on_track", "at_risk", "blocked"}:
+                continue
             progress.append(
                 {
-                    "title": section.title,
-                    "status": "on_track",
-                    "note": summary,
+                    "title": str(item["title"]),
+                    "status": status,
+                    "note": str(item.get("note") or ""),
+                    "completionRate": item.get("completionRate"),
+                }
+            )
+        for item in content.get("recommendations") or result.get("recommendations") or []:
+            if not isinstance(item, dict) or not item.get("title") or not item.get("rationale"):
+                continue
+            recommendations.append(
+                {
+                    "title": str(item["title"]),
+                    "rationale": str(item["rationale"]),
+                    "priority": item.get("priority") if item.get("priority") in {"high", "medium", "low"} else "medium",
+                    "evidenceArtifactIds": evidence,
+                    "evidenceStatus": "verified",
                 }
             )
     return anomalies, progress, recommendations

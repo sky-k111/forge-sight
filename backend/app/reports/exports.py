@@ -34,7 +34,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from app.reports.schema import StructuredWeeklyReport
+from app.reports.schema import StructuredWeeklyReport, calculate_confidence
 
 
 INK = HexColor("#172033")
@@ -166,12 +166,13 @@ def _insight_image(report: StructuredWeeklyReport) -> BytesIO:
         )
         draw.line((0, y, width, y), fill=color)
     draw.rounded_rectangle((48, 42, width - 48, height - 42), radius=30, outline="#5AD6C8", width=3)
-    anomaly_variant = report.data_quality.coverage < 60
+    confidence = calculate_confidence(report.data_quality.model_dump(by_alias=True))
+    anomaly_variant = confidence["templateVariant"] == "data_anomaly"
     hero_label = "FORGESIGHT  /  DATA QUALITY ALERT" if anomaly_variant else "FORGESIGHT  /  WEEKLY SIGNAL"
     draw.text((82, 74), hero_label, fill="#B8F2E9", font=label_font)
-    primary = report.metrics[0] if report.metrics else None
-    headline = f"{primary.value:,.0f}" if primary else f"{report.data_quality.coverage}%"
-    subtitle = "PRIMARY KPI" if primary else "DATA COVERAGE"
+    primary = report.metrics[0] if report.metrics and not anomaly_variant else None
+    headline = f"{primary.value:,.0f}" if primary else f"{confidence['score']}%"
+    subtitle = "PRIMARY KPI" if primary else "REPORT CONFIDENCE"
     draw.text((84, 145), headline, fill="white", font=headline_font)
     draw.text((86, 220), subtitle, fill="#B8F2E9", font=caption_font)
 

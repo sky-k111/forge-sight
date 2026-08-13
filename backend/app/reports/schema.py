@@ -315,7 +315,7 @@ def validate_for_publish(content: dict) -> dict:
     comparison_invalid = bool(comparative_metrics) and (
         comparison_start is None
         or comparison_end is None
-        or comparison_end > report.identity.period_start
+        or comparison_end != report.identity.period_start
         or comparison_start >= comparison_end
         or (
             comparison_end - comparison_start
@@ -329,6 +329,31 @@ def validate_for_publish(content: dict) -> dict:
                 "level": "error",
                 "passed": False,
                 "message": "包含对比指标时必须提供完整且等长的上一比较周期。",
+            }
+        )
+
+    invalid_change_rates = [
+        metric.key
+        for metric in comparative_metrics
+        if metric.previous_value is not None
+        and metric.change_rate is not None
+        and (
+            metric.previous_value == 0
+            or abs(
+                metric.change_rate
+                - (metric.value - metric.previous_value) / abs(metric.previous_value)
+            )
+            > 0.0001
+        )
+    ]
+    if invalid_change_rates:
+        rules.append(
+            {
+                "code": "V-HARD-010",
+                "level": "error",
+                "passed": False,
+                "message": "环比变化率必须与本期值、上期值计算结果一致。",
+                "metricKeys": invalid_change_rates,
             }
         )
 
