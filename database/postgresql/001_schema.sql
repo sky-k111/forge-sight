@@ -265,6 +265,32 @@ CREATE TABLE IF NOT EXISTS data_table (
 );
 CREATE INDEX IF NOT EXISTS ix_data_table_source_id ON data_table (source_id);
 
+CREATE TABLE IF NOT EXISTS governed_model (
+	id VARCHAR(40) NOT NULL,
+	task_id VARCHAR(40) NOT NULL,
+	name VARCHAR(120) NOT NULL,
+	version INTEGER NOT NULL,
+	algorithm VARCHAR(30) NOT NULL,
+	status VARCHAR(16) NOT NULL,
+	owner_id VARCHAR(64) NOT NULL,
+	metrics_json JSONB NOT NULL,
+	features_json JSONB NOT NULL,
+	model_path TEXT NOT NULL,
+	feature_names_json JSONB NOT NULL,
+	feature_encoders_json JSONB NOT NULL,
+	feature_importance_json JSONB NOT NULL,
+	call_count INTEGER NOT NULL,
+	reviewed_by VARCHAR(64),
+	reviewed_at TIMESTAMP WITHOUT TIME ZONE,
+	published_at TIMESTAMP WITHOUT TIME ZONE,
+	retired_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_governed_model_status ON governed_model (status);
+CREATE INDEX IF NOT EXISTS ix_governed_model_task_id ON governed_model (task_id);
+
 CREATE TABLE IF NOT EXISTS knowledge_metric (
 	id VARCHAR(20) NOT NULL,
 	name VARCHAR(100) NOT NULL,
@@ -408,6 +434,74 @@ CREATE TABLE IF NOT EXISTS metric_table_binding (
 );
 CREATE INDEX IF NOT EXISTS ix_metric_table_binding_binding_id ON metric_table_binding (binding_id);
 
+CREATE TABLE IF NOT EXISTS modeling_evaluation (
+	id VARCHAR(40) NOT NULL,
+	task_id VARCHAR(40) NOT NULL,
+	result_json JSONB NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_modeling_eval_task UNIQUE (task_id)
+);
+CREATE INDEX IF NOT EXISTS ix_modeling_evaluation_task_id ON modeling_evaluation (task_id);
+
+CREATE TABLE IF NOT EXISTS modeling_inference_log (
+	id VARCHAR(40) NOT NULL,
+	task_id VARCHAR(40) NOT NULL,
+	model_id VARCHAR(40) NOT NULL,
+	input_json JSONB NOT NULL,
+	output_json JSONB NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_modeling_inference_log_model_id ON modeling_inference_log (model_id);
+CREATE INDEX IF NOT EXISTS ix_modeling_inference_log_task_id ON modeling_inference_log (task_id);
+
+CREATE TABLE IF NOT EXISTS modeling_task (
+	id VARCHAR(40) NOT NULL,
+	title VARCHAR(120) NOT NULL,
+	source VARCHAR(10) NOT NULL,
+	source_id INTEGER NOT NULL,
+	owner_id VARCHAR(64) NOT NULL,
+	goal TEXT NOT NULL,
+	task_type VARCHAR(20) NOT NULL,
+	dataset_name VARCHAR(100) NOT NULL,
+	dataset_sql TEXT NOT NULL,
+	target_field VARCHAR(64) NOT NULL,
+	target_label VARCHAR(100) NOT NULL,
+	features_json JSONB NOT NULL,
+	candidates_json JSONB NOT NULL,
+	selected_model VARCHAR(30),
+	status VARCHAR(16) NOT NULL,
+	error_json JSONB,
+	run_id VARCHAR(40),
+	modeling_proposal_json JSONB NOT NULL,
+	sample_count INTEGER NOT NULL,
+	metric VARCHAR(100) NOT NULL,
+	trained_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_modeling_task_owner_id ON modeling_task (owner_id);
+CREATE INDEX IF NOT EXISTS ix_modeling_task_run_id ON modeling_task (run_id);
+CREATE INDEX IF NOT EXISTS ix_modeling_task_source_id ON modeling_task (source_id);
+CREATE INDEX IF NOT EXISTS ix_modeling_task_status ON modeling_task (status);
+CREATE INDEX IF NOT EXISTS ix_modeling_task_task_type ON modeling_task (task_type);
+
+CREATE TABLE IF NOT EXISTS platform_user (
+	id VARCHAR(40) NOT NULL,
+	username VARCHAR(50) NOT NULL,
+	password_hash VARCHAR(256) NOT NULL,
+	display_name VARCHAR(50) NOT NULL,
+	role VARCHAR(20) NOT NULL,
+	title VARCHAR(100) NOT NULL,
+	enabled BOOLEAN NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_platform_user_username ON platform_user (username);
+
 CREATE TABLE IF NOT EXISTS report (
 	id VARCHAR(40) NOT NULL,
 	title VARCHAR(200) NOT NULL,
@@ -530,6 +624,33 @@ CREATE TABLE IF NOT EXISTS report_version (
 	CONSTRAINT uq_report_version UNIQUE (report_id, version)
 );
 CREATE INDEX IF NOT EXISTS ix_report_version_report_id ON report_version (report_id);
+
+CREATE TABLE IF NOT EXISTS semantic_index_job (
+	id VARCHAR(36) NOT NULL,
+	source_id INTEGER NOT NULL,
+	mode VARCHAR(20) NOT NULL,
+	reason VARCHAR(255) NOT NULL,
+	status VARCHAR(20) NOT NULL,
+	attempt INTEGER NOT NULL,
+	max_attempts INTEGER NOT NULL,
+	error TEXT NOT NULL,
+	result_json JSONB NOT NULL,
+	embedding_model VARCHAR(160) NOT NULL,
+	embedding_dimensions INTEGER NOT NULL,
+	requested_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	next_attempt_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	started_at TIMESTAMP WITHOUT TIME ZONE,
+	finished_at TIMESTAMP WITHOUT TIME ZONE,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	lease_owner VARCHAR(160),
+	lease_expires_at TIMESTAMP WITHOUT TIME ZONE,
+	PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_semantic_index_job_lease_expires_at ON semantic_index_job (lease_expires_at);
+CREATE INDEX IF NOT EXISTS ix_semantic_index_job_next_attempt_at ON semantic_index_job (next_attempt_at);
+CREATE INDEX IF NOT EXISTS ix_semantic_index_job_requested_at ON semantic_index_job (requested_at);
+CREATE INDEX IF NOT EXISTS ix_semantic_index_job_source_id ON semantic_index_job (source_id);
+CREATE INDEX IF NOT EXISTS ix_semantic_index_job_status ON semantic_index_job (status);
 
 CREATE TABLE IF NOT EXISTS table_field (
 	id SERIAL NOT NULL,

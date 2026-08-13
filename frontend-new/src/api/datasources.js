@@ -21,3 +21,15 @@ export async function testSource(sourceId) {
 export async function scanSource(sourceId) {
   return httpPost(`/api/datasources/${sourceId}/scan`);
 }
+
+export async function getSemanticIndexStatus(sourceId) {
+  return httpGet(`/api/datasources/${sourceId}/semantic-index`);
+}
+
+export async function rebuildSemanticIndex(sourceId) {
+  return httpPost(`/api/datasources/${sourceId}/semantic-index/rebuild`);
+}
+
+export async function retrySemanticIndexJob(jobId) {
+  return httpPost(`/api/datasources/jobs/${jobId}/retry`);
+}

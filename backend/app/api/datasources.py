@@ -5,6 +5,8 @@ from pydantic import BaseModel
 
 from app.metadata import datasources
 from app.metadata.scanner import scan_source
+from app.db.platform import PlatformSession
+from app.retrieval.index_jobs import enqueue_index_job, retry_failed_job, serialize_job, source_index_status
 
 router = APIRouter(prefix="/api/datasources", tags=["datasources"])
 
@@ -63,3 +65,36 @@ def scan_source_tables(source_id: int):
     if source is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
     return scan_source(source)
+
+
+@router.get("/{source_id}/semantic-index")
+def get_semantic_index(source_id: int):
+    try:
+        with PlatformSession() as session:
+            return source_index_status(session, source_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{source_id}/semantic-index/rebuild")
+def rebuild_semantic_index(source_id: int):
+    try:
+        with PlatformSession() as session:
+            job = enqueue_index_job(session, source_id, mode="full", reason="管理员手动全量重建")
+            session.commit()
+            return serialize_job(job)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/retry")
+def retry_semantic_index(job_id: str):
+    try:
+        with PlatformSession() as session:
+            job = retry_failed_job(session, job_id)
+            session.commit()
+            return serialize_job(job)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -3,7 +3,7 @@ import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
 import { Button, Card, EmptyState, ErrorNotice, Modal, PageFrame, RouteSkeleton, SectionHeader, StatusPill } from "../../components/ui";
 import { confirmTableSemantics, getTableFields, getTablePreview, listTables, listUnregisteredTables, suggestTableSemantics } from "../../api/resources";
-import { createSource, listSources, scanSource, testSource, updateSource } from "../../api/datasources";
+import { createSource, getSemanticIndexStatus, listSources, rebuildSemanticIndex, retrySemanticIndexJob, scanSource, testSource, updateSource } from "../../api/datasources";
 import { buildSchemaLinkPath, getSchemaNodeStyle, SCHEMA_GRAPH_HEIGHT, SCHEMA_GRAPH_WIDTH } from "./schemaGraphLayout";
 import SourceTypeMark from "../../components/ui/SourceTypeMark";
 
@@ -44,6 +44,8 @@ export default function ResourcesPage() {
   const [suggesting, setSuggesting] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [integrated, setIntegrated] = useState("");
+  const [semanticIndex, setSemanticIndex] = useState(null);
+  const [indexAction, setIndexAction] = useState(false);
 
   const load = useCallback(() => {
     setError(null);
@@ -57,6 +59,51 @@ export default function ResourcesPage() {
   useEffect(() => {
     listSources().then(setSources).catch(() => setSources([]));
   }, []);
+
+  const indexSourceId = currentSourceId ?? sources.find((source) => source.isDefault)?.id ?? sources[0]?.id;
+  useEffect(() => {
+    if (!indexSourceId) return undefined;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const next = await getSemanticIndexStatus(indexSourceId);
+        if (!active) return;
+        setSemanticIndex(next);
+      } catch {
+        if (active) setSemanticIndex(null);
+      }
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 2500);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [indexSourceId]);
+
+  const refreshSemanticIndex = async () => {
+    if (indexSourceId) setSemanticIndex(await getSemanticIndexStatus(indexSourceId));
+  };
+
+  const queueFullIndex = async () => {
+    if (!indexSourceId) return;
+    setIndexAction(true);
+    try {
+      await rebuildSemanticIndex(indexSourceId);
+      await refreshSemanticIndex();
+    } finally {
+      setIndexAction(false);
+    }
+  };
+
+  const retryIndex = async () => {
+    const jobId = semanticIndex?.latestJob?.id;
+    if (!jobId) return;
+    setIndexAction(true);
+    try {
+      await retrySemanticIndexJob(jobId);
+      await refreshSemanticIndex();
+    } finally {
+      setIndexAction(false);
+    }
+  };
 
   const visibleTables = useMemo(
     () => (tables ?? []).filter((table) => `${table.cn}${table.name}${table.topic}`.includes(search.trim())),
@@ -195,6 +242,7 @@ export default function ResourcesPage() {
       setUnregistered((list) => list.filter((table) => table.name !== created.name));
       switchSource(pendingSourceId);
       setSelectedName(created.name);
+      await refreshSemanticIndex();
     } finally {
       setConfirming(false);
     }
@@ -288,7 +336,19 @@ export default function ResourcesPage() {
           <span><b className="mr-1 font-mono text-base font-semibold text-ink">{tables.length}</b>数据表</span>
           <span><b className="mr-1 font-mono text-base font-semibold text-ink">{tables.reduce((sum, table) => sum + table.fields, 0)}</b>字段</span>
         </div>
-        <Button variant="primary" className="ml-auto" onClick={openConnector}>
+        <div className="ml-auto flex items-center gap-2 rounded-control border border-line bg-surface-2 px-2.5 py-1.5">
+          <span className={cn("h-1.5 w-1.5 rounded-full", semanticIndex?.status === "failed" ? "bg-red" : semanticIndex?.status === "succeeded" ? "bg-green" : "bg-amber")} />
+          <span className="text-[11px] font-semibold text-ink-2">{semanticIndex?.statusLabel ?? "正在读取索引状态"}</span>
+          {semanticIndex?.documents > 0 && <span className="font-mono text-[10px] text-faint">{semanticIndex.documents} 项语义资产</span>}
+          {semanticIndex?.status === "failed" ? (
+            <Button size="sm" variant="ghost" onClick={retryIndex} disabled={indexAction}>重试</Button>
+          ) : (
+            <Button size="sm" variant="ghost" onClick={queueFullIndex} disabled={indexAction} title="重新生成当前数据源的全部语义向量">
+              <Icon name="refresh" size={13} />{indexAction ? "已入队" : "重建"}
+            </Button>
+          )}
+        </div>
+        <Button variant="primary" onClick={openConnector}>
           <Icon name="plus" size={15} />接入数据源
         </Button>
       </Card>

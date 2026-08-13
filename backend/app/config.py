@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     retrieval_semantic_top_k: int = 20
     retrieval_semantic_score_threshold: float = 0.45
     retrieval_rrf_k: int = 60
+    semantic_index_worker_enabled: bool = True
+    semantic_index_worker_poll_seconds: float = 0.75
+    semantic_index_worker_lease_seconds: int = 180
+    semantic_index_max_attempts: int = 3
 
     agent_max_llm_calls: int = 12
     agent_max_retry_calls: int = 3

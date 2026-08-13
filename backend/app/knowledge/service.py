@@ -24,6 +24,7 @@ from app.db.models import (
     TableField,
 )
 from app.db.platform import PlatformSession
+from app.retrieval.index_jobs import enqueue_all_sources, enqueue_index_job
 
 
 class KnowledgeNotFound(KeyError):
@@ -159,6 +160,7 @@ def update_topic(code: str, payload: dict) -> dict:
             session.query(BusinessObject).filter_by(topic=old_name).update({"topic": new_name})
             session.query(BusinessRule).filter_by(scope=old_name).update({"scope": new_name})
             session.query(KnowledgeMetric).filter_by(topic=old_name).update({"topic": new_name, "status": "待审核"})
+            enqueue_all_sources(session, reason=f"分析主题重命名：{old_name} → {new_name}")
         session.commit()
     write_audit(action=f"修改分析主题 {code}", resource=new_name, result="已记录", role="管理员")
     return next(item for item in list_topics() if item["code"] == code)
@@ -226,6 +228,7 @@ def create_object(payload: dict) -> dict:
             enabled=payload.get("enabled", True),
         )
         session.add(row)
+        enqueue_all_sources(session, reason=f"新增业务对象：{name}")
         session.commit()
         result = _serialize_object(row)
     write_audit(action=f"创建业务对象 {name}", resource=object_id, result="已记录", role="管理员")
@@ -258,6 +261,7 @@ def update_object(object_id: str, payload: dict) -> dict:
                 if old_name in dimensions:
                     metric.dimensions_json = _dump_list(new_name if item == old_name else item for item in dimensions)
                     metric.status = "待审核"
+        enqueue_all_sources(session, reason=f"更新业务对象：{object_id}")
         session.commit()
         result = _serialize_object(row)
     write_audit(action=f"修改业务对象 {object_id}", resource=new_name, result="已记录", role="管理员")
@@ -274,6 +278,7 @@ def delete_object(object_id: str) -> dict:
         if used_by:
             raise KnowledgeConflict(f"业务对象“{row.name}”仍被指标 {', '.join(used_by)} 作为分析维度引用，不能删除")
         session.delete(row)
+        enqueue_all_sources(session, reason=f"删除业务对象：{object_id}")
         session.commit()
     write_audit(action=f"删除业务对象 {object_id}", resource=object_id, result="已记录", role="管理员")
     return {"ok": True}
@@ -315,6 +320,7 @@ def create_rule(payload: dict) -> dict:
             enabled=payload.get("enabled", True),
         )
         session.add(row)
+        enqueue_all_sources(session, reason=f"新增业务规则：{name}")
         session.commit()
         result = _serialize_rule(row)
     write_audit(action=f"创建业务规则 {name}", resource=rule_id, result="已记录", role="管理员")
@@ -334,6 +340,7 @@ def update_rule(rule_id: str, payload: dict) -> dict:
         row.scope = scope
         if "enabled" in payload and payload["enabled"] is not None:
             row.enabled = bool(payload["enabled"])
+        enqueue_all_sources(session, reason=f"更新业务规则：{rule_id}")
         session.commit()
         result = _serialize_rule(row)
     write_audit(action=f"修改业务规则 {rule_id}", resource=rule_id, result="已记录", role="管理员")
@@ -347,6 +354,7 @@ def delete_rule(rule_id: str) -> dict:
             raise KnowledgeNotFound(f"业务规则 {rule_id} 不存在")
         _block_if_referenced(session, "rule", rule_id)
         session.delete(row)
+        enqueue_all_sources(session, reason=f"删除业务规则：{rule_id}")
         session.commit()
     write_audit(action=f"删除业务规则 {rule_id}", resource=rule_id, result="已记录", role="管理员")
     return {"ok": True}
@@ -652,6 +660,16 @@ def save_metric(payload: dict, metric_id: str | None = None) -> dict:
                     transform_expression=mapping["transformExpression"],
                 )
             )
+        affected_source_ids = {
+            value for (value,) in session.query(MetricSourceBinding.source_id).filter_by(metric_id=row.id).all()
+        } or {source_id}
+        for affected_source_id in affected_source_ids:
+            enqueue_index_job(
+                session,
+                affected_source_id,
+                mode="incremental",
+                reason=f"指标语义或物理绑定更新：{row.name}",
+            )
         session.commit()
         result = _serialize_metric(session, row, source_id)
     action = "创建指标" if created else "修改指标并退回待审核"
@@ -679,6 +697,11 @@ def publish_metric(metric_id: str, source_id: int | None = None) -> dict:
         binding.status = "已验证"
         binding.validated_at = datetime.now()
         binding.updated_at = datetime.now()
+        affected_source_ids = {
+            value for (value,) in session.query(MetricSourceBinding.source_id).filter_by(metric_id=metric_id).all()
+        }
+        for affected_source_id in affected_source_ids:
+            enqueue_index_job(session, affected_source_id, mode="incremental", reason=f"发布指标：{row.name}")
         session.commit()
         result = _serialize_metric(session, row, source_id)
     write_audit(action=f"发布指标 {row.name}", resource=metric_id, result="已记录", role="管理员")
@@ -698,6 +721,11 @@ def submit_metric_for_review(metric_id: str, source_id: int | None = None) -> di
         if binding:
             binding.status = "待验证"
             binding.validated_at = None
+        affected_source_ids = {
+            value for (value,) in session.query(MetricSourceBinding.source_id).filter_by(metric_id=metric_id).all()
+        }
+        for affected_source_id in affected_source_ids:
+            enqueue_index_job(session, affected_source_id, mode="incremental", reason=f"指标退回审核：{row.name}")
         session.commit()
         result = _serialize_metric(session, row, source_id)
     write_audit(action=f"指标退回待审核 {row.name}", resource=metric_id, result="已记录", role="管理员")
@@ -711,11 +739,14 @@ def delete_metric(metric_id: str) -> dict:
             raise KnowledgeNotFound(f"指标 {metric_id} 不存在")
         _block_if_referenced(session, "metric", metric_id)
         bindings = session.query(MetricSourceBinding).filter_by(metric_id=metric_id).all()
+        affected_source_ids = {binding.source_id for binding in bindings}
         for binding in bindings:
             session.query(MetricFieldBinding).filter_by(binding_id=binding.id).delete()
             session.query(MetricTableBinding).filter_by(binding_id=binding.id).delete()
             session.delete(binding)
         session.delete(row)
+        for affected_source_id in affected_source_ids:
+            enqueue_index_job(session, affected_source_id, mode="incremental", reason=f"删除指标：{metric_id}")
         session.commit()
     write_audit(action=f"删除指标 {metric_id}", resource=metric_id, result="已记录", role="管理员")
     return {"ok": True}

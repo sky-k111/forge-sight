@@ -36,21 +36,24 @@ def seed_default_source() -> DataSource:
 def list_sources() -> list[dict]:
     with PlatformSession() as session:
         sources = session.query(DataSource).order_by(DataSource.id).all()
-    return [
-        {
-            "id": s.id,
-            "name": s.name,
-            "type": s.type,
-            "typeLabel": SUPPORTED_TYPES.get(s.type, {}).get("label", s.type),
-            "host": s.host,
-            "port": s.port,
-            "database": s.db_name,
-            "username": s.username,
-            "status": s.status,
-            "isDefault": s.is_default,
-        }
-        for s in sources
-    ]
+        from app.retrieval.index_jobs import latest_job, serialize_job
+
+        return [
+            {
+                "id": s.id,
+                "name": s.name,
+                "type": s.type,
+                "typeLabel": SUPPORTED_TYPES.get(s.type, {}).get("label", s.type),
+                "host": s.host,
+                "port": s.port,
+                "database": s.db_name,
+                "username": s.username,
+                "status": s.status,
+                "isDefault": s.is_default,
+                "semanticIndex": serialize_job(latest_job(session, s.id)),
+            }
+            for s in sources
+        ]
 
 
 def create_source(payload: dict) -> dict:

@@ -187,6 +187,7 @@ def scan_source(source: DataSource, auto_register: bool = False) -> dict:
     schema_comments = load_schema_comments() if source.is_default else {}
 
     with PlatformSession() as session:
+        first_scan = session.query(DataTable.id).filter_by(source_id=source.id).first() is None
         for table_name, comment in tables:
             fields = fields_by_table.get(table_name, [])
             pk = primary_keys.get(table_name) or ""
@@ -251,7 +252,17 @@ def scan_source(source: DataSource, auto_register: bool = False) -> dict:
                     source=source_kind,
                 )
             )
+        from app.retrieval.index_jobs import enqueue_index_job, serialize_job
+
+        index_job = enqueue_index_job(
+            session,
+            source.id,
+            mode="full" if first_scan else "incremental",
+            reason="数据源首次接入并完成扫描" if first_scan else "数据源元数据重新扫描",
+        )
         session.commit()
+
+    summary["semanticIndexJob"] = serialize_job(index_job)
 
     return summary
 
