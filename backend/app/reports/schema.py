@@ -337,12 +337,12 @@ def validate_for_publish(content: dict) -> dict:
         metric.key
         for metric in comparative_metrics
         if (
-            (metric.previous_value is None) != (metric.change_rate is None)
+            (metric.previous_value is None and metric.change_rate is not None)
+            or (metric.previous_value == 0 and metric.change_rate is not None)
             or (
-                metric.previous_value is not None
-                and metric.change_rate is not None
+                metric.previous_value not in {None, 0}
                 and (
-                    metric.previous_value == 0
+                    metric.change_rate is None
                     or abs(
                         metric.change_rate
                         - (metric.value - metric.previous_value) / abs(metric.previous_value)

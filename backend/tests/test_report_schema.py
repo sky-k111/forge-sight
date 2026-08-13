@@ -170,6 +170,17 @@ def test_publish_validation_requires_previous_value_for_change_rate():
     assert "V-HARD-010" in {item["code"] for item in result["rules"]}
 
 
+def test_zero_previous_value_allows_explicit_uncomputable_change_rate():
+    content = _content()
+    content["metrics"][0]["previousValue"] = 0
+    content["metrics"][0]["changeRate"] = None
+    content["managementSummary"]["findings"][0]["text"] = "本期指标已完成核验。"
+
+    result = validate_for_publish(content)
+
+    assert result["passed"] is True
+
+
 @pytest.mark.parametrize(
     "text",
     ["API_TOKEN=leak", "SMTP_PASSWORD=leak", "密码：leak", "密钥：leak"],
