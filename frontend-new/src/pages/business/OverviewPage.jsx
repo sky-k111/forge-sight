@@ -181,17 +181,32 @@ export default function OverviewPage() {
             <div className="flex items-start justify-between gap-3 px-5 pb-3 pt-5">
               <div>
                 <span className="text-[10px] font-semibold tracking-[0.06em] text-faint">ANALYSIS READINESS</span>
-                <h3 className="mt-1 text-base font-semibold text-ink">当前范围分析状态</h3>
+                <h3 className="mt-1 text-base font-semibold text-ink">现在建议做什么</h3>
               </div>
               <StatusPill tone={statusTone}>{capability.label}</StatusPill>
             </div>
             <div className="flex flex-1 flex-col px-5 pb-5">
               <p className="text-xs leading-6 text-muted">{capability.detail}</p>
-              <dl className="mt-4 space-y-3 border-t border-line pt-4">
-                <ReadinessItem label="可直接使用的可信指标" value={metrics.trusted} />
-                <ReadinessItem label="可分析业务主题" value={topics.length} />
-                <ReadinessItem label="当前数据源的历史分析" value={recent.total} />
-              </dl>
+              {suggestions[0] ? (
+                <div className="mt-4 rounded-card border border-line bg-surface-2 px-4 py-3.5">
+                  <span className="text-[10px] font-semibold tracking-wide text-primary">推荐下一步</span>
+                  <p className="mt-1.5 text-sm font-semibold text-ink">{suggestions[0].title}</p>
+                  <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted">{suggestions[0].prompt}</p>
+                  <button
+                    type="button"
+                    onClick={() => startAnalysis(suggestions[0].prompt)}
+                    disabled={!capability.canAnalyze}
+                    className="mt-3 inline-flex cursor-pointer items-center gap-1 text-xs font-semibold text-primary transition-opacity hover:opacity-75 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    直接开始分析 <Icon name="arrow" size={13} />
+                  </button>
+                </div>
+              ) : (
+                <dl className="mt-4 space-y-3 border-t border-line pt-4">
+                  <ReadinessItem label="可直接使用的可信指标" value={metrics.trusted} />
+                  <ReadinessItem label="可分析业务主题" value={topics.length} />
+                </dl>
+              )}
               <p className="mt-auto pt-4 text-[10px] text-faint">最近扫描 {formatTime(snapshot.lastScan)}</p>
             </div>
           </Card>

@@ -528,7 +528,7 @@ export default function AnalysisPage() {
             {evidenceOpen && (
               <div className="evidence-panel__header flex items-center gap-3 border-b border-line px-4 pr-14">
                 <div className="min-w-0">
-                  <span className="truncate font-mono text-[10px] font-semibold tracking-wide text-faint">TRACE / {evidenceRun.id}</span>
+                  <span className="truncate text-[10px] font-semibold text-faint">执行记录已保存</span>
                   <h2 className="mt-0.5 text-[15px] font-semibold tracking-tight text-ink">分析证据链</h2>
                 </div>
               </div>
@@ -1108,6 +1108,7 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
   const confidence = run.conclusion?.confidence;
   const metricResolution = run.conclusion?.metricResolution;
   const inferredMetric = metricResolution?.source === "agent_inferred";
+  const emptyResult = Number(run.execution.rowCount ?? 0) === 0;
   const copySql = async () => {
     if (!sqlCode) return;
     try {
@@ -1139,9 +1140,15 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
             <span className="grid h-7 w-7 shrink-0 place-items-center rounded-tag bg-green/10 text-green"><Icon name="check" size={15} strokeWidth={2.2} /></span>
             <div><span className="block text-[10px] font-semibold tracking-wide text-faint">分析完成</span><h3 className="mt-0.5 text-body font-semibold text-ink">分析结果</h3></div>
           </div>
-          <span className="text-[11px] text-faint">{run.execution.rowCount} 条记录 · 分析用时 {formatDuration(analysisDuration)}</span>
+          <span className="text-[11px] text-faint">{emptyResult ? "当前范围无记录" : `${run.execution.rowCount} 条记录`} · 分析用时 {formatDuration(analysisDuration)}</span>
         </div>
         <p className="mt-3 max-w-[720px] break-words text-body leading-relaxed text-ink-2">{run.conclusion.text}</p>
+        {emptyResult && (
+          <div className="mt-3 flex items-start gap-2 rounded-control border border-amber/25 bg-amber-soft px-3 py-2.5 text-xs leading-relaxed text-amber">
+            <Icon name="help" size={14} className="mt-0.5 shrink-0" />
+            <span>查询已正常完成，但当前筛选范围没有匹配记录；系统不会据此生成数值性判断。</span>
+          </div>
+        )}
         {confidence && (
           <div className={cn(
             "mt-3 rounded-control border px-3.5 py-3",
@@ -1160,7 +1167,7 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
                     ? "bg-amber/10 text-amber"
                     : "bg-red/10 text-red",
               )}>
-                {confidence.label} · {confidence.score}%
+                {emptyResult ? "空结果已验证" : confidence.label} · {confidence.score}%
               </span>
               <strong className="text-xs font-semibold text-ink">
                 {inferredMetric ? "Agent 临时推导口径" : "企业已发布口径"}
