@@ -139,6 +139,16 @@ def test_publish_validation_blocks_inconsistent_claims_periods_evidence_and_secr
     assert {"V-HARD-006", "V-HARD-007", "V-HARD-008", "V-HARD-009"} <= codes
 
 
+def test_publish_validation_blocks_secret_labels_inside_narrative_text():
+    content = _content()
+    content["managementSummary"]["findings"][0]["text"] = "SMTP 授权码：must-never-ship"
+
+    result = validate_for_publish(content)
+
+    assert result["passed"] is False
+    assert "V-HARD-009" in {item["code"] for item in result["rules"]}
+
+
 def test_confidence_is_explainable_and_switches_to_data_anomaly_variant():
     result = calculate_confidence(
         {

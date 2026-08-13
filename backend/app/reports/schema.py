@@ -159,6 +159,14 @@ def _contains_sensitive_key(value: Any) -> bool:
                 return True
     elif isinstance(value, list):
         return any(_contains_sensitive_key(item) for item in value)
+    elif isinstance(value, str):
+        return bool(
+            re.search(
+                r"(?i)\b(password|token|secret|authorization(?:code)?)\b\s*[:=]"
+                r"|授权码\s*[:：=]",
+                value,
+            )
+        )
     return False
 
 
