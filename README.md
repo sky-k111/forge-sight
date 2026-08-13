@@ -235,8 +235,14 @@ python -m venv .venv
 .venv\Scripts\pip.exe install -r requirements.txt
 ```
 
-`backend/.env.example` 使用占位值，不能直接启动。使用当前
-`docker-compose.yml` 的本地默认配置时，至少替换为：
+后端目录中的两个环境文件用途不同：
+
+- `.env.example`：可提交的配置模板，只维护字段和安全占位值，不填写真实密钥。
+- `.env`：当前电脑实际读取的配置，已被 Git 忽略；日常只修改这个文件。
+
+首次安装才执行一次 `Copy-Item .env.example .env`。已有 `.env` 时不要重复执行，
+否则会覆盖本地数据库、模型和邮件配置。使用当前 `docker-compose.yml` 的本地默认配置时，
+至少替换为：
 
 ```dotenv
 BUSINESS_DB_URL=mysql+pymysql://forgesight_reader:forgesight_reader@127.0.0.1:3307/forge_sight?charset=utf8mb4
@@ -251,6 +257,28 @@ AUTH_ADMIN_PASSWORD=替换为本地管理员密码
 其中 `forgesight_reader` 是初始化脚本将创建的本地只读账号密码。
 部署环境必须更换 Compose 默认密码，不得沿用上述开发值。运行初始化前，
 请确认 `backend/.env` 中已经没有任何 `CHANGE_ME`。
+
+#### 使用 QQ 邮箱发送验证码
+
+ForgeSight 可以向任意有效邮箱发送验证码；QQ 邮箱在这里仅作为发件邮箱。
+在 QQ 邮箱设置中开启 SMTP 服务并生成授权码，然后只在 `backend/.env` 中填写：
+
+```dotenv
+AUTH_EMAIL_GATE_ENABLED=true
+AUTH_EMAIL_GATE_ALLOW_CAPTURE=false
+EMAIL_CODE_SECRET=替换为随机长字符串
+MAIL_PROVIDER=smtp
+MAIL_FROM_ADDRESS=你的QQ邮箱@qq.com
+MAIL_FROM_NAME=ForgeSight
+SMTP_HOST=smtp.qq.com
+SMTP_PORT=465
+SMTP_USERNAME=你的QQ邮箱@qq.com
+SMTP_PASSWORD=你的QQ邮箱SMTP授权码
+SMTP_USE_TLS=true
+```
+
+`SMTP_PASSWORD` 填 QQ 邮箱生成的 SMTP 授权码，不是 QQ 密码，也不是用户收到的六位验证码。
+修改后需要重启后端。真实邮箱、授权码和 `EMAIL_CODE_SECRET` 不得写入 `.env.example`、文档或 Git。
 
 ### 3. 初始化数据库
 
