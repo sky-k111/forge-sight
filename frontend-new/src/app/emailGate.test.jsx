@@ -53,6 +53,22 @@ test("redirects an anonymous user to login when demo access is disabled", async 
   expect(screen.queryByText("敏感工作台")).toBeNull();
 });
 
+test("redirects an anonymous user to login by default in development", async () => {
+  render(
+    <MemoryRouter initialEntries={["/workspace/reports"]}>
+      <Routes>
+        <Route element={<EmailGate />}>
+          <Route path="/workspace/reports" element={<div>敏感工作台</div>} />
+        </Route>
+        <Route path="/login" element={<div>登录页面</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findByText("登录页面")).toBeTruthy();
+  expect(screen.queryByText("敏感工作台")).toBeNull();
+});
+
 test("refreshes a legacy cached user before deciding email access", async () => {
   window.localStorage.setItem("forgesight:auth-token", "legacy-token");
   window.localStorage.setItem(

@@ -131,6 +131,7 @@ function makeAnalysisSnapshot({
 let analysisRuns;
 
 beforeEach(() => {
+  vi.stubEnv("VITE_DEMO_MODE", "true");
   window.history.replaceState({}, "", "/workspace/overview");
   window.sessionStorage.clear();
   window.localStorage.clear();
@@ -605,6 +606,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("ForgeSight application routes", () => {
