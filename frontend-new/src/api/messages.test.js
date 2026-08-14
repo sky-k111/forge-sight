@@ -4,6 +4,7 @@ import {
   createAnnouncement,
   getMessage,
   getUnreadCount,
+  getOperationalMetrics,
   listAnnouncements,
   listDeliveries,
   listMessages,
@@ -53,6 +54,7 @@ describe("message center API contract", () => {
     await publishAnnouncement("ann-1");
     await withdrawAnnouncement("ann-1", "窗口取消");
     await listDeliveries({ status: "failed", recipientUserId: "u-1" });
+    await getOperationalMetrics();
     await retryDelivery("del-1", true);
 
     expect(httpGet).toHaveBeenNthCalledWith(1, "/api/v1/announcements?status=draft");
@@ -63,6 +65,7 @@ describe("message center API contract", () => {
       2,
       "/api/v1/deliveries?status=failed&recipientUserId=u-1",
     );
+    expect(httpGet).toHaveBeenNthCalledWith(3, "/api/v1/operations/metrics");
     expect(httpPost).toHaveBeenCalledWith("/api/v1/deliveries/del-1/retry?confirmUnknown=true");
   });
 });

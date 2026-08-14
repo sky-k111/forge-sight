@@ -441,11 +441,18 @@ def _prepare_sheet(sheet, title: str, report: StructuredWeeklyReport, headers: l
     sheet.cell(3, 2, report.identity.period_start)
     sheet.cell(3, 3, "至")
     sheet.cell(3, 4, report.identity.period_end)
+    sheet.cell(3, 2).number_format = "yyyy-mm-dd"
+    sheet.cell(3, 4).number_format = "yyyy-mm-dd"
     sheet.cell(4, 1, "报告版本")
     sheet.cell(4, 2, report.identity.version_id)
     sheet.cell(4, 3, "导出说明")
     sheet.cell(4, 4, "数据来自同一已冻结周报版本")
     sheet.freeze_panes = "A6"
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.print_title_rows = "1:6"
     for column, value in enumerate(headers, start=1):
         cell = sheet.cell(6, column, value)
         cell.font = Font(name="Microsoft YaHei", bold=True, color="FFFFFF")

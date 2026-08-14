@@ -60,6 +60,12 @@ CREATE TABLE IF NOT EXISTS report_file (
     CONSTRAINT ck_report_file_status
         CHECK (status IN ('queued', 'generating', 'ready', 'failed', 'dead_letter'))
 );
+-- 早期版本已经存在精简 report_file 表。CREATE TABLE IF NOT EXISTS 不会为其补列，
+-- 因此必须先做增量 ALTER，再创建依赖这些列的索引。
+ALTER TABLE IF EXISTS report_file
+    ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMP WITHOUT TIME ZONE,
+    ADD COLUMN IF NOT EXISTS lease_owner VARCHAR(80),
+    ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMP WITHOUT TIME ZONE;
 CREATE INDEX IF NOT EXISTS ix_report_file_report_id ON report_file (report_id);
 CREATE INDEX IF NOT EXISTS ix_report_file_version_id ON report_file (version_id);
 CREATE INDEX IF NOT EXISTS ix_report_file_status ON report_file (status);

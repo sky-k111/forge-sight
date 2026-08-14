@@ -275,3 +275,75 @@ def test_domain_migration_is_repeatable_and_preserves_legacy_subscription():
         with admin_engine.begin() as connection:
             connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE')
         admin_engine.dispose()
+
+
+@pytest.mark.skipif(
+    not os.getenv("POSTGRES_TEST_URL"),
+    reason="POSTGRES_TEST_URL is only configured for PostgreSQL integration runs",
+)
+def test_domain_migration_upgrades_legacy_report_file_before_creating_indexes():
+    """A pre-M report_file table must upgrade without manual ALTER TABLE recovery."""
+
+    database_url = os.environ["POSTGRES_TEST_URL"]
+    schema_name = f"t02_{uuid.uuid4().hex}"
+    admin_engine = create_engine(database_url)
+    scoped_engine = create_engine(database_url)
+
+    @event.listens_for(scoped_engine, "connect")
+    def _set_search_path(dbapi_connection, _connection_record):
+        with dbapi_connection.cursor() as cursor:
+            cursor.execute(f'SET search_path TO "{schema_name}"')
+
+    try:
+        with admin_engine.begin() as connection:
+            connection.exec_driver_sql(f'CREATE SCHEMA "{schema_name}"')
+        bootstrap.execute_sql_file(scoped_engine, MIGRATION_DIR / "001_schema.sql")
+        with scoped_engine.begin() as connection:
+            connection.exec_driver_sql("DROP INDEX IF EXISTS ix_report_file_next_retry_at")
+            connection.exec_driver_sql("DROP INDEX IF EXISTS ix_report_file_lease_owner")
+            connection.exec_driver_sql("DROP INDEX IF EXISTS ix_report_file_lease_expires_at")
+            connection.exec_driver_sql(
+                "ALTER TABLE report_file "
+                "DROP COLUMN IF EXISTS next_retry_at, "
+                "DROP COLUMN IF EXISTS lease_owner, "
+                "DROP COLUMN IF EXISTS lease_expires_at, "
+                "DROP COLUMN IF EXISTS source_content_checksum"
+            )
+
+        bootstrap.execute_sql_file(scoped_engine, MIGRATION_DIR / "003_domain_model.sql")
+        bootstrap.execute_sql_file(scoped_engine, MIGRATION_DIR / "004_report_version_freeze.sql")
+
+        with scoped_engine.connect() as connection:
+            columns = set(
+                connection.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() AND table_name = 'report_file'"
+                    )
+                ).scalars()
+            )
+            indexes = set(
+                connection.execute(
+                    text(
+                        "SELECT indexname FROM pg_indexes "
+                        "WHERE schemaname = current_schema() AND tablename = 'report_file'"
+                    )
+                ).scalars()
+            )
+
+        assert {
+            "next_retry_at",
+            "lease_owner",
+            "lease_expires_at",
+            "source_content_checksum",
+        } <= columns
+        assert {
+            "ix_report_file_next_retry_at",
+            "ix_report_file_lease_owner",
+            "ix_report_file_lease_expires_at",
+        } <= indexes
+    finally:
+        scoped_engine.dispose()
+        with admin_engine.begin() as connection:
+            connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE')
+        admin_engine.dispose()

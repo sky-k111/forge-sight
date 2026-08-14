@@ -49,6 +49,10 @@ export async function listDeliveries(filters = {}) {
   return (await httpGet(`/api/v1/deliveries${queryString(filters)}`)).items;
 }
 
+export function getOperationalMetrics() {
+  return httpGet("/api/v1/operations/metrics");
+}
+
 export function retryDelivery(id, confirmUnknown = false) {
   return httpPost(`/api/v1/deliveries/${id}/retry${queryString({ confirmUnknown: confirmUnknown || undefined })}`);
 }

@@ -174,6 +174,17 @@ def test_excel_uses_required_sheets_and_real_numeric_cells():
     assert workbook["异常明细"]["A7"].value == "AOI 工序不良率偏高"
 
 
+def test_excel_dates_and_print_layout_are_readable_in_desktop_excel():
+    workbook = load_workbook(BytesIO(render_excel_bytes(_report_content())))
+
+    for sheet in workbook.worksheets:
+        assert sheet["B3"].number_format == "yyyy-mm-dd"
+        assert sheet["D3"].number_format == "yyyy-mm-dd"
+        assert sheet.page_setup.orientation == "landscape"
+        assert sheet.page_setup.fitToWidth == 1
+        assert sheet.sheet_properties.pageSetUpPr.fitToPage is True
+
+
 def test_long_pdf_table_repeats_cleanly_and_keeps_last_row_searchable():
     content = _report_content()
     content["anomalies"] = [

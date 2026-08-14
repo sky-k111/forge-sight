@@ -18,6 +18,7 @@ from app.api import (
     model_governance,
     modeling,
     overview,
+    operations,
     reports,
     resources,
     retrieval,
@@ -113,6 +114,7 @@ app.include_router(messages.router)
 app.include_router(retrieval.router)
 app.include_router(analysis.router)
 app.include_router(overview.router)
+app.include_router(operations.router)
 app.include_router(reports.router)
 app.include_router(modeling.router)
 app.include_router(model_governance.router)
