@@ -414,6 +414,19 @@ def test_email_gate_blocks_restricted_and_anonymous_business_access(auth_session
     assert anonymous.json()["errorCode"] == "AUTH_REQUIRED"
 
 
+def test_email_gate_error_keeps_cors_headers(auth_session, monkeypatch):
+    monkeypatch.setattr(settings, "auth_email_gate_enabled", True)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/analysis/sessions",
+        headers={"Origin": "http://127.0.0.1:5173"},
+    )
+
+    assert response.status_code == 401
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+
+
 def test_email_gate_allows_restricted_auth_whitelist(auth_session, monkeypatch):
     monkeypatch.setattr(settings, "auth_email_gate_enabled", True)
     client = TestClient(app)

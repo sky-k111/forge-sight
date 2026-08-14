@@ -84,14 +84,6 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="ForgeSight API", version="0.1.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 @app.middleware("http")
 async def enforce_email_identity_gate(request: Request, call_next):
     if request.method == "OPTIONS":
@@ -102,6 +94,14 @@ async def enforce_email_identity_gate(request: Request, call_next):
     if denied is not None:
         return denied
     return await call_next(request)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(security.router)
 app.include_router(auth.router)
