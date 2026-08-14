@@ -18,7 +18,7 @@ from app.auth import service as auth_service
 from app.auth.mail_provider import CaptureMailProvider
 from app.auth.deps import validate_email_gate_configuration
 from app.config import settings
-from app.db.models import Base, DataSource, PlatformUser
+from app.db.models import Base, DataScopePolicy, DataSource, PlatformUser
 from app.main import app
 
 
@@ -94,6 +94,89 @@ def test_register_creates_business_user_with_token(auth_session):
     assert auth_service.decode_token(body["token"])["auth_scope"] == "restricted"
     assert "email" not in body["user"]
     assert "password_hash" not in body["user"]
+
+
+def test_register_provisions_weekly_report_access_to_the_default_source(auth_session):
+    response = TestClient(app).post(
+        "/api/auth/register",
+        json={
+            "username": "reportreader",
+            "password": "pass1234",
+            "displayName": "周报读者",
+            "email": "reportreader@example.com",
+        },
+    )
+
+    assert response.status_code == 201
+    with auth_session() as session:
+        source_id = session.query(DataSource.id).filter_by(is_default=True).scalar()
+        policy = session.query(DataScopePolicy).filter_by(
+            subject_type="user",
+            subject_id=response.json()["user"]["id"],
+            business_key="weekly_report",
+        ).one()
+
+    assert policy.effect == "allow"
+    assert policy.enabled is True
+    assert policy.data_source_ids_json == [source_id]
+
+
+def test_scope_bootstrap_backfills_an_existing_business_user(auth_session):
+    with auth_session() as session:
+        session.add(
+            PlatformUser(
+                id="existing-user-id",
+                username="existinguser",
+                password_hash="test-only",
+                role="business",
+            )
+        )
+        session.commit()
+
+    auth_service.seed_default_report_scopes()
+
+    with auth_session() as session:
+        policy = session.query(DataScopePolicy).filter_by(
+            subject_type="user",
+            subject_id="existing-user-id",
+            business_key="weekly_report",
+        ).one()
+    assert policy.data_source_ids_json == [1]
+
+
+def test_scope_bootstrap_preserves_an_explicitly_revoked_policy(auth_session):
+    with auth_session() as session:
+        session.add_all(
+            [
+                PlatformUser(
+                    id="revoked-user-id",
+                    username="revokeduser",
+                    password_hash="test-only",
+                    role="business",
+                ),
+                DataScopePolicy(
+                    id="revoked-policy-id",
+                    subject_type="user",
+                    subject_id="revoked-user-id",
+                    business_key="weekly_report",
+                    effect="allow",
+                    data_source_ids_json=[1],
+                    enabled=False,
+                ),
+            ]
+        )
+        session.commit()
+
+    auth_service.seed_default_report_scopes()
+
+    with auth_session() as session:
+        policies = session.query(DataScopePolicy).filter_by(
+            subject_type="user",
+            subject_id="revoked-user-id",
+            business_key="weekly_report",
+        ).all()
+    assert len(policies) == 1
+    assert policies[0].enabled is False
 
 
 def test_register_duplicate_username_conflict(auth_session):

@@ -50,9 +50,10 @@ def create_platform_tables():
             scan_default_source(auto_register=True)
     seed_knowledge()
     seed_report_templates()
-    from app.auth.service import seed_admin
+    from app.auth.service import seed_admin, seed_default_report_scopes
 
     seed_admin()
+    seed_default_report_scopes()
     if settings.agent_worker_enabled:
         try:
             from app.agent.checkpointer import initialize_checkpointer
