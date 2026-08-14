@@ -376,8 +376,12 @@ def validate_generated_version(
     }
 
 
-def compose_management_summary(raw_summary: str, sections: list[ReportSection]) -> dict:
-    """把已验证章节压缩为 3–5 条管理发现，不创造新的业务数字。"""
+def compose_management_summary(
+    raw_summary: str,
+    sections: list[ReportSection],
+    metrics: list[dict],
+) -> dict:
+    """从结构化指标生成简洁管理发现，不转抄未结构化的数字。"""
 
     findings: list[dict] = []
     all_evidence = [
@@ -385,27 +389,31 @@ def compose_management_summary(raw_summary: str, sections: list[ReportSection]) 
         for section in sections
         for artifact_id in (section.artifact_ids_json or [])
     ]
-    scored = [section.confidence for section in sections if section.confidence]
-    if raw_summary.strip() and all_evidence:
-        findings.append(
-            {
-                "level": "confirmed",
-                "text": raw_summary.strip(),
-                "evidenceArtifactIds": all_evidence,
-                "evidenceStatus": "verified",
-                "confidence": round(sum(scored) / len(scored)) if scored else 60,
-            }
-        )
     for section in sections:
-        if not section.summary.strip():
+        evidence = list(section.artifact_ids_json or [])
+        section_metric = next(
+            (
+                metric
+                for metric in metrics
+                if set(metric.get("evidenceArtifactIds") or []).intersection(evidence)
+            ),
+            None,
+        )
+        if section_metric is None:
             continue
+        value = section_metric["value"]
+        value_label = str(int(value)) if float(value).is_integer() else f"{value:g}"
+        title = str(getattr(section, "title", None) or section.code)
         findings.append(
             {
                 "level": "confirmed" if section.confidence >= 80 else "possible",
                 "sectionCode": section.code,
-                "text": section.summary.strip(),
-                "evidenceArtifactIds": list(section.artifact_ids_json or []),
-                "evidenceStatus": "verified" if section.artifact_ids_json else "missing",
+                "text": (
+                    f"{title}：{section_metric['name']}为 {value_label}"
+                    f"{section_metric['unit']}，详细分布与证据见正文。"
+                ),
+                "evidenceArtifactIds": evidence,
+                "evidenceStatus": "verified",
                 "confidence": section.confidence,
             }
         )
@@ -451,6 +459,34 @@ def _temporal_sort_key(value: object, reference: datetime) -> tuple[int, object]
         return 2, label
 
 
+def _numeric_value(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    normalized = str(value).strip().replace(",", "").removesuffix("%")
+    if not re.fullmatch(r"-?\d+(?:\.\d+)?", normalized):
+        return None
+    return float(normalized)
+
+
+def _is_percentage_column(column: str) -> bool:
+    normalized = column.lower()
+    return any(marker in normalized for marker in ("%", "pct", "率", "占比", "贡献"))
+
+
+def _metric_unit(resolution: dict, column: str) -> str:
+    if resolution.get("unit"):
+        return str(resolution["unit"])
+    if _is_percentage_column(column):
+        return "%"
+    if "分钟" in column or "时长" in column:
+        return "分钟"
+    if any(marker in column for marker in ("产量", "数量", "库存", "缺口")):
+        return "件"
+    return "数值"
+
+
 def _structured_metrics(
     sections: list[ReportSection], *, period_end: datetime
 ) -> tuple[list[dict], list[dict], list[dict]]:
@@ -465,18 +501,20 @@ def _structured_metrics(
         rows = [list(item) for item in (result.get("rows") or []) if isinstance(item, (list, tuple))]
         if not columns or not rows:
             continue
+        numeric_indices = [
+            index
+            for index in range(len(columns))
+            if any(index < len(row) and _numeric_value(row[index]) is not None for row in rows)
+        ]
+        resolution = content.get("metricResolution") or {}
+        metric_name = str(resolution.get("name") or "").strip()
         numeric_index = next(
             (
                 index
-                for index in range(len(columns) - 1, -1, -1)
-                if any(
-                    index < len(row)
-                    and isinstance(row[index], (int, float))
-                    and not isinstance(row[index], bool)
-                    for row in rows
-                )
+                for index in numeric_indices
+                if metric_name and metric_name in columns[index]
             ),
-            None,
+            numeric_indices[-1] if numeric_indices else None,
         )
         if numeric_index is None:
             continue
@@ -484,32 +522,91 @@ def _structured_metrics(
             row
             for row in rows
             if numeric_index < len(row)
-            and isinstance(row[numeric_index], (int, float))
-            and not isinstance(row[numeric_index], bool)
+            and _numeric_value(row[numeric_index]) is not None
         ]
         if not numeric_rows:
             continue
-        resolution = content.get("metricResolution") or {}
-        label_index = next((index for index in range(len(columns)) if index != numeric_index), None)
-        if len(numeric_rows) > 1 and (
-            not resolution.get("id")
-            or label_index is None
-            or not all(
+        label_index = next(
+            (index for index in range(len(columns)) if index not in numeric_indices),
+            next((index for index in range(len(columns)) if index != numeric_index), None),
+        )
+        temporal = bool(
+            len(numeric_rows) > 1
+            and label_index is not None
+            and all(
                 label_index < len(row) and _is_temporal_label(row[label_index])
                 for row in numeric_rows
             )
-        ):
-            # Grouped/category rows do not define current and comparison periods.
-            continue
-        if len(numeric_rows) > 1 and label_index is not None:
+        )
+        if temporal and label_index is not None:
             numeric_rows.sort(
                 key=lambda row: _temporal_sort_key(row[label_index], period_end)
             )
-        key = str(resolution.get("id") or columns[numeric_index] or section.code)
+        key = str(
+            resolution.get("id")
+            or resolution.get("metricId")
+            or columns[numeric_index]
+            or section.code
+        )
         if key in seen_keys:
             continue
+        name = str(resolution.get("name") or columns[numeric_index])
+        unit = _metric_unit(resolution, columns[numeric_index])
+        evidence = list(section.artifact_ids_json or [])
+        if not temporal and len(numeric_rows) > 1 and label_index is not None:
+            category_indices = [numeric_index]
+            category_indices.extend(
+                index
+                for index in numeric_indices
+                if index != numeric_index and _is_percentage_column(columns[index])
+            )
+            primary_key = ""
+            for column_index in category_indices:
+                column_unit = "%" if _is_percentage_column(columns[column_index]) else unit
+                column_name = name if column_index == numeric_index else columns[column_index]
+                column_key = key if column_index == numeric_index else f"{key}:{columns[column_index]}"
+                for row in numeric_rows:
+                    value = _numeric_value(row[column_index]) if column_index < len(row) else None
+                    if value is None or label_index >= len(row):
+                        continue
+                    label = str(row[label_index])
+                    item_key = f"{column_key}:{label}"
+                    if item_key in seen_keys:
+                        continue
+                    seen_keys.add(item_key)
+                    primary_key = primary_key or item_key
+                    metrics.append(
+                        {
+                            "key": item_key,
+                            "name": f"{label}·{column_name}",
+                            "value": value,
+                            "unit": column_unit,
+                            "previousValue": None,
+                            "changeRate": None,
+                            "trend": "unknown",
+                            "evidenceArtifactIds": evidence,
+                            "confidence": section.confidence,
+                        }
+                    )
+            if primary_key:
+                trends.append(
+                    {
+                        "metricKey": primary_key,
+                        "label": f"{name}分布",
+                        "unit": unit,
+                        "points": [
+                            {"label": str(row[label_index]), "value": _numeric_value(row[numeric_index])}
+                            for row in numeric_rows[-12:]
+                            if label_index < len(row) and _numeric_value(row[numeric_index]) is not None
+                        ],
+                    }
+                )
+            definition = resolution.get("definition")
+            if definition:
+                definitions.append({"name": name, "definition": str(definition)})
+            continue
         seen_keys.add(key)
-        values = [float(row[numeric_index]) for row in numeric_rows]
+        values = [_numeric_value(row[numeric_index]) for row in numeric_rows]
         previous = values[-2] if len(values) >= 2 else None
         change_rate = (
             (values[-1] - previous) / abs(previous)
@@ -525,9 +622,6 @@ def _structured_metrics(
             if change_rate < -0.001
             else "flat"
         )
-        name = str(resolution.get("name") or columns[numeric_index])
-        unit = str(resolution.get("unit") or "数值")
-        evidence = list(section.artifact_ids_json or [])
         metrics.append(
             {
                 "key": key,
@@ -663,7 +757,7 @@ def build_structured_content(
             "comparisonPeriodEnd": report.period_start.isoformat(),
             "timezone": timezone_name,
         },
-        "managementSummary": compose_management_summary(raw_summary, sections),
+        "managementSummary": compose_management_summary(raw_summary, sections, metrics),
         "metrics": metrics,
         "trends": trends,
         "anomalies": anomalies,
