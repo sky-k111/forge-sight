@@ -76,6 +76,28 @@ class TrendSeries(ReportContentModel):
     points: list[TrendPoint]
 
 
+class ChartPoint(ReportContentModel):
+    label: str = Field(min_length=1)
+    value: float
+    group: str | None = None
+    secondary_value: float | None = Field(default=None, alias="secondaryValue")
+
+
+class ChartSpec(ReportContentModel):
+    key: str = Field(min_length=1)
+    type: Literal["line", "area", "bar", "pareto", "donut", "heatmap"]
+    title: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=240)
+    unit: str = Field(min_length=1, max_length=24)
+    category_label: str = Field(alias="categoryLabel", min_length=1, max_length=80)
+    value_label: str = Field(alias="valueLabel", min_length=1, max_length=80)
+    points: list[ChartPoint] = Field(min_length=2, max_length=60)
+    evidence_artifact_ids: list[str] = Field(alias="evidenceArtifactIds")
+    color_role: Literal[
+        "production", "quality", "equipment", "inventory", "neutral"
+    ] = Field(alias="colorRole")
+
+
 class Anomaly(ReportContentModel):
     title: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -133,6 +155,7 @@ class StructuredWeeklyReport(ReportContentModel):
     management_summary: ManagementSummary = Field(alias="managementSummary")
     metrics: list[Metric]
     trends: list[TrendSeries]
+    charts: list[ChartSpec] = Field(default_factory=list)
     anomalies: list[Anomaly]
     progress: list[ProgressItem]
     recommendations: list[Recommendation]
@@ -284,6 +307,9 @@ def validate_for_publish(content: dict) -> dict:
         f"recommendation:{index}"
         for index, item in enumerate(report.recommendations)
         if not item.evidence_artifact_ids
+    )
+    evidence_missing.extend(
+        f"chart:{item.key}" for item in report.charts if not item.evidence_artifact_ids
     )
     if evidence_missing:
         rules.append(

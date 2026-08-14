@@ -8,7 +8,7 @@ import {
   publishReport,
   submitReportReview,
 } from "../../api/reports";
-import { TrendLineChart } from "../../components/charts";
+import { WeeklyReportCharts } from "../../components/WeeklyReportCharts";
 import {
   Button,
   Card,
@@ -126,18 +126,6 @@ export default function ReportDetailPage() {
       />
     );
   }
-  const chartSeries = view.trends.slice(0, 3).map((item, index) => ({
-    key: item.metricKey,
-    name: item.label,
-    color:
-      index === 0
-        ? "var(--color-primary)"
-        : index === 1
-          ? "var(--color-muted)"
-          : "var(--color-warning)",
-  }));
-  const mainTrend = view.trends[0];
-
   return (
     <PageFrame className="report-editorial max-w-[1440px] gap-0 px-2 pb-16 sm:px-5 xl:px-7">
       <article className="overflow-hidden rounded-section border border-line bg-paper shadow-[0_18px_65px_rgb(24_35_41_/8%)]">
@@ -243,46 +231,38 @@ export default function ReportDetailPage() {
           )}
         </section>
 
-        <section className="grid border-b border-line xl:grid-cols-[minmax(0,1.4fr)_minmax(310px,0.6fr)]">
-          <div className="min-w-0 px-5 py-7 sm:px-8 xl:border-r xl:px-10">
-            <SectionTitle
-              eyebrow="主趋势"
-              title={
-                mainTrend
-                  ? `${mainTrend.label}的主要变化发生在哪里`
-                  : "主趋势正在生成"
-              }
-              description={
-                mainTrend
-                  ? `${date(report.periodStart)} 至 ${date(report.periodEnd)} · 单位：${mainTrend.unit} · 来源：${view.appendix.sources.join("、") || report.sourceName}`
-                  : "通过校验的数据点会在这里形成主趋势。"
-              }
-            />
-            {view.trendRows.length > 1 ? (
-              <div className="mt-5">
-                <TrendLineChart
-                  data={view.trendRows}
-                  xKey="label"
-                  series={chartSeries}
-                  height={320}
-                  unit={mainTrend?.unit ?? ""}
+        <section className="border-b border-line px-5 py-7 sm:px-8 xl:px-10">
+          <SectionTitle
+            eyebrow="Agent 图表编排"
+            title="让数据用适合它的方式说话"
+            description={`${date(report.periodStart)} 至 ${date(report.periodEnd)} · Agent 按时间、类别和业务语义选择图形，每张图保持单一口径。`}
+          />
+          {view.charts.length ? (
+            <>
+              <div className="mt-6 grid items-stretch gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(280px,0.45fr)]">
+                <WeeklyReportCharts
+                  charts={view.charts.slice(0, 1)}
+                  sourceName={view.appendix.sources.join("、") || report.sourceName}
                 />
-                <p className="mt-3 text-sm leading-6 text-muted">
-                  图表摘要：展示本周期主要指标的时间变化；颜色用于区分系列，精确值可在下方数据表读取。
-                </p>
-                <AccessibleTrendTable
-                  trends={view.trends.slice(0, 3)}
-                  rows={view.trendRows}
-                />
+                <TopicIllustration />
               </div>
-            ) : (
+              {view.charts.length > 1 && (
+                <div className="mt-5">
+                  <WeeklyReportCharts
+                    charts={view.charts.slice(1)}
+                    sourceName={view.appendix.sources.join("、") || report.sourceName}
+                  />
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="mt-5">
               <EmptyState
-                title="暂无连续趋势"
-                description="指标仍可在上方读取，本期没有足够时间点绘制趋势。"
+                title="图表正在编排"
+                description="当专题至少包含两个可比较数据点时，Agent 会自动选择合适图形。"
               />
-            )}
-          </div>
-          <TopicIllustration />
+            </div>
+          )}
         </section>
 
         <section className="border-b border-line px-5 py-7 sm:px-8 xl:px-10">
@@ -644,41 +624,6 @@ function MetricCell({ metric }) {
         </span>
       </div>
     </div>
-  );
-}
-function AccessibleTrendTable({ trends, rows }) {
-  return (
-    <details className="mt-3">
-      <summary className="cursor-pointer text-[13px] font-semibold text-primary">
-        查看图表数据表
-      </summary>
-      <div className="mt-2 overflow-x-auto">
-        <table className="data-table min-w-[520px]">
-          <thead>
-            <tr>
-              <th>时间</th>
-              {trends.map((item) => (
-                <th key={item.metricKey} className="text-right">
-                  {item.label}（{item.unit}）
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.label}>
-                <td>{row.label}</td>
-                {trends.map((item) => (
-                  <td key={item.metricKey} className="text-right font-mono">
-                    {row[item.metricKey] ?? "—"}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </details>
   );
 }
 function TopicIllustration() {

@@ -12,6 +12,38 @@ export function mergeTrendSeries(series = []) {
   return [...rows.values()];
 }
 
+function isTemporalLabel(label) {
+  return /^(?:W\d{1,2}|第?\d{1,2}周|\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?)$/i.test(
+    String(label ?? "").trim(),
+  );
+}
+
+export function legacyTrendCharts(trends = []) {
+  return trends
+    .filter((trend) => (trend.points?.length ?? 0) >= 2)
+    .map((trend, index) => {
+      const temporal = trend.points.every((point) => isTemporalLabel(point.label));
+      const points = temporal
+        ? trend.points
+        : [...trend.points].sort((a, b) => Number(b.value) - Number(a.value));
+      return {
+        key: `legacy-${trend.metricKey ?? index + 1}`,
+        type: temporal ? "line" : "bar",
+        title: trend.label ?? "指标变化",
+        description: temporal
+          ? "按时间顺序展示该指标的变化趋势。"
+          : "按类别独立比较该指标，避免与其他口径混合。",
+        unit: trend.unit || "数值",
+        categoryLabel: temporal ? "时间" : "类别",
+        valueLabel: trend.label ?? "指标值",
+        points,
+        evidenceArtifactIds: [],
+        colorRole: "neutral",
+        legacy: true,
+      };
+    });
+}
+
 export function buildReportView(report = {}) {
   report = report ?? {};
   const content =
@@ -38,6 +70,9 @@ export function buildReportView(report = {}) {
     findings[0]?.text ??
     report.summary ??
     "本周期尚未形成总体结论。";
+  const charts = content.charts?.length
+    ? content.charts
+    : legacyTrendCharts(content.trends);
   return {
     structured: Boolean(content.schemaVersion),
     headline,
@@ -46,6 +81,7 @@ export function buildReportView(report = {}) {
     metrics,
     trends: content.trends ?? [],
     trendRows: mergeTrendSeries(content.trends),
+    charts,
     anomalies,
     topAnomaly: anomalies[0] ?? null,
     progress: content.progress ?? [],
