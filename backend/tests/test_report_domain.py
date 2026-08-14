@@ -47,6 +47,9 @@ def test_new_subscription_contract_defaults_to_email_auto_publish():
 
     assert subscription.channel == "email"
     assert subscription.publishPolicy == "auto_publish"
+    assert subscription.weekday == 1
+    assert subscription.sendTime == "10:00"
+    assert subscription.timezone == "Asia/Shanghai"
 
 
 def test_version_and_section_states_are_centralized():
