@@ -1,5 +1,6 @@
 import {
   ComboMetricChart,
+  CorrelationScatterChart,
   HorizontalRankChart,
   MatrixHeatmapChart,
   ShareDonutChart,
@@ -13,6 +14,8 @@ const TYPE_LABELS = {
   pareto: "帕累托分析",
   donut: "构成占比",
   heatmap: "矩阵热力",
+  scatter: "相关性散点",
+  combo: "双指标组合",
 };
 const ROLE_COLORS = {
   production: "var(--color-primary)",
@@ -104,6 +107,33 @@ function ChartVisual({ chart }) {
       />
     );
   }
+  if (chart.type === "scatter") {
+    return (
+      <CorrelationScatterChart
+        data={data}
+        xKey="value"
+        yKey="secondaryValue"
+        xName={chart.valueLabel}
+        yName={chart.secondaryValueLabel}
+        xUnit={chart.unit}
+        yUnit={chart.secondaryUnit}
+        height={280}
+      />
+    );
+  }
+  if (chart.type === "combo") {
+    return (
+      <ComboMetricChart
+        data={data}
+        xKey="label"
+        bars={[{ key: "value", name: chart.valueLabel, color }]}
+        lines={[{ key: "secondaryValue", name: chart.secondaryValueLabel, color: "var(--color-red)" }]}
+        leftUnit={chart.unit}
+        rightUnit={chart.secondaryUnit}
+        height={280}
+      />
+    );
+  }
   return (
     <TrendLineChart
       data={data}
@@ -117,6 +147,10 @@ function ChartVisual({ chart }) {
 }
 
 function ChartDataTable({ chart }) {
+  const hasSecondary = chart.points?.some((item) => item.secondaryValue != null);
+  const secondaryLabel = chart.type === "pareto"
+    ? "累计贡献率"
+    : `${chart.secondaryValueLabel ?? "次指标"}${chart.secondaryUnit ? `（${chart.secondaryUnit}）` : ""}`;
   return (
     <details className="mt-3">
       <summary className="flex min-h-11 cursor-pointer items-center py-2 text-xs font-semibold text-primary">查看精确数据</summary>
@@ -127,7 +161,7 @@ function ChartDataTable({ chart }) {
               <th>{chart.categoryLabel}</th>
               {chart.points?.some((item) => item.group) && <th>分组</th>}
               <th className="text-right">{chart.valueLabel}（{chart.unit}）</th>
-              {chart.type === "pareto" && <th className="text-right">累计贡献率</th>}
+              {hasSecondary && <th className="text-right">{secondaryLabel}</th>}
             </tr>
           </thead>
           <tbody>
@@ -136,7 +170,11 @@ function ChartDataTable({ chart }) {
                 <td>{item.label}</td>
                 {chart.points.some((point) => point.group) && <td>{item.group ?? "—"}</td>}
                 <td className="text-right font-mono">{formatValue(item.value)}</td>
-                {chart.type === "pareto" && <td className="text-right font-mono">{formatValue(item.secondaryValue)}%</td>}
+                {hasSecondary && (
+                  <td className="text-right font-mono">
+                    {formatValue(item.secondaryValue, chart.type === "pareto" ? "%" : chart.secondaryUnit)}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

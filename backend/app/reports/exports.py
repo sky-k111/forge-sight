@@ -7,6 +7,8 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from openpyxl import Workbook
+from openpyxl.chart import AreaChart, BarChart, DoughnutChart, LineChart, Reference, ScatterChart, Series
+from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 import reportlab
@@ -14,8 +16,11 @@ from PIL import Image as PillowImage
 from PIL import ImageDraw
 from PIL import ImageFont
 from reportlab.graphics.charts.linecharts import HorizontalLineChart
-from reportlab.graphics.charts.barcharts import HorizontalBarChart
-from reportlab.graphics.shapes import Drawing
+from reportlab.graphics.charts.barcharts import HorizontalBarChart, VerticalBarChart
+from reportlab.graphics.charts.lineplots import ScatterPlot
+from reportlab.graphics.charts.piecharts import Pie
+from reportlab.graphics.shapes import Drawing, Polygon, String
+from reportlab.graphics.widgets.markers import makeMarker
 from reportlab.lib import colors
 from reportlab.lib.colors import HexColor
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -35,7 +40,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from app.reports.schema import StructuredWeeklyReport, calculate_confidence
+from app.reports.schema import ChartSpec, StructuredWeeklyReport, calculate_confidence
 
 
 INK = HexColor("#172033")
@@ -256,21 +261,211 @@ def _metric_table(report: StructuredWeeklyReport, styles: dict) -> Table:
     return table
 
 
-def _report_chart(report: StructuredWeeklyReport) -> Drawing | None:
-    spec = report.charts[0] if report.charts else None
-    series = report.trends[0] if report.trends else None
-    points = spec.points if spec is not None else series.points if series is not None else []
+def _export_chart_specs(report: StructuredWeeklyReport) -> list[ChartSpec]:
+    if report.charts:
+        return list(report.charts)
+    return [
+        ChartSpec(
+            key=f"legacy-{index + 1}",
+            type="line",
+            title=series.label,
+            description=f"展示{series.label}的周期变化。",
+            unit=series.unit,
+            categoryLabel="周期",
+            valueLabel=series.label,
+            points=[point.model_dump(by_alias=True) for point in series.points],
+            evidenceArtifactIds=[],
+            colorRole="neutral",
+        )
+        for index, series in enumerate(report.trends)
+        if len(series.points) >= 2
+    ]
+
+
+def _report_chart(spec: ChartSpec) -> Drawing | Table | None:
+    points = spec.points
     if len(points) < 2:
         return None
     drawing = Drawing(480, 190)
-    if spec is not None and spec.type in {"bar", "pareto", "donut"}:
+    if spec.type == "donut":
+        chart = Pie()
+        chart.x = 115
+        chart.y = 8
+        chart.width = 250
+        chart.height = 165
+        chart.data = [max(point.value, 0) for point in points[:8]]
+        chart.labels = [point.label for point in points[:8]]
+        chart.innerRadiusFraction = 0.55
+        chart.slices.strokeColor = colors.white
+        chart.slices.strokeWidth = 1
+        palette = [BRAND, AMBER, HexColor("#7357C8"), HexColor("#2B8A9A"), HexColor("#D95D5D")]
+        for index in range(len(chart.data)):
+            chart.slices[index].fillColor = palette[index % len(palette)]
+            chart.slices[index].fontName = _register_fonts()[0]
+            chart.slices[index].fontSize = 7
+        drawing.add(chart)
+        return drawing
+    if spec.type == "scatter":
+        usable = [
+            (point.value, point.secondary_value)
+            for point in points
+            if point.secondary_value is not None
+        ]
+        if len(usable) < 2:
+            return None
+        chart = ScatterPlot()
+        chart.x = 58
+        chart.y = 34
+        chart.height = 120
+        chart.width = 370
+        chart.data = [usable]
+        chart.xValueAxis.labels.fontName = "Helvetica"
+        chart.xValueAxis.labels.fontSize = 7
+        chart.yValueAxis.labels.fontName = "Helvetica"
+        chart.yValueAxis.labels.fontSize = 7
+        chart.xValueAxis.gridStrokeColor = LINE
+        chart.yValueAxis.gridStrokeColor = LINE
+        chart.lines[0].strokeColor = None
+        chart.lines[0].symbol = makeMarker("FilledCircle")
+        chart.lines[0].symbol.fillColor = HexColor("#7357C8")
+        chart.lines[0].symbol.strokeColor = colors.white
+        chart.lines[0].symbol.size = 7
+        drawing.add(chart)
+        return drawing
+    if spec.type == "heatmap":
+        groups = list(dict.fromkeys(point.group for point in points if point.group))
+        labels = list(dict.fromkeys(point.label for point in points))
+        if not groups:
+            return None
+        values = {(point.label, point.group): point.value for point in points}
+        all_values = [point.value for point in points]
+        low, high = min(all_values), max(all_values)
+        spread = high - low or 1
+        rows = [[""] + [Paragraph(_pdf_text(group), _styles()["small"]) for group in groups]]
+        for label in labels:
+            rows.append(
+                [Paragraph(_pdf_text(label), _styles()["small"])]
+                + [
+                    "—" if values.get((label, group)) is None else f"{values[(label, group)]:,.2f}"
+                    for group in groups
+                ]
+            )
+        widths = [32 * mm] + [min(28 * mm, 138 * mm / len(groups))] * len(groups)
+        table = Table(rows, colWidths=widths, rowHeights=8 * mm)
+        styles = [
+            ("BACKGROUND", (0, 0), (-1, 0), BRAND_DARK),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("BACKGROUND", (0, 1), (0, -1), SURFACE),
+            ("GRID", (0, 0), (-1, -1), 0.5, LINE),
+            ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("FONTNAME", (1, 1), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (1, 1), (-1, -1), 7),
+        ]
+        for row_index, label in enumerate(labels, start=1):
+            for column_index, group in enumerate(groups, start=1):
+                value = values.get((label, group))
+                if value is None:
+                    styles.append(("BACKGROUND", (column_index, row_index), (column_index, row_index), SURFACE))
+                    continue
+                ratio = (value - low) / spread
+                color = colors.Color(0.87 - ratio * 0.55, 0.96 - ratio * 0.42, 0.94 - ratio * 0.48)
+                styles.append(("BACKGROUND", (column_index, row_index), (column_index, row_index), color))
+        table.setStyle(TableStyle(styles))
+        return table
+    if spec.type == "combo" and all(point.secondary_value is not None for point in points):
+        categories = [point.label for point in points]
+        bar = VerticalBarChart()
+        bar.x = 38
+        bar.y = 30
+        bar.height = 115
+        bar.width = 175
+        bar.data = [[point.value for point in points]]
+        bar.categoryAxis.categoryNames = categories
+        bar.categoryAxis.labels.fontName = _register_fonts()[0]
+        bar.categoryAxis.labels.fontSize = 6
+        bar.valueAxis.labels.fontName = "Helvetica"
+        bar.valueAxis.labels.fontSize = 7
+        bar.valueAxis.gridStrokeColor = LINE
+        bar.bars[0].fillColor = BRAND
+        bar.bars[0].strokeColor = None
+        line = HorizontalLineChart()
+        line.x = 270
+        line.y = 30
+        line.height = 115
+        line.width = 175
+        line.data = [[point.secondary_value for point in points]]
+        line.categoryAxis.categoryNames = categories
+        line.categoryAxis.labels.fontName = _register_fonts()[0]
+        line.categoryAxis.labels.fontSize = 6
+        line.valueAxis.labels.fontName = "Helvetica"
+        line.valueAxis.labels.fontSize = 7
+        line.valueAxis.gridStrokeColor = LINE
+        line.lines[0].strokeColor = AMBER
+        line.lines[0].strokeWidth = 2.5
+        line.lines[0].symbol = makeMarker("FilledCircle")
+        drawing.add(bar)
+        drawing.add(line)
+        drawing.add(String(38, 162, f"{spec.value_label} ({spec.unit})", fontName=_register_fonts()[0], fontSize=8, fillColor=BRAND_DARK))
+        drawing.add(
+            String(
+                270,
+                162,
+                f"{spec.secondary_value_label or '次指标'} ({spec.secondary_unit or spec.unit})",
+                fontName=_register_fonts()[0],
+                fontSize=8,
+                fillColor=AMBER,
+            )
+        )
+        return drawing
+    if spec.type == "pareto" and all(point.secondary_value is not None for point in points):
+        visible = points[:12]
+        categories = [point.label for point in visible]
+        bar = VerticalBarChart()
+        bar.x = 38
+        bar.y = 30
+        bar.height = 115
+        bar.width = 175
+        bar.data = [[point.value for point in visible]]
+        bar.categoryAxis.categoryNames = categories
+        bar.categoryAxis.labels.fontName = _register_fonts()[0]
+        bar.categoryAxis.labels.fontSize = 6
+        bar.valueAxis.labels.fontName = "Helvetica"
+        bar.valueAxis.labels.fontSize = 7
+        bar.valueAxis.gridStrokeColor = LINE
+        bar.bars[0].fillColor = AMBER
+        bar.bars[0].strokeColor = None
+        cumulative = HorizontalLineChart()
+        cumulative.x = 270
+        cumulative.y = 30
+        cumulative.height = 115
+        cumulative.width = 175
+        cumulative.data = [[point.secondary_value for point in visible]]
+        cumulative.categoryAxis.categoryNames = categories
+        cumulative.categoryAxis.labels.fontName = _register_fonts()[0]
+        cumulative.categoryAxis.labels.fontSize = 6
+        cumulative.valueAxis.valueMin = 0
+        cumulative.valueAxis.valueMax = 100
+        cumulative.valueAxis.valueStep = 20
+        cumulative.valueAxis.labels.fontName = "Helvetica"
+        cumulative.valueAxis.labels.fontSize = 7
+        cumulative.valueAxis.gridStrokeColor = LINE
+        cumulative.lines[0].strokeColor = BRAND
+        cumulative.lines[0].strokeWidth = 2.5
+        cumulative.lines[0].symbol = makeMarker("FilledCircle")
+        drawing.add(bar)
+        drawing.add(cumulative)
+        drawing.add(String(38, 162, f"{spec.value_label} ({spec.unit})", fontName=_register_fonts()[0], fontSize=8, fillColor=AMBER))
+        drawing.add(String(270, 162, "累计贡献率 (%)", fontName=_register_fonts()[0], fontSize=8, fillColor=BRAND_DARK))
+        return drawing
+    if spec.type == "bar":
         chart = HorizontalBarChart()
         chart.x = 80
         chart.y = 28
         chart.height = 132
         chart.width = 350
-        chart.data = [[point.value for point in reversed(points[:10])]]
-        chart.categoryAxis.categoryNames = [point.label for point in reversed(points[:10])]
+        chart.data = [[point.value for point in reversed(points[:12])]]
+        chart.categoryAxis.categoryNames = [point.label for point in reversed(points[:12])]
         chart.categoryAxis.labels.fontName = _register_fonts()[0]
         chart.categoryAxis.labels.fontSize = 7
         chart.valueAxis.labels.fontName = "Helvetica"
@@ -281,6 +476,19 @@ def _report_chart(report: StructuredWeeklyReport) -> Drawing | None:
         chart.valueAxis.gridStrokeDashArray = (2, 2)
         drawing.add(chart)
         return drawing
+    if spec.type == "area":
+        values = [point.value for point in points]
+        maximum = max(max(values), 0) or 1
+        minimum = min(min(values), 0)
+        spread = maximum - minimum or 1
+        left, bottom, width, height = 55, 34, 390, 120
+        step = width / max(len(points) - 1, 1)
+        baseline = bottom + (0 - minimum) / spread * height
+        polygon_points = [left, baseline]
+        for index, value in enumerate(values):
+            polygon_points.extend([left + index * step, bottom + (value - minimum) / spread * height])
+        polygon_points.extend([left + width, baseline])
+        drawing.add(Polygon(polygon_points, fillColor=MINT, strokeColor=None))
     chart = HorizontalLineChart()
     chart.x = 55
     chart.y = 34
@@ -297,8 +505,29 @@ def _report_chart(report: StructuredWeeklyReport) -> Drawing | None:
     chart.lines[0].symbol = None
     chart.valueAxis.gridStrokeColor = LINE
     chart.valueAxis.gridStrokeDashArray = (2, 2)
+    if spec.type == "area" and min(point.value for point in points) >= 0:
+        chart.valueAxis.valueMin = 0
     drawing.add(chart)
     return drawing
+
+
+def _chart_data_table(spec: ChartSpec, styles: dict) -> Table:
+    has_secondary = any(point.secondary_value is not None for point in spec.points)
+    secondary_label = "累计贡献率" if spec.type == "pareto" else (spec.secondary_value_label or "次指标")
+    headers = [spec.category_label, f"{spec.value_label}（{spec.unit}）"]
+    if has_secondary:
+        headers.append(f"{secondary_label}（{'%' if spec.type == 'pareto' else spec.secondary_unit or spec.unit}）")
+    rows = [[Paragraph(_pdf_text(item), styles["tableHeader"]) for item in headers]]
+    for point in spec.points[:12]:
+        label = point.label if not point.group else f"{point.label} / {point.group}"
+        row = [Paragraph(_pdf_text(label), styles["small"]), f"{point.value:,.2f}"]
+        if has_secondary:
+            row.append("—" if point.secondary_value is None else f"{point.secondary_value:,.2f}")
+        rows.append(row)
+    widths = [72 * mm, 48 * mm] + ([50 * mm] if has_secondary else [])
+    table = Table(rows, colWidths=widths, repeatRows=1)
+    table.setStyle(_pdf_table_style())
+    return table
 
 
 def render_pdf_bytes(content: dict) -> bytes:
@@ -352,18 +581,22 @@ def render_pdf_bytes(content: dict) -> bytes:
             Paragraph("图表仅使用已冻结版本中的结构化数值，确保与站内展示一致。", styles["small"]),
         ]
     )
-    chart_spec = report.charts[0] if report.charts else None
-    if chart_spec is not None:
-        story.extend(
-            [
-                Spacer(1, 3 * mm),
-                Paragraph(_pdf_text(chart_spec.title), styles["subheading"]),
-                Paragraph(_pdf_text(chart_spec.description), styles["small"]),
-            ]
-        )
-    chart = _report_chart(report)
-    if chart is not None:
-        story.extend([Spacer(1, 3 * mm), chart])
+    chart_specs = _export_chart_specs(report)
+    if chart_specs:
+        for index, chart_spec in enumerate(chart_specs):
+            if index:
+                story.append(PageBreak())
+            story.extend(
+                [
+                    Spacer(1, 3 * mm),
+                    Paragraph(_pdf_text(chart_spec.title), styles["subheading"]),
+                    Paragraph(_pdf_text(chart_spec.description), styles["small"]),
+                ]
+            )
+            chart = _report_chart(chart_spec)
+            if chart is not None:
+                story.extend([Spacer(1, 3 * mm), chart, Spacer(1, 2 * mm)])
+            story.append(_chart_data_table(chart_spec, styles))
     else:
         story.extend(
             [
@@ -373,6 +606,7 @@ def render_pdf_bytes(content: dict) -> bytes:
             ]
         )
 
+    story.append(PageBreak())
     story.append(Paragraph("异常明细", styles["heading"]))
     anomaly_rows = [
         [
@@ -511,6 +745,225 @@ def _excel_safe(value):
     return value
 
 
+def _style_excel_chart(chart, spec: ChartSpec) -> None:
+    chart.title = spec.title
+    chart.height = 7.2
+    chart.width = 12.8
+    chart.style = 13
+    chart.legend.position = "b"
+    chart.graphical_properties = None
+    colors_by_role = {
+        "production": "0B6E69",
+        "quality": "D88A16",
+        "equipment": "7357C8",
+        "inventory": "2B8A9A",
+        "neutral": "667085",
+    }
+    accent = colors_by_role.get(spec.color_role, "667085")
+    for series in chart.series:
+        try:
+            series.graphicalProperties.solidFill = accent
+            series.graphicalProperties.line.solidFill = accent
+            if spec.type == "scatter":
+                series.graphicalProperties.line.noFill = True
+                series.marker.symbol = "circle"
+                series.marker.size = 7
+        except AttributeError:
+            continue
+
+
+def _native_excel_chart(sheet, spec: ChartSpec, header_row: int, first_row: int, last_row: int):
+    categories = Reference(sheet, min_col=1, min_row=first_row, max_row=last_row)
+    primary = Reference(sheet, min_col=3, min_row=header_row, max_row=last_row)
+    secondary = Reference(sheet, min_col=4, min_row=header_row, max_row=last_row)
+    if spec.type == "donut":
+        chart = DoughnutChart()
+        chart.add_data(primary, titles_from_data=True)
+        chart.set_categories(categories)
+        chart.holeSize = 55
+    elif spec.type == "scatter":
+        chart = ScatterChart()
+        chart.x_axis.title = f"{spec.value_label}（{spec.unit}）"
+        chart.y_axis.title = f"{spec.secondary_value_label or '次指标'}（{spec.secondary_unit or spec.unit}）"
+        x_values = Reference(sheet, min_col=3, min_row=first_row, max_row=last_row)
+        y_values = Reference(sheet, min_col=4, min_row=first_row, max_row=last_row)
+        chart.series.append(Series(y_values, x_values, title=spec.secondary_value_label or "关系"))
+    elif spec.type == "area":
+        chart = AreaChart()
+        chart.add_data(primary, titles_from_data=True)
+        chart.set_categories(categories)
+    elif spec.type == "line":
+        chart = LineChart()
+        chart.add_data(primary, titles_from_data=True)
+        chart.set_categories(categories)
+    elif spec.type in {"combo", "pareto"}:
+        chart = BarChart()
+        chart.type = "col"
+        chart.add_data(primary, titles_from_data=True)
+        chart.set_categories(categories)
+        line = LineChart()
+        line.add_data(secondary, titles_from_data=True)
+        line.y_axis.axId = 200
+        line.y_axis.crosses = "max"
+        chart += line
+    else:
+        chart = BarChart()
+        chart.type = "bar"
+        chart.add_data(primary, titles_from_data=True)
+        chart.set_categories(categories)
+    _style_excel_chart(chart, spec)
+    return chart
+
+
+def _create_chart_sheet(workbook: Workbook, report: StructuredWeeklyReport) -> None:
+    sheet = workbook.create_sheet("图表数据")
+    sheet.sheet_view.showGridLines = False
+    sheet.merge_cells("A1:F1")
+    sheet["A1"] = _excel_safe(report.identity.title + " · 图表数据")
+    sheet["A1"].font = Font(name="Microsoft YaHei", size=18, bold=True, color="FFFFFF")
+    sheet["A1"].fill = PatternFill("solid", fgColor="084C49")
+    sheet["A1"].alignment = Alignment(vertical="center")
+    sheet.row_dimensions[1].height = 34
+    sheet["A3"] = "报告周期"
+    sheet["B3"] = report.identity.period_start
+    sheet["C3"] = "至"
+    sheet["D3"] = report.identity.period_end
+    sheet["B3"].number_format = "yyyy-mm-dd"
+    sheet["D3"].number_format = "yyyy-mm-dd"
+    sheet["A4"] = "报告版本"
+    sheet["B4"] = report.identity.version_id
+    sheet["C4"] = "导出说明"
+    sheet["D4"] = "所有图表与站内周报使用同一冻结版本"
+    sheet.freeze_panes = "A8"
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.column_dimensions["A"].width = 24
+    sheet.column_dimensions["B"].width = 18
+    sheet.column_dimensions["C"].width = 18
+    sheet.column_dimensions["D"].width = 18
+    sheet.column_dimensions["E"].width = 34
+    sheet.column_dimensions["F"].width = 14
+    sheet.column_dimensions["H"].width = 2
+
+    specs = _export_chart_specs(report)
+    if not specs:
+        sheet.merge_cells("A7:F9")
+        sheet["A7"] = "当前冻结版本没有可验证的图表数据。"
+        sheet["A7"].alignment = Alignment(horizontal="center", vertical="center")
+        sheet["A7"].font = Font(name="Microsoft YaHei", color="667085")
+        return
+
+    row = 6
+    thin = Side(style="thin", color="D9E0E8")
+    for spec in specs:
+        title_row = row
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        title_cell = sheet.cell(row, 1, _excel_safe(spec.title))
+        title_cell.font = Font(name="Microsoft YaHei", size=13, bold=True, color="FFFFFF")
+        title_cell.fill = PatternFill("solid", fgColor="0B6E69")
+        title_cell.alignment = Alignment(vertical="center")
+        sheet.row_dimensions[row].height = 25
+        row += 1
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        sheet.cell(row, 1, _excel_safe(spec.description)).font = Font(
+            name="Microsoft YaHei", size=9, color="667085"
+        )
+        row += 1
+        header_row = row
+        secondary_header = (
+            "累计贡献率（%）"
+            if spec.type == "pareto"
+            else f"{spec.secondary_value_label or '次指标'}（{spec.secondary_unit or spec.unit}）"
+        )
+        headers = [
+            spec.category_label,
+            "分组",
+            f"{spec.value_label}（{spec.unit}）",
+            secondary_header,
+            "证据引用",
+            "图表类型",
+        ]
+        for column, value in enumerate(headers, start=1):
+            cell = sheet.cell(row, column, _excel_safe(value))
+            cell.font = Font(name="Microsoft YaHei", bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="172033")
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        row += 1
+        first_data_row = row
+        for point in spec.points:
+            values = [
+                point.label,
+                point.group,
+                point.value,
+                point.secondary_value,
+                "、".join(spec.evidence_artifact_ids),
+                spec.type,
+            ]
+            for column, value in enumerate(values, start=1):
+                cell = sheet.cell(row, column, _excel_safe(value))
+                cell.font = Font(name="Microsoft YaHei", size=9, color="172033")
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+                cell.border = Border(bottom=thin)
+            row += 1
+        last_data_row = row - 1
+        if spec.type == "heatmap":
+            sheet.conditional_formatting.add(
+                f"C{first_data_row}:C{last_data_row}",
+                ColorScaleRule(
+                    start_type="min", start_color="DDF4EF",
+                    mid_type="percentile", mid_value=50, mid_color="7FCFC4",
+                    end_type="max", end_color="0B6E69",
+                ),
+            )
+            groups = list(dict.fromkeys(point.group for point in spec.points if point.group))
+            labels = list(dict.fromkeys(point.label for point in spec.points))
+            values = {(point.label, point.group): point.value for point in spec.points}
+            pivot_row = title_row
+            pivot_column = 8
+            sheet.cell(pivot_row, pivot_column, _excel_safe(spec.title)).font = Font(
+                name="Microsoft YaHei", size=11, bold=True, color="172033"
+            )
+            for index, group in enumerate(groups, start=1):
+                cell = sheet.cell(pivot_row + 1, pivot_column + index, _excel_safe(group))
+                cell.font = Font(name="Microsoft YaHei", size=9, bold=True, color="FFFFFF")
+                cell.fill = PatternFill("solid", fgColor="084C49")
+                cell.alignment = Alignment(horizontal="center")
+            for label_index, label in enumerate(labels, start=1):
+                label_cell = sheet.cell(pivot_row + 1 + label_index, pivot_column, _excel_safe(label))
+                label_cell.font = Font(name="Microsoft YaHei", size=9, bold=True, color="172033")
+                label_cell.fill = PatternFill("solid", fgColor="F5F7FA")
+                for group_index, group in enumerate(groups, start=1):
+                    value_cell = sheet.cell(
+                        pivot_row + 1 + label_index,
+                        pivot_column + group_index,
+                        values.get((label, group)),
+                    )
+                    value_cell.number_format = "0.00"
+                    value_cell.alignment = Alignment(horizontal="center")
+            if labels and groups:
+                heatmap_range = (
+                    f"{get_column_letter(pivot_column + 1)}{pivot_row + 2}:"
+                    f"{get_column_letter(pivot_column + len(groups))}{pivot_row + 1 + len(labels)}"
+                )
+                sheet.conditional_formatting.add(
+                    heatmap_range,
+                    ColorScaleRule(
+                        start_type="min", start_color="DDF4EF",
+                        mid_type="percentile", mid_value=50, mid_color="7FCFC4",
+                        end_type="max", end_color="0B6E69",
+                    ),
+                )
+        else:
+            native_chart = _native_excel_chart(
+                sheet, spec, header_row, first_data_row, last_data_row
+            )
+            sheet.add_chart(native_chart, f"H{title_row}")
+        row = max(row + 2, title_row + 17)
+    sheet.print_area = f"A1:S{row}"
+
+
 def render_excel_bytes(content: dict) -> bytes:
     """Render a typed, styled workbook from the same frozen report document."""
 
@@ -537,6 +990,8 @@ def render_excel_bytes(content: dict) -> bytes:
             overview.cell(row_index, column, _excel_safe(value))
         overview.cell(row_index, 5).number_format = "0.00%"
     _finish_sheet(overview, [24, 16, 12, 16, 14, 12])
+
+    _create_chart_sheet(workbook, report)
 
     anomalies = workbook.create_sheet("异常明细")
     _prepare_sheet(

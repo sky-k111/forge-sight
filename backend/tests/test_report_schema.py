@@ -444,6 +444,256 @@ def test_agent_selects_pareto_chart_and_calculates_cumulative_share():
     ]
 
 
+def test_agent_selects_pareto_from_a_concentrated_defect_distribution_without_a_keyword():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1", title="质量周报", source_id=1,
+        period_start=datetime(2026, 8, 3), period_end=datetime(2026, 8, 10),
+        scope_json={}, audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 100})
+    section = SimpleNamespace(
+        code="quality", title="缺陷类型分布", status="succeeded", summary="缺陷集中。",
+        confidence=95, artifact_ids_json=["artifact-quality"],
+        content_json={
+            "result": {
+                "columns": ["缺陷类型", "不良数量"],
+                "rows": [["划伤", 70], ["脏污", 15], ["尺寸", 8], ["色差", 4], ["其他", 3]],
+            },
+            "metricResolution": {"metricId": "defect_count", "name": "不良数量", "unit": "件"},
+        },
+    )
+
+    content = build_structured_content(
+        report=report, version=version, sections=[section],
+        raw_summary=section.summary, timezone_name="Asia/Shanghai",
+    )
+
+    assert content["charts"][0]["type"] == "pareto"
+    assert content["charts"][0]["points"][-1]["secondaryValue"] == 100.0
+
+
+def test_agent_selects_scatter_for_a_two_measure_relationship():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1", title="设备周报", source_id=1,
+        period_start=datetime(2026, 8, 3), period_end=datetime(2026, 8, 10),
+        scope_json={}, audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 100})
+    section = SimpleNamespace(
+        code="equipment", title="运行时长与停机时长的相关性", status="succeeded", summary="存在关系。",
+        confidence=93, artifact_ids_json=["artifact-equipment"],
+        content_json={
+            "result": {
+                "columns": ["设备", "运行时长", "停机时长"],
+                "rows": [["A01", 120, 8], ["A02", 150, 4], ["A03", 90, 12]],
+            },
+            "metricResolution": {"metricId": "downtime", "name": "停机时长", "unit": "分钟"},
+        },
+    )
+
+    content = build_structured_content(
+        report=report, version=version, sections=[section],
+        raw_summary=section.summary, timezone_name="Asia/Shanghai",
+    )
+
+    chart = content["charts"][0]
+    assert chart["type"] == "scatter"
+    assert chart["valueLabel"] == "运行时长"
+    assert chart["secondaryValueLabel"] == "停机时长"
+    assert chart["points"][0] == {"label": "A01", "value": 120.0, "secondaryValue": 8.0}
+
+
+def test_agent_selects_combo_for_time_series_with_count_and_rate():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1", title="生产周报", source_id=1,
+        period_start=datetime(2026, 8, 3), period_end=datetime(2026, 8, 10),
+        scope_json={}, audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 100})
+    section = SimpleNamespace(
+        code="production", title="日产量与不良率", status="succeeded", summary="联合观察。",
+        confidence=95, artifact_ids_json=["artifact-production"],
+        content_json={
+            "result": {
+                "columns": ["日期", "产量", "不良率"],
+                "rows": [["2026-08-08", 100, 2.1], ["2026-08-09", 120, 1.7]],
+            },
+            "metricResolution": {"metricId": "output_qty", "name": "产量", "unit": "件"},
+        },
+    )
+
+    content = build_structured_content(
+        report=report, version=version, sections=[section],
+        raw_summary=section.summary, timezone_name="Asia/Shanghai",
+    )
+
+    chart = content["charts"][0]
+    assert chart["type"] == "combo"
+    assert chart["valueLabel"] == "产量"
+    assert chart["secondaryValueLabel"] == "不良率"
+    assert chart["secondaryUnit"] == "%"
+    assert chart["points"][1]["secondaryValue"] == 1.7
+
+
+def test_agent_does_not_treat_a_numeric_identifier_as_a_second_metric():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1", title="生产周报", source_id=1,
+        period_start=datetime(2026, 8, 3), period_end=datetime(2026, 8, 10),
+        scope_json={}, audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 100})
+    section = SimpleNamespace(
+        code="production", title="一线日产量趋势", status="succeeded", summary="趋势稳定。",
+        confidence=95, artifact_ids_json=["artifact-production"],
+        content_json={
+            "result": {
+                "columns": ["日期", "line_id", "产量"],
+                "rows": [["2026-08-08", 1, 100], ["2026-08-09", 1, 120]],
+            },
+            "metricResolution": {"metricId": "output_qty", "name": "产量", "unit": "件"},
+        },
+    )
+
+    content = build_structured_content(
+        report=report, version=version, sections=[section],
+        raw_summary=section.summary, timezone_name="Asia/Shanghai",
+    )
+
+    assert content["charts"][0]["type"] == "area"
+    assert "secondaryValue" not in content["charts"][0]["points"][0]
+
+
+def test_agent_does_not_treat_year_as_a_second_metric():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1", title="生产周报", source_id=1,
+        period_start=datetime(2026, 8, 3), period_end=datetime(2026, 8, 10),
+        scope_json={}, audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 100})
+    section = SimpleNamespace(
+        code="production", title="日产量趋势", status="succeeded", summary="趋势稳定。",
+        confidence=95, artifact_ids_json=["artifact-production"],
+        content_json={
+            "result": {
+                "columns": ["日期", "年份", "产量"],
+                "rows": [["2026-08-08", 2026, 100], ["2026-08-09", 2026, 120]],
+            },
+            "metricResolution": {"metricId": "output_qty", "name": "产量", "unit": "件"},
+        },
+    )
+
+    content = build_structured_content(
+        report=report, version=version, sections=[section],
+        raw_summary=section.summary, timezone_name="Asia/Shanghai",
+    )
+
+    assert content["charts"][0]["type"] == "area"
+    assert "secondaryValue" not in content["charts"][0]["points"][0]
+
+
+def test_agent_does_not_treat_numeric_shift_as_a_second_metric():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1", title="生产周报", source_id=1,
+        period_start=datetime(2026, 8, 3), period_end=datetime(2026, 8, 10),
+        scope_json={}, audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 100})
+    section = SimpleNamespace(
+        code="production", title="日产量趋势", status="succeeded", summary="趋势稳定。",
+        confidence=95, artifact_ids_json=["artifact-production"],
+        content_json={
+            "result": {
+                "columns": ["日期", "班次", "产量"],
+                "rows": [["2026-08-08", 1, 100], ["2026-08-09", 2, 120]],
+            },
+            "metricResolution": {"metricId": "output_qty", "name": "产量", "unit": "件"},
+        },
+    )
+
+    content = build_structured_content(
+        report=report, version=version, sections=[section],
+        raw_summary=section.summary, timezone_name="Asia/Shanghai",
+    )
+
+    assert content["charts"][0]["type"] == "area"
+    assert "secondaryValue" not in content["charts"][0]["points"][0]
+
+
+def test_agent_requires_a_repeated_cross_dimension_before_using_heatmap():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1", title="生产周报", source_id=1,
+        period_start=datetime(2026, 8, 3), period_end=datetime(2026, 8, 10),
+        scope_json={}, audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 100})
+    section = SimpleNamespace(
+        code="production", title="各产线不良数量", status="succeeded", summary="完成统计。",
+        confidence=95, artifact_ids_json=["artifact-production"],
+        content_json={
+            "result": {
+                "columns": ["产线编码", "产线名称", "不良数量"],
+                "rows": [
+                    ["L01", "一线", 8], ["L02", "二线", 6],
+                    ["L03", "三线", 4], ["L04", "四线", 2],
+                ],
+            },
+            "metricResolution": {"metricId": "defect_count", "name": "不良数量", "unit": "件"},
+        },
+    )
+
+    content = build_structured_content(
+        report=report, version=version, sections=[section],
+        raw_summary=section.summary, timezone_name="Asia/Shanghai",
+    )
+
+    assert content["charts"][0]["type"] == "bar"
+
+
+def test_pareto_keeps_full_population_in_the_cumulative_share():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1", title="质量周报", source_id=1,
+        period_start=datetime(2026, 8, 3), period_end=datetime(2026, 8, 10),
+        scope_json={}, audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 100})
+    rows = [[f"缺陷-{index:02d}", 100 if index == 1 else 5] for index in range(1, 21)]
+    section = SimpleNamespace(
+        code="quality", title="缺陷 Pareto", status="succeeded", summary="贡献集中。",
+        confidence=95, artifact_ids_json=["artifact-quality"],
+        content_json={
+            "result": {"columns": ["缺陷类型", "不良数量"], "rows": rows},
+            "metricResolution": {"metricId": "defect_count", "name": "不良数量", "unit": "件"},
+        },
+    )
+
+    content = build_structured_content(
+        report=report, version=version, sections=[section],
+        raw_summary=section.summary, timezone_name="Asia/Shanghai",
+    )
+
+    points = content["charts"][0]["points"]
+    assert len(points) == 12
+    assert points[-1]["label"] == "其他"
+    assert points[-1]["value"] == 45.0
+    assert points[-1]["secondaryValue"] == 100.0
+
+
 def test_agent_selects_temporal_chart_without_mixing_section_series():
     from types import SimpleNamespace
 

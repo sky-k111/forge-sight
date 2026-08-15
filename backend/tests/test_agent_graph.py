@@ -275,6 +275,108 @@ def test_runner_persists_smalltalk_as_a_plain_assistant_message(analysis_session
     assert calls == []
 
 
+def test_known_role_question_is_completed_before_the_worker_poll(analysis_session):
+    created = service.create_session("角色定位测试", 1, "u-role")
+
+    accepted = service.create_run(created["id"], "你有什么能力，应该怎么使用？", "role-idem")
+    snapshot = service.get_run(accepted["runId"])
+
+    assert accepted["status"] == "succeeded"
+    assert snapshot["status"] == "succeeded"
+    assert snapshot["usage"]["callCount"] == 0
+    assert "ForgeSight" in snapshot["assistantMessage"]["content"]
+    assert "只读" in snapshot["assistantMessage"]["content"]
+
+
+def test_free_conversation_completes_inline_with_one_small_model_call(analysis_session, monkeypatch):
+    from app.llm.provider import LLMResponse, LLMUsage
+
+    model_calls = []
+
+    def fake_completion(system, user, *, temperature, max_tokens):
+        model_calls.append((system, user, temperature, max_tokens))
+        return LLMResponse(
+            content=(
+                '{"segments":[{"index":0,"kind":"conversation",'
+                '"response":"我在。你可以从最困扰你的那件事开始说。"}]}'
+            ),
+            model="test-chat",
+            provider_request_id="req-chat",
+            usage=LLMUsage(input_tokens=20, output_tokens=12, total_tokens=32),
+        )
+
+    monkeypatch.setattr(runner.provider, "chat_completion", fake_completion)
+    created = service.create_session("正常对话测试", 1, "u-conversation")
+
+    accepted = service.create_run(created["id"], "你对团队协作有什么看法？", "chat-idem")
+    snapshot = service.get_run(accepted["runId"])
+
+    assert accepted["status"] == "succeeded"
+    assert snapshot["status"] == "succeeded"
+    assert snapshot["tasks"] == []
+    assert snapshot["usage"]["callCount"] == 1
+    assert snapshot["assistantMessage"]["content"].startswith("我在")
+    assert model_calls[0][2:] == (0.1, 500)
+    assert "ForgeSight" in model_calls[0][0]
+
+
+def test_unknown_business_request_is_preclassified_once_then_queued(analysis_session, monkeypatch):
+    from app.llm.provider import LLMResponse, LLMUsage
+
+    calls = []
+    lease_windows = []
+
+    def fake_completion(system, user, *, temperature, max_tokens):
+        calls.append((system, user, max_tokens))
+        with analysis_session() as session:
+            active = session.query(runner.AnalysisRun).filter_by(status="running").one()
+            lease_windows.append((active.lease_expires_at - active.started_at).total_seconds())
+        return LLMResponse(
+            content='{"segments":[{"index":0,"kind":"analysis","response":""}]}',
+            model="test-router", provider_request_id="req-route",
+            usage=LLMUsage(input_tokens=18, output_tokens=8, total_tokens=26),
+        )
+
+    monkeypatch.setattr(runner.provider, "chat_completion", fake_completion)
+    created = service.create_session("自然业务问法", 1, "u-natural-business")
+
+    accepted = service.create_run(created["id"], "上周每条线做了几件？", "natural-business")
+
+    assert accepted["status"] == "queued"
+    assert len(calls) == 1
+    assert calls[0][2] == 500
+    assert lease_windows[0] >= 75
+    with analysis_session() as session:
+        run = session.query(runner.AnalysisRun).filter_by(id=accepted["runId"]).one()
+        message = session.query(runner.AnalysisMessage).filter_by(id=run.trigger_message_id).one()
+        assert message.metadata_json["routeLabels"] == {"0": "analysis"}
+
+
+def test_inline_conversation_cannot_complete_twice(analysis_session):
+    created = service.create_session("幂等对话测试", 1, "u-chat-idempotent")
+    accepted = service.create_run(created["id"], "你是谁？", "chat-once")
+
+    runner.execute_inline_conversation(accepted["runId"], "不应重复写入")
+
+    with analysis_session() as session:
+        messages = (
+            session.query(runner.AnalysisMessage)
+            .filter_by(session_id=created["id"], role="assistant")
+            .all()
+        )
+        assert len(messages) == 1
+        assert "不应重复写入" not in messages[0].content
+
+
+def test_business_followup_still_uses_the_analysis_worker(analysis_session):
+    created = service.create_session("业务追问测试", 1, "u-followup")
+    service.create_run(created["id"], "统计最近 7 天各产线产量", "analysis-first")
+
+    accepted = service.create_run(created["id"], "继续看看它最近怎么样", "analysis-followup")
+
+    assert accepted["status"] == "queued"
+
+
 def test_out_of_scope_question_does_not_trigger_metric_clarification():
     calls = []
     graph = build_analysis_graph(

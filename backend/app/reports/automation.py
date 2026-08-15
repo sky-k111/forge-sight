@@ -475,6 +475,53 @@ def _is_percentage_column(column: str) -> bool:
     return any(marker in normalized for marker in ("%", "pct", "率", "占比", "贡献"))
 
 
+def _is_identifier_column(column: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", column.lower())
+    return (
+        normalized == "id"
+        or normalized.endswith("id")
+        or any(marker in normalized for marker in ("编号", "编码", "序号", "主键"))
+    )
+
+
+def _is_auxiliary_numeric_column(column: str) -> bool:
+    """Exclude numeric dimensions/helpers that are not business measures."""
+
+    normalized = re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", column.lower())
+    if _is_identifier_column(column):
+        return True
+    exact_names = {
+        "year", "yearnum", "年份", "年度",
+        "month", "monthnum", "monthno", "月份", "月度", "月序号",
+        "day", "daynum", "dayno", "日期序号",
+        "week", "weeknum", "weekno", "周次", "周序号",
+        "rank", "ranking", "排名", "名次",
+        "rownum", "rownumber", "sortorder", "排序", "顺序",
+    }
+    return normalized in exact_names
+
+
+def _is_measure_column(column: str) -> bool:
+    """Recognize business measures; numeric dimensions must not become combo series."""
+
+    if _is_auxiliary_numeric_column(column):
+        return False
+    normalized = column.lower()
+    dimension_markers = (
+        "班次", "班组", "季度", "等级", "类别", "类型", "状态", "阶段",
+        "shift", "quarter", "grade", "category", "type", "status", "stage",
+    )
+    if any(marker in normalized for marker in dimension_markers):
+        return False
+    measure_markers = (
+        "%", "率", "占比", "贡献", "数量", "产量", "库存", "缺口", "时长", "时间",
+        "金额", "收入", "成本", "温度", "压力", "速度", "能耗", "功率", "重量", "面积",
+        "qty", "count", "rate", "ratio", "share", "duration", "minutes", "hours",
+        "amount", "revenue", "cost", "temperature", "pressure", "speed", "volume",
+    )
+    return any(marker in normalized for marker in measure_markers)
+
+
 def _metric_unit(resolution: dict, column: str) -> str:
     if resolution.get("unit"):
         return str(resolution["unit"])
@@ -774,27 +821,82 @@ def _structured_charts(
             (title, str(getattr(section, "code", "")), value_label, *columns)
         ).lower()
         temporal = all(_is_temporal_label(row[category_index]) for row in usable_rows)
+        secondary_value_label = None
+        secondary_unit = None
         if temporal:
             usable_rows.sort(
                 key=lambda row: _temporal_sort_key(row[category_index], period_end)
             )
-            chart_type = "area" if any(
-                marker in semantic_text
-                for marker in ("产量", "数量", "销售额", "收入", "output", "volume")
-            ) else "line"
+            secondary_candidates = [
+                index for index in numeric_indices
+                if index != value_index and _is_measure_column(columns[index])
+            ]
+            secondary_index = next(
+                (
+                    index for index in secondary_candidates
+                    if all(index < len(row) and _numeric_value(row[index]) is not None for row in usable_rows)
+                ),
+                None,
+            )
+            if secondary_index is not None:
+                chart_type = "combo"
+                secondary_value_label = columns[secondary_index]
+                secondary_unit = _metric_unit({}, columns[secondary_index])
+                points = [
+                    {
+                        "label": str(row[category_index]),
+                        "value": _numeric_value(row[value_index]),
+                        "secondaryValue": _numeric_value(row[secondary_index]),
+                    }
+                    for row in usable_rows[-12:]
+                ]
+                description = (
+                    f"联合观察{value_label}与{secondary_value_label}随{category_label}的变化。"
+                )
+            else:
+                chart_type = "area" if any(
+                    marker in semantic_text
+                    for marker in ("产量", "数量", "销售额", "收入", "output", "volume")
+                ) else "line"
+                points = [
+                    {
+                        "label": str(row[category_index]),
+                        "value": _numeric_value(row[value_index]),
+                    }
+                    for row in usable_rows[-12:]
+                ]
+                description = f"展示{value_label}随{category_label}的变化趋势。"
+        elif len([index for index in numeric_indices if not _is_auxiliary_numeric_column(columns[index])]) >= 2 and any(
+            marker in semantic_text for marker in ("相关", "关系", "影响", "correlation")
+        ):
+            y_index = value_index
+            x_index = next(
+                index for index in numeric_indices
+                if index != y_index and not _is_auxiliary_numeric_column(columns[index])
+            )
+            relationship_rows = [
+                row for row in usable_rows
+                if x_index < len(row) and _numeric_value(row[x_index]) is not None
+            ][:60]
+            if len(relationship_rows) < 2:
+                continue
+            chart_type = "scatter"
+            value_label = columns[x_index]
+            unit = _metric_unit({}, columns[x_index])
+            secondary_value_label = metric_name or columns[y_index]
+            secondary_unit = _metric_unit(resolution, columns[y_index])
             points = [
                 {
                     "label": str(row[category_index]),
-                    "value": _numeric_value(row[value_index]),
+                    "value": _numeric_value(row[x_index]),
+                    "secondaryValue": _numeric_value(row[y_index]),
                 }
-                for row in usable_rows[-12:]
+                for row in relationship_rows
             ]
-            description = f"展示{value_label}随{category_label}的变化趋势。"
-        elif len(category_indices) >= 2 and any(
-            marker in semantic_text for marker in ("热力", "矩阵", "heatmap", "matrix")
-        ):
+            description = f"观察{value_label}与{secondary_value_label}之间的分布关系。"
+        elif len(category_indices) >= 2:
             group_index = category_indices[1]
-            points = [
+            matrix_points = [
                 {
                     "label": str(row[category_index]),
                     "group": str(row[group_index]),
@@ -803,19 +905,47 @@ def _structured_charts(
                 for row in usable_rows
                 if group_index < len(row) and str(row[group_index]).strip()
             ][:60]
-            if len(points) < 2:
-                continue
-            chart_type = "heatmap"
-            group_label = _chart_axis_label(columns[group_index])
-            description = (
-                f"交叉观察{category_label}与{group_label}的{value_label}分布。"
+            labels = {item["label"] for item in matrix_points}
+            groups = {item["group"] for item in matrix_points}
+            unique_pairs = {(item["label"], item["group"]) for item in matrix_points}
+            matrix_capacity = len(labels) * len(groups)
+            is_matrix = (
+                len(matrix_points) >= 4
+                and len(labels) >= 2
+                and len(groups) >= 2
+                and len(matrix_points) > len(labels)
+                and len(matrix_points) > len(groups)
+                and matrix_capacity > 0
+                and len(unique_pairs) / matrix_capacity >= 0.5
             )
+            if is_matrix:
+                if len(matrix_points) < 2:
+                    continue
+                points = matrix_points
+                chart_type = "heatmap"
+                group_label = _chart_axis_label(columns[group_index])
+                description = (
+                    f"交叉观察{category_label}与{group_label}的{value_label}分布。"
+                )
+            else:
+                ranked = sorted(
+                    usable_rows,
+                    key=lambda row: _numeric_value(row[value_index]) or 0,
+                    reverse=True,
+                )[:12]
+                points = [
+                    {"label": str(row[category_index]), "value": _numeric_value(row[value_index])}
+                    for row in ranked
+                ]
+                chart_type = "bar"
+                description = f"按{category_label}对{value_label}进行降序比较。"
         else:
-            ranked = sorted(
+            ranked_all = sorted(
                 usable_rows,
                 key=lambda row: _numeric_value(row[value_index]) or 0,
                 reverse=True,
-            )[:12]
+            )
+            ranked = ranked_all[:12]
             points = [
                 {
                     "label": str(row[category_index]),
@@ -823,9 +953,36 @@ def _structured_charts(
                 }
                 for row in ranked
             ]
-            if any(marker in semantic_text for marker in ("pareto", "帕累托", "累计贡献")):
+            positive_values = [
+                max(float(_numeric_value(row[value_index]) or 0), 0)
+                for row in ranked_all
+            ]
+            total = sum(positive_values)
+            concentrated_quality_distribution = (
+                len(points) >= 4
+                and total > 0
+                and any(marker in semantic_text for marker in ("缺陷", "不良", "故障", "质量", "defect"))
+                and positive_values[0] / total >= 0.5
+            )
+            if (
+                any(marker in semantic_text for marker in ("pareto", "帕累托", "累计贡献"))
+                or concentrated_quality_distribution
+            ):
                 chart_type = "pareto"
-                total = sum(max(float(item["value"] or 0), 0) for item in points)
+                if len(ranked_all) > 12:
+                    visible_rows = ranked_all[:11]
+                    other_value = sum(
+                        max(float(_numeric_value(row[value_index]) or 0), 0)
+                        for row in ranked_all[11:]
+                    )
+                    points = [
+                        {
+                            "label": str(row[category_index]),
+                            "value": _numeric_value(row[value_index]),
+                        }
+                        for row in visible_rows
+                    ]
+                    points.append({"label": "其他", "value": other_value})
                 cumulative = 0.0
                 for item in points:
                     cumulative += max(float(item["value"] or 0), 0)
@@ -852,8 +1009,7 @@ def _structured_charts(
             key = f"{base_key}-{suffix}"
             suffix += 1
         used_keys.add(key)
-        charts.append(
-            {
+        chart = {
                 "key": key,
                 "type": chart_type,
                 "title": title,
@@ -865,7 +1021,11 @@ def _structured_charts(
                 "evidenceArtifactIds": evidence,
                 "colorRole": _chart_color_role(section),
             }
-        )
+        if secondary_value_label:
+            chart["secondaryValueLabel"] = secondary_value_label
+        if secondary_unit:
+            chart["secondaryUnit"] = secondary_unit
+        charts.append(chart)
     return charts
 
 

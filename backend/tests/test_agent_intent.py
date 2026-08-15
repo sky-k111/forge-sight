@@ -10,9 +10,42 @@ def test_obvious_smalltalk_is_routed_away_from_analysis():
     assert classify_request_kind("你好") == "conversation"
     assert classify_request_kind("谢谢你") == "conversation"
     assert classify_request_kind("你能做什么？") == "conversation"
+    assert classify_request_kind("你有什么能力，应该怎么使用？") == "conversation"
     assert classify_request_kind("明年下雨吗") == "conversation"
     assert classify_request_kind("分析最近 7 天的工序良率") == "analysis"
     assert classify_request_kind("什么是工序良率") == "analysis"
+
+
+def test_emotional_conversation_is_not_misclassified_by_a_single_character():
+    assert classify_request_kind("我最近表现不好，想和你聊聊") == "conversation"
+    assert classify_request_kind("最近压力有点大，想和你聊聊") == "conversation"
+
+
+def test_ambiguous_business_language_stays_available_to_the_lightweight_router():
+    assert classify_request_kind("上周每条线做了几件？") == "unknown"
+    history = [{"role": "user", "content": "统计各产线最近 7 天产量"}]
+    assert classify_request_kind("二线呢？", history) == "analysis"
+    assert classify_request_kind("那昨天呢？", history) == "analysis"
+
+
+def test_followup_only_inherits_the_most_recent_user_topic():
+    history = [
+        {"role": "user", "content": "统计最近 7 天各产线产量"},
+        {"role": "assistant", "content": "已完成业务分析。"},
+        {"role": "user", "content": "今天天气怎么样？"},
+        {"role": "assistant", "content": "这不属于企业数据分析范围。"},
+    ]
+
+    assert classify_request_kind("那明天呢？", history) == "unknown"
+
+
+def test_capability_answer_states_forgesight_role_and_readonly_boundary():
+    route = build_request_route("你有什么能力，应该怎么使用？")
+
+    assert route["kind"] == "conversation"
+    assert "ForgeSight" in route["conversationResponse"]
+    assert "只读" in route["conversationResponse"]
+    assert "生产" in route["conversationResponse"]
 
 
 def test_mixed_request_keeps_only_business_segments_for_analysis():

@@ -21,6 +21,7 @@ describe("weekly report chart orchestration", () => {
           { ...base, key: "rank", type: "bar", title: "产线排行", points: [{ label: "二线", value: 12 }, { label: "一线", value: 10 }] },
           { ...base, key: "pareto", type: "pareto", title: "缺陷 Pareto", points: [{ label: "划伤", value: 6, secondaryValue: 60 }, { label: "脏污", value: 4, secondaryValue: 100 }] },
           { ...base, key: "share", type: "donut", title: "产量构成", points: [{ label: "A", value: 7 }, { label: "B", value: 3 }] },
+          { ...base, key: "relation", type: "scatter", title: "运行与停机关系", secondaryValueLabel: "停机时长", secondaryUnit: "分钟", points: [{ label: "A01", value: 120, secondaryValue: 8 }, { label: "A02", value: 150, secondaryValue: 4 }] },
         ]}
       />,
     );
@@ -28,10 +29,13 @@ describe("weekly report chart orchestration", () => {
     expect(screen.getByRole("heading", { name: "产线排行" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "缺陷 Pareto" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "产量构成" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "运行与停机关系" })).toBeTruthy();
     expect(screen.getByText("横向排行")).toBeTruthy();
     expect(screen.getByText("帕累托分析")).toBeTruthy();
     expect(screen.getByText("构成占比")).toBeTruthy();
-    expect(screen.getAllByText("查看精确数据")).toHaveLength(3);
-    expect(screen.getAllByText(/证据 1 项/)).toHaveLength(3);
+    expect(screen.getByText("相关性散点")).toBeTruthy();
+    expect(screen.getAllByText("查看精确数据")).toHaveLength(4);
+    expect(screen.getAllByText(/证据 1 项/)).toHaveLength(4);
+    expect(screen.getByText("停机时长（分钟）")).toBeTruthy();
   });
 });

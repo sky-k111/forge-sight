@@ -13,6 +13,8 @@ class AnalysisState(TypedDict, total=False):
     intent_kind: str
     direct_response: str
     request_segments: list[dict[str, Any]]
+    preclassified_route_labels: dict[int, str]
+    preclassified_route_responses: dict[int, str]
     blocked: bool
     waiting_user: bool
     retry_count: int
