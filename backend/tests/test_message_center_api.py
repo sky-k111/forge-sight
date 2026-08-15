@@ -171,6 +171,33 @@ def test_announcement_writes_are_admin_only_and_return_frozen_publish_contract(a
     assert withdrawn.json()["withdrawalReason"] == "维护取消"
 
 
+def test_admin_can_publish_announcement_to_all_enabled_users(api_session):
+    app.dependency_overrides[require_user] = lambda: {
+        "id": "admin-id",
+        "username": "admin",
+        "displayName": "管理员",
+        "role": "admin",
+    }
+    client = TestClient(app)
+
+    created = client.post(
+        "/api/v1/announcements",
+        json={
+            "title": "全员公告",
+            "body": "本周五升级数据底座。",
+            "audience": {"all": True},
+        },
+    )
+    published = client.post(
+        f"/api/v1/announcements/{created.json()['id']}/publish"
+    )
+
+    assert created.status_code == 201
+    assert published.status_code == 200
+    assert published.json()["audience"] == {"all": True}
+    assert published.json()["estimatedRecipientCount"] == 3
+
+
 def test_openapi_contains_message_card_and_announcement_examples():
     schema = TestClient(app).get("/openapi.json").json()
 

@@ -133,7 +133,8 @@ flowchart LR
 - **智能问析**：支持提问、澄清、流式执行、图表、结论和证据链。
 - **历史会话**：按数据源和状态筛选，恢复上下文后继续分析。
 - **智能建模**：完成算法选择、训练、评估、预测和方案对比。
-- **报告中心**：管理报告创建、生成、审批、发布和文件导出。
+- **周报中心**：Agent 自动生成并直接发布周报，以管理摘要、关键指标、趋势图、异常表和可折叠证据支持快速决策，并提供 PDF/Excel 下载。
+- **消息中心**：统一接收 Agent 周报和管理员公告，通过未读、优先级和内容类型快速筛选。
 
 ### 管理工作区
 
@@ -144,6 +145,7 @@ flowchart LR
 - **系统配置**：展示只读、超时和行数上限等默认安全边界；实际参数由
   `backend/.env` 管理。
 - **安全审计**：记录关键操作与安全策略执行结果。
+- **公告与投递**：管理员按用户、组织或角色发布公告，并查看邮件状态、失败分类和安全重试。
 
 ## 项目任务
 
@@ -178,7 +180,7 @@ flowchart LR
     classDef quality fill:#F5F3FF,stroke:#7C3AED,color:#4C1D95,stroke-width:1.5px;
     class Q,M,R,V,N done;
     class E core;
-    class U delivery;
+    class U done;
     class T quality;
 ```
 
@@ -233,8 +235,14 @@ python -m venv .venv
 .venv\Scripts\pip.exe install -r requirements.txt
 ```
 
-`backend/.env.example` 使用占位值，不能直接启动。使用当前
-`docker-compose.yml` 的本地默认配置时，至少替换为：
+后端目录中的两个环境文件用途不同：
+
+- `.env.example`：可提交的配置模板，只维护字段和安全占位值，不填写真实密钥。
+- `.env`：当前电脑实际读取的配置，已被 Git 忽略；日常只修改这个文件。
+
+首次安装才执行一次 `Copy-Item .env.example .env`。已有 `.env` 时不要重复执行，
+否则会覆盖本地数据库、模型和邮件配置。使用当前 `docker-compose.yml` 的本地默认配置时，
+至少替换为：
 
 ```dotenv
 BUSINESS_DB_URL=mysql+pymysql://forgesight_reader:forgesight_reader@127.0.0.1:3307/forge_sight?charset=utf8mb4
@@ -249,6 +257,28 @@ AUTH_ADMIN_PASSWORD=替换为本地管理员密码
 其中 `forgesight_reader` 是初始化脚本将创建的本地只读账号密码。
 部署环境必须更换 Compose 默认密码，不得沿用上述开发值。运行初始化前，
 请确认 `backend/.env` 中已经没有任何 `CHANGE_ME`。
+
+#### 使用 QQ 邮箱发送验证码
+
+ForgeSight 可以向任意有效邮箱发送验证码；QQ 邮箱在这里仅作为发件邮箱。
+在 QQ 邮箱设置中开启 SMTP 服务并生成授权码，然后只在 `backend/.env` 中填写：
+
+```dotenv
+AUTH_EMAIL_GATE_ENABLED=true
+AUTH_EMAIL_GATE_ALLOW_CAPTURE=false
+EMAIL_CODE_SECRET=替换为随机长字符串
+MAIL_PROVIDER=smtp
+MAIL_FROM_ADDRESS=你的QQ邮箱@qq.com
+MAIL_FROM_NAME=ForgeSight
+SMTP_HOST=smtp.qq.com
+SMTP_PORT=465
+SMTP_USERNAME=你的QQ邮箱@qq.com
+SMTP_PASSWORD=你的QQ邮箱SMTP授权码
+SMTP_USE_TLS=true
+```
+
+`SMTP_PASSWORD` 填 QQ 邮箱生成的 SMTP 授权码，不是 QQ 密码，也不是用户收到的六位验证码。
+修改后需要重启后端。真实邮箱、授权码和 `EMAIL_CODE_SECRET` 不得写入 `.env.example`、文档或 Git。
 
 ### 3. 初始化数据库
 
@@ -368,5 +398,4 @@ npm run build
 
 - 智能问析、知识管理、数据资源、报告流程和安全审计已接入后端。
 - 用户注册登录、历史会话、检查点分支和智能建模已实现。
-- 周报 Agent、消息中心、邮箱绑定与文件导出已完成；邮件投递后端已进入待合并状态，
-  开发状态以 [任务中心](docs/tasks/README.md) 为准。
+- 周报 Agent、消息中心、邮箱绑定、精美周报 Web 体验与文件导出已完成；邮件投递后端和 U 前端任务已进入待合并状态，开发状态以 [任务中心](docs/tasks/README.md) 为准。

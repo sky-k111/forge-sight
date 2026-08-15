@@ -22,6 +22,7 @@ from app.db.models import (
     ReportFile,
     ReportVersion,
     UserMembership,
+    PlatformUser,
 )
 from app.reports.domain import PublishedVersionImmutable, ensure_version_mutable
 from app.reports.schema import content_checksum as compute_content_checksum
@@ -70,6 +71,13 @@ def resolve_audience_scope(
 
     now = now or datetime.now()
     explicit_users = set(audience.get("userIds") or [])
+    if audience.get("all") is True:
+        explicit_users.update(
+            user_id
+            for (user_id,) in session.query(PlatformUser.id)
+            .filter(PlatformUser.enabled.is_(True))
+            .all()
+        )
     organization_ids = _expand_organization_ids(
         session, set(audience.get("organizationIds") or [])
     )

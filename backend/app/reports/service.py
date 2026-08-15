@@ -20,6 +20,8 @@ from app.db.models import (
     DataSource,
     KnowledgeMetric,
     MetricSourceBinding,
+    Message,
+    MessageRecipient,
     Report,
     ReportDelivery,
     ReportFile,
@@ -259,8 +261,60 @@ def list_reports(
             query = query.filter_by(status=status)
         if source_id:
             query = query.filter_by(source_id=source_id)
-        ids = [row.id for row in query.order_by(Report.updated_at.desc()).all()]
-    return [get_report(report_id, session_factory=session_factory, include_sections=False) for report_id in ids]
+        rows = query.order_by(Report.updated_at.desc()).all()
+        if not rows:
+            return []
+        report_ids = [row.id for row in rows]
+        version_ids = [row.current_version_id for row in rows if row.current_version_id]
+        sources = {
+            row.id: row
+            for row in session.query(DataSource).filter(
+                DataSource.id.in_({row.source_id for row in rows})
+            )
+        }
+        templates = {
+            row.id: row
+            for row in session.query(ReportTemplate).filter(
+                ReportTemplate.id.in_({row.template_id for row in rows})
+            )
+        }
+        versions = {
+            row.id: row
+            for row in session.query(ReportVersion).filter(
+                ReportVersion.id.in_(version_ids)
+            )
+        } if version_ids else {}
+        files_by_report: dict[str, list[ReportFile]] = {report_id: [] for report_id in report_ids}
+        if version_ids:
+            for item in session.query(ReportFile).filter(
+                ReportFile.report_id.in_(report_ids),
+                ReportFile.version_id.in_(version_ids),
+            ).order_by(ReportFile.format):
+                files_by_report[item.report_id].append(item)
+        read_by_report: dict[str, bool] = {}
+        for report_id, is_read, published_at in (
+            session.query(Message.related_id, MessageRecipient.is_read, Message.published_at)
+            .join(MessageRecipient, Message.id == MessageRecipient.message_id)
+            .filter(
+                Message.message_type == "weekly_report",
+                Message.related_id.in_(report_ids),
+                MessageRecipient.user_id == owner_id,
+            )
+            .order_by(Message.published_at.desc())
+        ):
+            read_by_report.setdefault(report_id, is_read)
+        results = []
+        for row in rows:
+            result = _report_dict(
+                row,
+                sources.get(row.source_id),
+                templates.get(row.template_id),
+                versions.get(row.current_version_id),
+            )
+            result["files"] = [_file_dict(item) for item in files_by_report[row.id]]
+            result["isRead"] = read_by_report.get(row.id, False)
+            results.append(result)
+        return results
 
 
 def get_report(
@@ -308,6 +362,7 @@ def get_report(
         )
         result = _report_dict(row, source, template, version)
         if include_sections:
+            result["content"] = version.content_json or {} if version else {}
             result["sections"] = [_section_dict(item) for item in sections]
             result["deliveries"] = [_delivery_dict(item) for item in deliveries]
             result["files"] = [_file_dict(item) for item in files]
@@ -455,19 +510,27 @@ def _finalize_report(session, report: Report, run: AnalysisRun) -> None:
         "artifactChecksums": {item.id: item.checksum for item in all_artifacts},
         "generatedAt": datetime.now().isoformat(),
     }
-    if report.subscription_id and run.status == "succeeded":
-        subscription = session.query(ReportSubscription).filter_by(id=report.subscription_id).first()
-        if subscription and subscription.publish_policy == "auto_publish":
-            from app.reports.automation import finalize_automatic_report
+    # 周报始终走同一套确定性校验并由 Agent 直接发布；专题报告仍保留人工复核流。
+    if report.report_type == "weekly" and run.status == "succeeded":
+        subscription = (
+            session.query(ReportSubscription).filter_by(id=report.subscription_id).first()
+            if report.subscription_id
+            else None
+        )
+        from app.reports.automation import finalize_automatic_report
 
-            finalize_automatic_report(
-                session,
-                report=report,
-                version=version,
-                sections=sections,
-                raw_summary=summary,
-                timezone_name=subscription.timezone,
-            )
+        finalize_automatic_report(
+            session,
+            report=report,
+            version=version,
+            sections=sections,
+            raw_summary=summary,
+            timezone_name=(
+                subscription.timezone
+                if subscription
+                else str((report.scope_json or {}).get("timezone") or "Asia/Shanghai")
+            ),
+        )
 
 
 def submit_review(report_id: str, user_id: str, session_factory=PlatformSession) -> dict:
@@ -716,6 +779,7 @@ def _report_dict(row: Report, source: DataSource | None, template: ReportTemplat
         "waiting_user": "等待补充条件",
         "validating": "校验报告",
         "composing": "生成摘要",
+        "validation_failed": "校验未通过",
         "awaiting_review": "待提交复核",
         "review_pending": "待复核",
         "approved": "已通过",
@@ -744,6 +808,13 @@ def _report_dict(row: Report, source: DataSource | None, template: ReportTemplat
         "analysisRunId": row.analysis_run_id,
         "summary": (version.summary if version else "") or content.get("summary", ""),
         "confidence": content.get("confidence", 0),
+        "reportOverview": {
+            "schemaVersion": content.get("schemaVersion"),
+            "managementSummary": content.get("managementSummary"),
+            "metrics": content.get("metrics", []),
+            "anomalies": content.get("anomalies", []),
+            "dataQuality": content.get("dataQuality"),
+        } if content.get("schemaVersion") == "weekly-report/v1" else None,
         "version": {
             "id": version.id,
             "version": version.version,

@@ -23,6 +23,8 @@ def _require_admin(user: dict) -> None:
 def get_deliveries(
     message_id: str | None = Query(default=None, alias="messageId", max_length=40),
     report_id: str | None = Query(default=None, alias="reportId", max_length=40),
+    announcement_id: str | None = Query(default=None, alias="announcementId", max_length=40),
+    content_type: str | None = Query(default=None, alias="contentType", pattern="^(report|announcement)$"),
     recipient_user_id: str | None = Query(default=None, alias="recipientUserId", max_length=40),
     status_value: str | None = Query(default=None, alias="status", max_length=24),
     created_from: datetime | None = Query(default=None, alias="createdFrom"),
@@ -39,6 +41,8 @@ def get_deliveries(
                 session,
                 message_id=message_id,
                 report_id=report_id,
+                announcement_id=announcement_id,
+                content_type=content_type,
                 recipient_user_id=recipient_user_id,
                 status=status_value,
                 created_from=created_from,

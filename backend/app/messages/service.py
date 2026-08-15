@@ -66,6 +66,7 @@ def _validate_announcement(
     if not isinstance(audience, dict):
         raise ValueError("公告接收范围必须是对象")
     allowed_audience_keys = {
+        "all",
         "userIds",
         "organizationIds",
         "businessRoles",
@@ -74,14 +75,18 @@ def _validate_announcement(
     unknown_keys = set(audience) - allowed_audience_keys
     if unknown_keys:
         raise ValueError(f"公告接收范围包含未知字段：{sorted(unknown_keys)}")
+    if "all" in audience and audience["all"] is not True:
+        raise ValueError("公告接收范围 all 只能为 true")
     for key, values in audience.items():
+        if key == "all":
+            continue
         if not isinstance(values, list) or any(
             not isinstance(value, str) or not value.strip() for value in values
         ):
             raise ValueError(f"公告接收范围 {key} 必须是非空字符串数组")
-    if not any(
+    if not audience.get("all") and not any(
         audience.get(key)
-        for key in allowed_audience_keys
+        for key in allowed_audience_keys - {"all"}
     ):
         raise ValueError("公告接收范围不能为空")
     if valid_from and expires_at and expires_at <= valid_from:

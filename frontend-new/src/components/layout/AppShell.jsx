@@ -8,6 +8,7 @@ import cn from "../../lib/cn";
 import { pageFromPath, roleFromPath, routeByPage } from "../../app/routeConfig";
 import { createSession, deleteSession, listSessions } from "../../api/analysis";
 import { fetchMe, logout as apiLogout } from "../../api/auth";
+import { getUnreadCount } from "../../api/messages";
 import { AUTH_EXPIRED_EVENT, getCachedUser, getToken, setSession } from "../../lib/auth";
 
 const users = {
@@ -44,6 +45,7 @@ export default function AppShell() {
   const [sessionsError, setSessionsError] = useState(null);
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [expandedItems, setExpandedItems] = useState(() => new Set(["analysis-center", "data-governance", "platform-governance"]));
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     const activeParent = roleMenus[role]
@@ -80,6 +82,15 @@ export default function AppShell() {
   useEffect(() => {
     refreshSessions();
   }, [refreshSessions]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshUnread = () => getUnreadCount().then((count) => { if (!cancelled) setUnreadCount(count); }).catch(() => {});
+    refreshUnread();
+    const timer = window.setInterval(refreshUnread, 30000);
+    window.addEventListener("forgesight:messages-changed", refreshUnread);
+    return () => { cancelled = true; window.clearInterval(timer); window.removeEventListener("forgesight:messages-changed", refreshUnread); };
+  }, []);
 
   useEffect(() => {
     if (darkMode) document.documentElement.setAttribute("data-theme", "dark");
@@ -231,6 +242,8 @@ export default function AppShell() {
           evidenceOpen={evidenceOpen}
           canSwitchAdmin={canSwitchAdmin}
           onOpenNavigation={() => setMobileNavOpen(true)}
+          unreadCount={unreadCount}
+          onOpenMessages={() => navigate(role === "admin" ? routeByPage["admin-messages"] : routeByPage.messages)}
           onToggleEvidence={() => setEvidenceOpen((value) => !value)}
           onRoleChange={switchRole}
         />
@@ -615,7 +628,7 @@ function QueueItem({ dotClass, title, caption, count, onClick }) {
   );
 }
 
-function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, onToggleEvidence, onRoleChange, onOpenNavigation }) {
+function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, unreadCount, onToggleEvidence, onRoleChange, onOpenNavigation, onOpenMessages }) {
   const meta = pageMeta[page] ?? pageMeta.overview;
   return (
     <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-line bg-surface/95 px-3 backdrop-blur md:gap-5 md:px-6">
@@ -664,10 +677,11 @@ function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, onToggleEviden
         <button
           type="button"
           className="relative grid h-[34px] w-[34px] cursor-pointer place-items-center rounded-control border border-transparent text-muted transition-colors hover:border-line hover:bg-surface-2 hover:text-ink"
-          aria-label="通知"
+          aria-label={unreadCount ? `消息中心，${unreadCount} 条未读` : "消息中心"}
+          onClick={onOpenMessages}
         >
           <Icon name="bell" />
-          <span className="absolute right-1.5 top-1.5 h-[5px] w-[5px] rounded-full bg-red ring-2 ring-surface" />
+          {unreadCount > 0 && <span className="absolute -right-1 -top-1 grid min-h-4 min-w-4 place-items-center rounded-full bg-critical px-1 text-[9px] font-bold text-white ring-2 ring-surface">{unreadCount > 99 ? "99+" : unreadCount}</span>}
         </button>
         <div className="hidden h-8 w-8 place-items-center rounded-full bg-surface-3 text-xs font-bold text-ink-2 sm:grid" title={`${user.name} · ${user.title}`}>
           {user.initials}

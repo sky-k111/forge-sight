@@ -3,28 +3,37 @@
 @theme {
   --color-*: initial;
   --color-white: #ffffff;
-  --color-ink: #18222d;
-  --color-ink-2: #354452;
-  --color-muted: #62717e;
+  --color-ink: #182329;
+  --color-ink-2: #394a50;
+  --color-muted: #5d6d72;
   --color-faint: #8997a3;
-  --color-canvas: #f2f5f6;
+  --color-canvas: #f3f5f4;
+  --color-paper: #fbfcfb;
   --color-surface: #ffffff;
-  --color-surface-2: #f7f9fa;
-  --color-surface-3: #eceff1;
-  --color-line: #e3e8eb;
-  --color-line-strong: #ccd5da;
-  --color-primary: #3056b8;
-  --color-primary-soft: #eef3fb;
-  --color-teal: #0b7a72;
-  --color-teal-soft: #edf7f5;
-  --color-amber: #a96818;
-  --color-amber-soft: #fbf4e8;
-  --color-red: #b24643;
-  --color-red-soft: #fbefee;
+  --color-surface-2: #eff2f1;
+  --color-surface-3: #e7ecea;
+  --color-surface-muted: #eff2f1;
+  --color-line: #dce3e1;
+  --color-line-strong: #71837d;
+  --color-primary: #285d72;
+  --color-primary-soft: #e9f1f3;
+  --color-teal: #176b57;
+  --color-teal-soft: #e9f3ef;
+  --color-success: #176b57;
+  --color-success-soft: #e9f3ef;
+  --color-amber: #8a5a12;
+  --color-amber-soft: #f7f0e5;
+  --color-warning: #8a5a12;
+  --color-warning-soft: #f7f0e5;
+  --color-red: #a33a36;
+  --color-red-soft: #f8eceb;
+  --color-critical: #a33a36;
+  --color-critical-soft: #f8eceb;
   --color-violet: #6556a8;
   --color-green: #247457;
 
   --font-sans: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-report: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", serif;
   --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 
   --text-body: 13px;
@@ -36,6 +45,7 @@
   --radius-card: 10px;
   --radius-panel: 12px;
   --radius-overlay: 14px;
+  --radius-section: 12px;
 
   --shadow-card: 0 1px 2px rgb(24 34 45 / 4%);
   --shadow-card-hover: 0 2px 10px rgb(24 34 45 / 6%);
@@ -67,6 +77,7 @@
     --color-muted: #9cabb9;
     --color-faint: #738291;
     --color-canvas: #0f1419;
+    --color-paper: #172123;
     --color-surface: #161d24;
     --color-surface-2: #1c252e;
     --color-surface-3: #27323d;
@@ -82,6 +93,12 @@
     --color-red-soft: #381d1d;
     --color-violet: #c4b5fd;
     --color-green: #73c7a5;
+    --color-success: #77c5aa;
+    --color-success-soft: #1a312a;
+    --color-warning: #e0b36a;
+    --color-warning-soft: #382d1d;
+    --color-critical: #eb918d;
+    --color-critical-soft: #3a2424;
     --shadow-card: 0 1px 2px rgb(0 0 0 / 28%), 0 12px 30px rgb(0 0 0 / 22%);
     --shadow-card-hover: 0 6px 20px rgb(0 0 0 / 26%);
   }
@@ -168,6 +185,79 @@
     main .text-body {
       font-size: 14px !important;
     }
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+}
+
+@utility font-report {
+  font-family: var(--font-report);
+}
+
+@utility section-kicker {
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+@layer components {
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    text-align: left;
+  }
+
+  .data-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    border-bottom: 1px solid var(--color-line);
+    background: var(--color-surface-muted);
+    padding: 11px 14px;
+    color: var(--color-muted);
+    font-weight: 650;
+    white-space: nowrap;
+  }
+
+  .data-table td {
+    border-bottom: 1px solid var(--color-line);
+    padding: 12px 14px;
+    color: var(--color-ink-2);
+    vertical-align: top;
+  }
+
+  .data-table tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .evidence-disclosure[open] .evidence-chevron {
+    transform: rotate(-90deg);
+  }
+}
+
+@media (max-width: 639px) {
+  .report-editorial .chart-frame {
+    margin-inline: -8px;
+  }
+
+  .topic-figure {
+    min-height: 310px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
 

@@ -17,6 +17,7 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -28,7 +29,11 @@ export default function LoginPage() {
   const afterAuth = (user) => {
     const from = location.state?.from;
     const fallback = user.role === "admin" ? "/admin/overview" : "/workspace/overview";
-    navigate(typeof from === "string" ? from : fallback, { replace: true });
+    const destination = typeof from === "string" ? from : fallback;
+    navigate(user.emailStatus && user.emailStatus !== "verified" ? "/verify-email" : destination, {
+      replace: true,
+      state: { from: destination },
+    });
   };
 
   const handleSubmit = async (event) => {
@@ -42,12 +47,16 @@ export default function LoginPage() {
       setError("密码长度至少 6 位");
       return;
     }
+    if (mode === "register" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setError("请输入可以接收周报的有效邮箱");
+      return;
+    }
     setSubmitting(true);
     try {
       const body =
         mode === "login"
           ? await login(username.trim(), password)
-          : await register({ username: username.trim(), password, displayName: displayName.trim() });
+          : await register({ username: username.trim(), password, displayName: displayName.trim(), email: email.trim() });
       afterAuth(body.user);
     } catch (submitError) {
       setError(submitError.message || "操作失败，请稍后重试");
@@ -111,16 +120,29 @@ export default function LoginPage() {
               />
             </label>
             {mode === "register" && (
-              <label className="flex flex-col gap-1.5 text-xs font-semibold text-ink">
-                姓名（可选）
-                <input
-                  className={INPUT_CLASS}
-                  value={displayName}
-                  autoComplete="name"
-                  placeholder="展示用姓名，留空默认用户名"
-                  onChange={(event) => setDisplayName(event.target.value)}
-                />
-              </label>
+              <>
+                <label className="flex flex-col gap-1.5 text-xs font-semibold text-ink">
+                  姓名（可选）
+                  <input
+                    className={INPUT_CLASS}
+                    value={displayName}
+                    autoComplete="name"
+                    placeholder="展示用姓名，留空默认用户名"
+                    onChange={(event) => setDisplayName(event.target.value)}
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5 text-xs font-semibold text-ink">
+                  接收邮箱
+                  <input
+                    className={INPUT_CLASS}
+                    type="email"
+                    value={email}
+                    autoComplete="email"
+                    placeholder="用于接收公告、周报摘要与 PDF"
+                    onChange={(event) => setEmail(event.target.value)}
+                  />
+                </label>
+              </>
             )}
             <label className="flex flex-col gap-1.5 text-xs font-semibold text-ink">
               密码
