@@ -689,7 +689,7 @@ class ReportSubscription(Base):
     cadence: Mapped[str] = mapped_column(String(20), default="weekly")
     weekday: Mapped[int | None] = mapped_column(Integer, nullable=True)
     day_of_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    send_time: Mapped[str] = mapped_column(String(8), default="09:00")
+    send_time: Mapped[str] = mapped_column(String(8), default="10:00")
     timezone: Mapped[str] = mapped_column(String(50), default="Asia/Shanghai")
     channel: Mapped[str] = mapped_column(String(24), default="email")
     publish_policy: Mapped[str] = mapped_column(String(24), default="auto_publish")

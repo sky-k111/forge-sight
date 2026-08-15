@@ -18,6 +18,7 @@ from app.api import (
     model_governance,
     modeling,
     overview,
+    operations,
     reports,
     resources,
     retrieval,
@@ -49,9 +50,10 @@ def create_platform_tables():
             scan_default_source(auto_register=True)
     seed_knowledge()
     seed_report_templates()
-    from app.auth.service import seed_admin
+    from app.auth.service import seed_admin, seed_default_report_scopes
 
     seed_admin()
+    seed_default_report_scopes()
     if settings.agent_worker_enabled:
         try:
             from app.agent.checkpointer import initialize_checkpointer
@@ -83,14 +85,6 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="ForgeSight API", version="0.1.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 @app.middleware("http")
 async def enforce_email_identity_gate(request: Request, call_next):
     if request.method == "OPTIONS":
@@ -101,6 +95,14 @@ async def enforce_email_identity_gate(request: Request, call_next):
     if denied is not None:
         return denied
     return await call_next(request)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(security.router)
 app.include_router(auth.router)
@@ -113,6 +115,7 @@ app.include_router(messages.router)
 app.include_router(retrieval.router)
 app.include_router(analysis.router)
 app.include_router(overview.router)
+app.include_router(operations.router)
 app.include_router(reports.router)
 app.include_router(modeling.router)
 app.include_router(model_governance.router)

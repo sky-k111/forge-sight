@@ -25,7 +25,7 @@ from app.auth.email_verification import (
     normalize_email,
 )
 from app.config import settings
-from app.db.models import PlatformUser
+from app.db.models import DataScopePolicy, DataSource, PlatformUser
 from app.db.platform import PlatformSession
 from sqlalchemy.exc import IntegrityError
 
@@ -159,6 +159,51 @@ def get_user_by_username(username: str) -> PlatformUser | None:
         return session.query(PlatformUser).filter(PlatformUser.username == username).first()
 
 
+def _provision_default_report_scope(session, user_id: str) -> None:
+    """Give an unconfigured business user the app's baseline report sources."""
+
+    configured = session.query(DataScopePolicy.id).filter_by(
+        subject_type="user",
+        subject_id=user_id,
+        business_key="weekly_report",
+    ).first()
+    if configured is not None:
+        # An existing disabled/deny policy is an explicit revocation and must win.
+        return
+    source_ids = [
+        source_id
+        for (source_id,) in session.query(DataSource.id).order_by(DataSource.id)
+    ]
+    if not source_ids:
+        return
+    session.add(
+        DataScopePolicy(
+            id=new_id("dsp"),
+            subject_type="user",
+            subject_id=user_id,
+            business_key="weekly_report",
+            effect="allow",
+            data_source_ids_json=source_ids,
+            created_by="system:account-bootstrap",
+        )
+    )
+
+
+def seed_default_report_scopes() -> None:
+    """Backfill baseline report access for existing, otherwise unconfigured users."""
+
+    with PlatformSession() as session:
+        user_ids = [
+            user_id
+            for (user_id,) in session.query(PlatformUser.id).filter_by(
+                role="business", enabled=True
+            )
+        ]
+        for user_id in user_ids:
+            _provision_default_report_scope(session, user_id)
+        session.commit()
+
+
 def register_user(username: str, password: str, display_name: str, email: str) -> dict:
     """注册（默认业务角色），返回 `{token, user}`；冲突/非法抛 ValueError。"""
     username = normalize_username(username)
@@ -182,6 +227,8 @@ def register_user(username: str, password: str, display_name: str, email: str) -
     )
     with PlatformSession() as session:
         session.add(user)
+        session.flush()
+        _provision_default_report_scope(session, user.id)
         try:
             session.commit()
         except IntegrityError as exc:

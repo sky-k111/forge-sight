@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { listDeliveries, retryDelivery } from "../../api/messages";
+import {
+  getOperationalMetrics,
+  listDeliveries,
+  retryDelivery,
+} from "../../api/messages";
 import {
   Button,
   Card,
@@ -43,6 +47,7 @@ function time(value) {
 
 export default function DeliveriesPage() {
   const [items, setItems] = useState(null);
+  const [operations, setOperations] = useState(null);
   const [status, setStatus] = useState("");
   const [recipient, setRecipient] = useState("");
   const [contentType, setContentType] = useState("");
@@ -56,8 +61,8 @@ export default function DeliveriesPage() {
   const load = async (requestedLimit = limit) => {
     setError(null);
     try {
-      setItems(
-        await listDeliveries({
+      const [deliveriesResult, operationsResult] = await Promise.allSettled([
+        listDeliveries({
           status,
           recipientUserId: recipient.trim(),
           reportId: contentType === "report" ? relationId.trim() : undefined,
@@ -68,6 +73,14 @@ export default function DeliveriesPage() {
           createdTo: createdTo ? `${createdTo}T23:59:59` : undefined,
           limit: requestedLimit,
         }),
+        getOperationalMetrics(),
+      ]);
+      if (deliveriesResult.status === "rejected") {
+        throw deliveriesResult.reason;
+      }
+      setItems(deliveriesResult.value);
+      setOperations(
+        operationsResult.status === "fulfilled" ? operationsResult.value : null,
       );
       setLimit(requestedLimit);
     } catch (nextError) {
@@ -134,6 +147,9 @@ export default function DeliveriesPage() {
         <Metric label="待处理" value={counts.waiting} />
         <Metric label="异常" value={counts.failed} danger={counts.failed > 0} />
       </div>
+      {operations && (
+        <OperationsStrip snapshot={operations} />
+      )}
       {notice && (
         <p
           className="rounded-control border border-line bg-surface p-3 text-sm"
@@ -286,6 +302,77 @@ export default function DeliveriesPage() {
         )}
       </Card>
     </PageFrame>
+  );
+}
+
+function OperationsStrip({ snapshot }) {
+  const switches = snapshot.switches ?? {};
+  const alerts = snapshot.alerts ?? [];
+  const backlog = Object.entries(snapshot.queues?.outbox ?? {})
+    .filter(([status]) => ["pending", "processing", "retry_wait"].includes(status))
+    .reduce((sum, [, count]) => sum + count, 0);
+  return (
+    <section
+      className="rounded-section border border-line bg-surface p-4"
+      aria-labelledby="operations-heading"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <span className="section-kicker">RELEASE HEALTH</span>
+          <h3 id="operations-heading" className="mt-1 text-base font-semibold">
+            自动化运行状态
+          </h3>
+        </div>
+        <div className="flex flex-wrap gap-2" aria-label="运行开关状态">
+          <SwitchState label="周报调度" enabled={switches.reportScheduler} />
+          <SwitchState label="邮件发送" enabled={switches.mailWorker} />
+          <SwitchState label="邮箱门禁" enabled={switches.emailGate} />
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <HealthMetric label="到期未扫描" value={snapshot.scheduler?.dueSubscriptions ?? 0} />
+        <HealthMetric label="事件队列积压" value={backlog} />
+        <HealthMetric
+          label="邮件 P95"
+          value={snapshot.delivery?.durationP95Ms == null ? "—" : `${snapshot.delivery.durationP95Ms} ms`}
+        />
+      </div>
+      {alerts.length > 0 && (
+        <div className="mt-4 border-t border-line pt-3" role="alert">
+          <p className="text-sm font-medium text-critical">
+            {alerts.length} 项运行告警需要处理
+          </p>
+          <ul className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
+            {alerts.map((alert) => (
+              <li key={alert.code} className="rounded-full border border-line bg-paper px-3 py-1">
+                {alert.code} · {alert.count}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SwitchState({ label, enabled }) {
+  return (
+    <span className="inline-flex items-center gap-2 rounded-full border border-line bg-paper px-3 py-1 text-xs">
+      <span
+        className={`h-2 w-2 rounded-full ${enabled ? "bg-success" : "bg-muted"}`}
+        aria-hidden="true"
+      />
+      {label}：{enabled ? "运行中" : "已暂停"}
+    </span>
+  );
+}
+
+function HealthMetric({ label, value }) {
+  return (
+    <div className="border-l-2 border-accent pl-3">
+      <strong className="font-mono text-lg text-ink">{value}</strong>
+      <span className="mt-0.5 block text-xs text-muted">{label}</span>
+    </div>
   );
 }
 function Metric({ label, value, danger }) {

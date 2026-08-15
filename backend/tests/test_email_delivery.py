@@ -316,7 +316,10 @@ def test_event_worker_claims_only_message_publications(delivery_session):
         assert session.get(DomainEventOutbox, "unrelated-event").status == "pending"
 
 
-def test_capacity_batch_creates_200_independent_idempotent_deliveries(delivery_session):
+@pytest.mark.parametrize("recipient_count", [100, 1000])
+def test_capacity_batch_creates_independent_idempotent_deliveries(
+    delivery_session, recipient_count
+):
     with delivery_session() as session:
         message = Message(
             id="message-capacity",
@@ -344,7 +347,7 @@ def test_capacity_batch_creates_200_independent_idempotent_deliveries(delivery_s
             )
         )
         session.add(message)
-        for index in range(200):
+        for index in range(recipient_count):
             user_id = f"capacity-{index:03d}"
             session.add(_verified_user(user_id, f"user{index}@example.com"))
             session.add(
@@ -370,9 +373,12 @@ def test_capacity_batch_creates_200_independent_idempotent_deliveries(delivery_s
 
         assert consume_message_published_event(
             session, "event-capacity", "capacity-worker"
-        ) == 200
+        ) == recipient_count
         session.commit()
-        assert session.query(ReportDelivery).filter_by(message_id=message.id).count() == 200
+        assert (
+            session.query(ReportDelivery).filter_by(message_id=message.id).count()
+            == recipient_count
+        )
 
 
 def test_weekly_delivery_waits_for_pdf_then_sends_exact_attachment(

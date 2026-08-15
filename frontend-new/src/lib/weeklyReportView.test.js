@@ -36,4 +36,27 @@ describe("structured weekly report view", () => {
       { metricKey: "b", points: [{ label: "周二", value: 4 }] },
     ])).toEqual([{ label: "周一", a: 2 }, { label: "周二", b: 4 }]);
   });
+
+  test("uses controlled chart specs and falls back to one chart per legacy trend", () => {
+    const controlled = buildReportView({
+      content: {
+        schemaVersion: "weekly-report/v1",
+        charts: [{ key: "quality", type: "pareto", title: "缺陷 Pareto", points: [] }],
+      },
+    });
+    const legacy = buildReportView({
+      content: {
+        schemaVersion: "weekly-report/v1",
+        trends: [
+          { metricKey: "output", label: "产量趋势", unit: "件", points: [{ label: "W1", value: 10 }, { label: "W2", value: 12 }] },
+          { metricKey: "defect", label: "缺陷分布", unit: "件", points: [{ label: "划伤", value: 4 }, { label: "脏污", value: 2 }] },
+        ],
+      },
+    });
+
+    expect(controlled.charts[0].type).toBe("pareto");
+    expect(legacy.charts).toHaveLength(2);
+    expect(legacy.charts.map((chart) => chart.type)).toEqual(["line", "bar"]);
+    expect(legacy.charts[1].points[0]).toEqual({ label: "划伤", value: 4 });
+  });
 });

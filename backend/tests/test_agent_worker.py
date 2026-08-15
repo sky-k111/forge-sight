@@ -34,3 +34,31 @@ def test_waiting_user_run_is_never_reclaimed(analysis_session, monkeypatch):
 
     assert worker._claim_run() is None
 
+
+def test_release_switches_disable_scheduler_and_mail_independently(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(worker.settings, "report_scheduler_enabled", False, raising=False)
+    monkeypatch.setattr(worker.settings, "mail_worker_enabled", False, raising=False)
+    monkeypatch.setattr(worker, "_run_report_scheduler_once", lambda: calls.append("scheduler"), raising=False)
+    monkeypatch.setattr(worker, "_run_file_worker_once", lambda: calls.append("file"), raising=False)
+    monkeypatch.setattr(worker, "_run_message_worker_once", lambda: calls.append("message"), raising=False)
+    monkeypatch.setattr(worker, "_run_mail_workers_once", lambda: calls.append("mail"), raising=False)
+
+    worker._run_maintenance_cycle()
+
+    assert calls == ["file", "message"]
+
+
+def test_release_switches_can_enable_scheduler_without_enabling_mail(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(worker.settings, "report_scheduler_enabled", True, raising=False)
+    monkeypatch.setattr(worker.settings, "mail_worker_enabled", False, raising=False)
+    monkeypatch.setattr(worker, "_run_report_scheduler_once", lambda: calls.append("scheduler"), raising=False)
+    monkeypatch.setattr(worker, "_run_file_worker_once", lambda: calls.append("file"), raising=False)
+    monkeypatch.setattr(worker, "_run_message_worker_once", lambda: calls.append("message"), raising=False)
+    monkeypatch.setattr(worker, "_run_mail_workers_once", lambda: calls.append("mail"), raising=False)
+
+    worker._run_maintenance_cycle()
+
+    assert calls == ["scheduler", "file", "message"]
+

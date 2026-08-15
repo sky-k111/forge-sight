@@ -48,102 +48,124 @@ def _claim_run() -> str | None:
         return run.id
 
 
-def _loop() -> None:
-    while not _stop.is_set():
-        try:
-            from app.reports.automation import scan_due_subscriptions
+def _run_report_scheduler_once() -> None:
+    from app.reports.automation import scan_due_subscriptions
 
-            scan_due_subscriptions()
-        except Exception:  # noqa: BLE001 - 单个调度故障不能阻塞既有 Agent 队列
-            log.exception("周期周报到期扫描失败")
-        try:
-            from app.reports.files import run_file_worker_once
+    scan_due_subscriptions()
 
-            run_file_worker_once(
-                PlatformSession,
-                _worker_id + ":report-file",
-                settings.report_storage_dir,
-            )
-        except Exception:  # noqa: BLE001 - PDF 与 Excel 失败互相隔离并由任务状态重试
-            log.exception("周报文件生成失败")
-        try:
-            from app.messages.service import expire_announcements, run_message_worker_once
 
-            run_message_worker_once(
-                session_factory=PlatformSession,
-                worker_id=f"message:{_worker_id}",
-            )
+def _run_file_worker_once() -> None:
+    from app.reports.files import run_file_worker_once
+
+    run_file_worker_once(
+        PlatformSession,
+        _worker_id + ":report-file",
+        settings.report_storage_dir,
+    )
+
+
+def _run_message_worker_once() -> None:
+    from app.messages.service import expire_announcements, run_message_worker_once
+
+    run_message_worker_once(
+        session_factory=PlatformSession,
+        worker_id=f"message:{_worker_id}",
+    )
+    with PlatformSession() as session:
+        expire_announcements(session)
+        session.commit()
+
+
+def _run_mail_workers_once() -> None:
+    from app.delivery.provider import (
+        ProviderFailure,
+        mail_configuration_fingerprint,
+        provider_from_settings,
+    )
+    from app.delivery.service import (
+        block_deliveries_for_configuration,
+        delivery_work_pending,
+        resume_configuration_blocked_deliveries,
+        run_delivery_event_worker_once,
+        run_delivery_worker_once,
+    )
+
+    run_delivery_event_worker_once(
+        PlatformSession,
+        f"mail-event:{_worker_id}",
+    )
+    configuration_fingerprint = mail_configuration_fingerprint(settings)
+    with PlatformSession() as session:
+        pending = delivery_work_pending(
+            session,
+            configuration_fingerprint=configuration_fingerprint,
+        )
+    mail_provider = None
+    if pending:
+        try:
+            mail_provider = provider_from_settings(settings)
+            mail_provider.verify_configuration()
+        except ProviderFailure as exc:
+            if exc.category not in {"configuration", "network"}:
+                raise
             with PlatformSession() as session:
-                expire_announcements(session)
-                session.commit()
-        except Exception:  # noqa: BLE001 - 消息故障不能阻塞 Agent Run
-            log.exception("站内消息事件处理失败")
-        try:
-            from app.delivery.provider import (
-                ProviderFailure,
-                mail_configuration_fingerprint,
-                provider_from_settings,
-            )
-            from app.delivery.service import (
-                block_deliveries_for_configuration,
-                delivery_work_pending,
-                resume_configuration_blocked_deliveries,
-                run_delivery_event_worker_once,
-                run_delivery_worker_once,
-            )
-
-            run_delivery_event_worker_once(
-                PlatformSession,
-                f"mail-event:{_worker_id}",
-            )
-            configuration_fingerprint = mail_configuration_fingerprint(settings)
-            with PlatformSession() as session:
-                pending = delivery_work_pending(
+                blocked = block_deliveries_for_configuration(
                     session,
                     configuration_fingerprint=configuration_fingerprint,
                 )
-            mail_provider = None
-            if pending:
-                try:
-                    mail_provider = provider_from_settings(settings)
-                    mail_provider.verify_configuration()
-                except ProviderFailure as exc:
-                    if exc.category not in {"configuration", "network"}:
-                        raise
-                    with PlatformSession() as session:
-                        blocked = block_deliveries_for_configuration(
-                            session,
-                            configuration_fingerprint=configuration_fingerprint,
-                        )
-                        session.commit()
-                    if blocked:
-                        log.error("邮件服务配置无效，已暂停 %s 条投递", blocked)
-            if mail_provider is not None:
-                with PlatformSession() as session:
-                    resumed = resume_configuration_blocked_deliveries(
-                        session,
-                        configuration_verified=True,
-                        configuration_fingerprint=configuration_fingerprint,
-                    )
-                    session.commit()
-                if resumed:
-                    log.info("邮件服务配置已恢复，重新排队 %s 条投递", resumed)
-                run_delivery_worker_once(
-                    PlatformSession,
-                    f"mail-send:{_worker_id}",
-                    mail_provider,
-                    storage_root=settings.report_storage_dir,
-                    public_app_url=settings.public_app_url,
-                    attachment_max_bytes=settings.mail_attachment_max_bytes,
-                    max_attempts=settings.mail_max_attempts,
-                    lease_seconds=max(
-                        settings.mail_worker_lease_seconds,
-                        settings.mail_timeout_seconds + 30,
-                    ),
-                    configuration_fingerprint=configuration_fingerprint,
-                )
+                session.commit()
+            if blocked:
+                log.error("邮件服务配置无效，已暂停 %s 条投递", blocked)
+    if mail_provider is not None:
+        with PlatformSession() as session:
+            resumed = resume_configuration_blocked_deliveries(
+                session,
+                configuration_verified=True,
+                configuration_fingerprint=configuration_fingerprint,
+            )
+            session.commit()
+        if resumed:
+            log.info("邮件服务配置已恢复，重新排队 %s 条投递", resumed)
+        run_delivery_worker_once(
+            PlatformSession,
+            f"mail-send:{_worker_id}",
+            mail_provider,
+            storage_root=settings.report_storage_dir,
+            public_app_url=settings.public_app_url,
+            attachment_max_bytes=settings.mail_attachment_max_bytes,
+            max_attempts=settings.mail_max_attempts,
+            lease_seconds=max(
+                settings.mail_worker_lease_seconds,
+                settings.mail_timeout_seconds + 30,
+            ),
+            configuration_fingerprint=configuration_fingerprint,
+        )
+
+
+def _run_maintenance_cycle() -> None:
+    if settings.report_scheduler_enabled:
+        try:
+            _run_report_scheduler_once()
+        except Exception:  # noqa: BLE001 - 单个调度故障不能阻塞既有 Agent 队列
+            log.exception("周期周报到期扫描失败")
+    try:
+        _run_file_worker_once()
+    except Exception:  # noqa: BLE001 - PDF 与 Excel 失败互相隔离并由任务状态重试
+        log.exception("周报文件生成失败")
+    try:
+        _run_message_worker_once()
+    except Exception:  # noqa: BLE001 - 消息故障不能阻塞 Agent Run
+        log.exception("站内消息事件处理失败")
+    if settings.mail_worker_enabled:
+        try:
+            _run_mail_workers_once()
         except Exception:  # noqa: BLE001 - 邮件失败不能影响站内发布或 Agent Run
             log.exception("邮件投递处理失败")
+
+
+def _loop() -> None:
+    while not _stop.is_set():
+        _run_maintenance_cycle()
         run_id = _claim_run()
         if run_id is None:
             _stop.wait(settings.agent_worker_poll_seconds)

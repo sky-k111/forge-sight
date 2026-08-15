@@ -21,11 +21,11 @@ export function MatrixHeatmapChart({ rows, columns, cells, rowName, columnName, 
       <div className="overflow-x-auto p-3">
         <div className="min-w-max" role="table" aria-label={`${rowName}与${columnName}的${valueName}热力图`}>
           <div className="grid gap-1.5" style={{ gridTemplateColumns }}>
-            <div className="flex items-end px-2 pb-1 text-[10px] font-semibold text-faint">
+            <div className="flex items-end px-2 pb-1 text-xs font-semibold text-faint">
               {rowName} × {columnName}
             </div>
             {columns.map((column) => (
-              <div key={column} className="truncate px-1 pb-1 text-center text-[11px] font-medium text-muted" title={column}>
+              <div key={column} className="truncate px-1 pb-1 text-center text-xs font-medium text-muted" title={column}>
                 {column}
               </div>
             ))}
@@ -40,7 +40,7 @@ export function MatrixHeatmapChart({ rows, columns, cells, rowName, columnName, 
               />
             ))}
           </div>
-          <div className="mt-3 flex items-center justify-end gap-2 text-[10px] text-faint">
+          <div className="mt-3 flex items-center justify-end gap-2 text-xs text-faint">
             <span>低</span>
             <span
               className="h-2 w-28 rounded-full border border-line"
@@ -58,7 +58,7 @@ export function MatrixHeatmapChart({ rows, columns, cells, rowName, columnName, 
 function HeatmapRow({ row, columns, byKey, intensity, valueName }) {
   return (
     <>
-      <div className="flex items-center truncate px-2 text-[11px] font-medium text-ink-2" title={row}>{row}</div>
+      <div className="flex items-center truncate px-2 text-xs font-medium text-ink-2" title={row}>{row}</div>
       {columns.map((column) => {
         const cell = byKey.get(`${row}\u0000${column}`);
         const alpha = intensity(cell?.value);
@@ -68,7 +68,7 @@ function HeatmapRow({ row, columns, byKey, intensity, valueName }) {
             key={`${row}-${column}`}
             role="cell"
             title={`${row} / ${column}：${formatValue(cell?.value)} ${valueName}`}
-            className="grid min-h-10 place-items-center rounded-control border border-line/60 px-2 font-mono text-[10px] transition-transform hover:relative hover:z-10 hover:scale-[1.04] hover:border-primary/35"
+            className="grid min-h-10 place-items-center rounded-control border border-line/60 px-2 font-mono text-xs transition-transform hover:relative hover:z-10 hover:scale-[1.04] hover:border-primary/35"
             style={{
               backgroundColor: alpha
                 ? `color-mix(in srgb, var(--color-primary) ${Math.round(alpha * 100)}%, var(--color-surface))`

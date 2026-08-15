@@ -376,8 +376,12 @@ def validate_generated_version(
     }
 
 
-def compose_management_summary(raw_summary: str, sections: list[ReportSection]) -> dict:
-    """把已验证章节压缩为 3–5 条管理发现，不创造新的业务数字。"""
+def compose_management_summary(
+    raw_summary: str,
+    sections: list[ReportSection],
+    metrics: list[dict],
+) -> dict:
+    """从结构化指标生成简洁管理发现，不转抄未结构化的数字。"""
 
     findings: list[dict] = []
     all_evidence = [
@@ -385,27 +389,31 @@ def compose_management_summary(raw_summary: str, sections: list[ReportSection]) 
         for section in sections
         for artifact_id in (section.artifact_ids_json or [])
     ]
-    scored = [section.confidence for section in sections if section.confidence]
-    if raw_summary.strip() and all_evidence:
-        findings.append(
-            {
-                "level": "confirmed",
-                "text": raw_summary.strip(),
-                "evidenceArtifactIds": all_evidence,
-                "evidenceStatus": "verified",
-                "confidence": round(sum(scored) / len(scored)) if scored else 60,
-            }
-        )
     for section in sections:
-        if not section.summary.strip():
+        evidence = list(section.artifact_ids_json or [])
+        section_metric = next(
+            (
+                metric
+                for metric in metrics
+                if set(metric.get("evidenceArtifactIds") or []).intersection(evidence)
+            ),
+            None,
+        )
+        if section_metric is None:
             continue
+        value = section_metric["value"]
+        value_label = str(int(value)) if float(value).is_integer() else f"{value:g}"
+        title = str(getattr(section, "title", None) or section.code)
         findings.append(
             {
                 "level": "confirmed" if section.confidence >= 80 else "possible",
                 "sectionCode": section.code,
-                "text": section.summary.strip(),
-                "evidenceArtifactIds": list(section.artifact_ids_json or []),
-                "evidenceStatus": "verified" if section.artifact_ids_json else "missing",
+                "text": (
+                    f"{title}：{section_metric['name']}为 {value_label}"
+                    f"{section_metric['unit']}，详细分布与证据见正文。"
+                ),
+                "evidenceArtifactIds": evidence,
+                "evidenceStatus": "verified",
                 "confidence": section.confidence,
             }
         )
@@ -451,6 +459,34 @@ def _temporal_sort_key(value: object, reference: datetime) -> tuple[int, object]
         return 2, label
 
 
+def _numeric_value(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    normalized = str(value).strip().replace(",", "").removesuffix("%")
+    if not re.fullmatch(r"-?\d+(?:\.\d+)?", normalized):
+        return None
+    return float(normalized)
+
+
+def _is_percentage_column(column: str) -> bool:
+    normalized = column.lower()
+    return any(marker in normalized for marker in ("%", "pct", "率", "占比", "贡献"))
+
+
+def _metric_unit(resolution: dict, column: str) -> str:
+    if resolution.get("unit"):
+        return str(resolution["unit"])
+    if _is_percentage_column(column):
+        return "%"
+    if "分钟" in column or "时长" in column:
+        return "分钟"
+    if any(marker in column for marker in ("产量", "数量", "库存", "缺口")):
+        return "件"
+    return "数值"
+
+
 def _structured_metrics(
     sections: list[ReportSection], *, period_end: datetime
 ) -> tuple[list[dict], list[dict], list[dict]]:
@@ -465,18 +501,20 @@ def _structured_metrics(
         rows = [list(item) for item in (result.get("rows") or []) if isinstance(item, (list, tuple))]
         if not columns or not rows:
             continue
+        numeric_indices = [
+            index
+            for index in range(len(columns))
+            if any(index < len(row) and _numeric_value(row[index]) is not None for row in rows)
+        ]
+        resolution = content.get("metricResolution") or {}
+        metric_name = str(resolution.get("name") or "").strip()
         numeric_index = next(
             (
                 index
-                for index in range(len(columns) - 1, -1, -1)
-                if any(
-                    index < len(row)
-                    and isinstance(row[index], (int, float))
-                    and not isinstance(row[index], bool)
-                    for row in rows
-                )
+                for index in numeric_indices
+                if metric_name and metric_name in columns[index]
             ),
-            None,
+            numeric_indices[-1] if numeric_indices else None,
         )
         if numeric_index is None:
             continue
@@ -484,32 +522,91 @@ def _structured_metrics(
             row
             for row in rows
             if numeric_index < len(row)
-            and isinstance(row[numeric_index], (int, float))
-            and not isinstance(row[numeric_index], bool)
+            and _numeric_value(row[numeric_index]) is not None
         ]
         if not numeric_rows:
             continue
-        resolution = content.get("metricResolution") or {}
-        label_index = next((index for index in range(len(columns)) if index != numeric_index), None)
-        if len(numeric_rows) > 1 and (
-            not resolution.get("id")
-            or label_index is None
-            or not all(
+        label_index = next(
+            (index for index in range(len(columns)) if index not in numeric_indices),
+            next((index for index in range(len(columns)) if index != numeric_index), None),
+        )
+        temporal = bool(
+            len(numeric_rows) > 1
+            and label_index is not None
+            and all(
                 label_index < len(row) and _is_temporal_label(row[label_index])
                 for row in numeric_rows
             )
-        ):
-            # Grouped/category rows do not define current and comparison periods.
-            continue
-        if len(numeric_rows) > 1 and label_index is not None:
+        )
+        if temporal and label_index is not None:
             numeric_rows.sort(
                 key=lambda row: _temporal_sort_key(row[label_index], period_end)
             )
-        key = str(resolution.get("id") or columns[numeric_index] or section.code)
+        key = str(
+            resolution.get("id")
+            or resolution.get("metricId")
+            or columns[numeric_index]
+            or section.code
+        )
         if key in seen_keys:
             continue
+        name = str(resolution.get("name") or columns[numeric_index])
+        unit = _metric_unit(resolution, columns[numeric_index])
+        evidence = list(section.artifact_ids_json or [])
+        if not temporal and len(numeric_rows) > 1 and label_index is not None:
+            category_indices = [numeric_index]
+            category_indices.extend(
+                index
+                for index in numeric_indices
+                if index != numeric_index and _is_percentage_column(columns[index])
+            )
+            primary_key = ""
+            for column_index in category_indices:
+                column_unit = "%" if _is_percentage_column(columns[column_index]) else unit
+                column_name = name if column_index == numeric_index else columns[column_index]
+                column_key = key if column_index == numeric_index else f"{key}:{columns[column_index]}"
+                for row in numeric_rows:
+                    value = _numeric_value(row[column_index]) if column_index < len(row) else None
+                    if value is None or label_index >= len(row):
+                        continue
+                    label = str(row[label_index])
+                    item_key = f"{column_key}:{label}"
+                    if item_key in seen_keys:
+                        continue
+                    seen_keys.add(item_key)
+                    primary_key = primary_key or item_key
+                    metrics.append(
+                        {
+                            "key": item_key,
+                            "name": f"{label}·{column_name}",
+                            "value": value,
+                            "unit": column_unit,
+                            "previousValue": None,
+                            "changeRate": None,
+                            "trend": "unknown",
+                            "evidenceArtifactIds": evidence,
+                            "confidence": section.confidence,
+                        }
+                    )
+            if primary_key:
+                trends.append(
+                    {
+                        "metricKey": primary_key,
+                        "label": f"{name}分布",
+                        "unit": unit,
+                        "points": [
+                            {"label": str(row[label_index]), "value": _numeric_value(row[numeric_index])}
+                            for row in numeric_rows[-12:]
+                            if label_index < len(row) and _numeric_value(row[numeric_index]) is not None
+                        ],
+                    }
+                )
+            definition = resolution.get("definition")
+            if definition:
+                definitions.append({"name": name, "definition": str(definition)})
+            continue
         seen_keys.add(key)
-        values = [float(row[numeric_index]) for row in numeric_rows]
+        values = [_numeric_value(row[numeric_index]) for row in numeric_rows]
         previous = values[-2] if len(values) >= 2 else None
         change_rate = (
             (values[-1] - previous) / abs(previous)
@@ -525,9 +622,6 @@ def _structured_metrics(
             if change_rate < -0.001
             else "flat"
         )
-        name = str(resolution.get("name") or columns[numeric_index])
-        unit = str(resolution.get("unit") or "数值")
-        evidence = list(section.artifact_ids_json or [])
         metrics.append(
             {
                 "key": key,
@@ -550,7 +644,7 @@ def _structured_metrics(
                     "points": [
                         {
                             "label": str(row[label_index]) if label_index is not None and label_index < len(row) else str(index + 1),
-                            "value": float(row[numeric_index]),
+                            "value": _numeric_value(row[numeric_index]),
                         }
                         for index, row in enumerate(numeric_rows[-12:])
                     ],
@@ -560,6 +654,219 @@ def _structured_metrics(
         if definition:
             definitions.append({"name": name, "definition": str(definition)})
     return metrics, trends, definitions
+
+
+def _chart_color_role(section: ReportSection) -> str:
+    semantic_text = " ".join(
+        (
+            str(getattr(section, "code", "")),
+            str(getattr(section, "title", "")),
+            str(
+                (getattr(section, "content_json", None) or {})
+                .get("metricResolution", {})
+                .get("name", "")
+            ),
+        )
+    ).lower()
+    if any(
+        marker in semantic_text
+        for marker in ("质量", "良率", "缺陷", "不良", "quality", "yield", "defect")
+    ):
+        return "quality"
+    if any(
+        marker in semantic_text
+        for marker in ("设备", "停机", "故障", "equipment", "downtime")
+    ):
+        return "equipment"
+    if any(
+        marker in semantic_text
+        for marker in ("库存", "缺口", "inventory", "stock")
+    ):
+        return "inventory"
+    if any(
+        marker in semantic_text
+        for marker in ("生产", "产量", "产线", "output", "production", "line")
+    ):
+        return "production"
+    return "neutral"
+
+
+def _chart_axis_label(column: str) -> str:
+    normalized = column.strip().lower()
+    aliases = {
+        "production_line": "产线",
+        "line": "产线",
+        "date": "日期",
+        "day": "日期",
+        "week": "周次",
+        "process": "工序",
+        "equipment": "设备",
+        "category": "类别",
+    }
+    return aliases.get(normalized, column.replace("_", " "))
+
+
+def _structured_charts(
+    sections: list[ReportSection], *, period_end: datetime
+) -> list[dict]:
+    """Convert each frozen section into one safe, evidence-backed chart specification."""
+
+    charts: list[dict] = []
+    used_keys: set[str] = set()
+    for section_index, section in enumerate(sections):
+        content = section.content_json or {}
+        result = content.get("result") or {}
+        columns = [str(item) for item in (result.get("columns") or [])]
+        rows = [
+            list(item)
+            for item in (result.get("rows") or [])
+            if isinstance(item, (list, tuple))
+        ]
+        evidence = list(section.artifact_ids_json or [])
+        if len(rows) < 2 or not columns or not evidence:
+            continue
+        numeric_indices = [
+            index
+            for index in range(len(columns))
+            if any(
+                index < len(row) and _numeric_value(row[index]) is not None
+                for row in rows
+            )
+        ]
+        if not numeric_indices:
+            continue
+        resolution = content.get("metricResolution") or {}
+        metric_name = str(resolution.get("name") or "").strip()
+        value_index = next(
+            (
+                index
+                for index in numeric_indices
+                if metric_name and metric_name in columns[index]
+            ),
+            numeric_indices[-1],
+        )
+        category_indices = [
+            index for index in range(len(columns)) if index not in numeric_indices
+        ]
+        if not category_indices:
+            category_indices = [index for index in range(len(columns)) if index != value_index]
+        if not category_indices:
+            continue
+        category_index = category_indices[0]
+        category_label = _chart_axis_label(columns[category_index])
+        usable_rows = [
+            row
+            for row in rows
+            if category_index < len(row)
+            and str(row[category_index]).strip()
+            and value_index < len(row)
+            and _numeric_value(row[value_index]) is not None
+        ]
+        if len(usable_rows) < 2:
+            continue
+
+        title = str(
+            getattr(section, "title", "") or metric_name or columns[value_index]
+        )
+        unit = _metric_unit(resolution, columns[value_index])
+        value_label = metric_name or columns[value_index]
+        semantic_text = " ".join(
+            (title, str(getattr(section, "code", "")), value_label, *columns)
+        ).lower()
+        temporal = all(_is_temporal_label(row[category_index]) for row in usable_rows)
+        if temporal:
+            usable_rows.sort(
+                key=lambda row: _temporal_sort_key(row[category_index], period_end)
+            )
+            chart_type = "area" if any(
+                marker in semantic_text
+                for marker in ("产量", "数量", "销售额", "收入", "output", "volume")
+            ) else "line"
+            points = [
+                {
+                    "label": str(row[category_index]),
+                    "value": _numeric_value(row[value_index]),
+                }
+                for row in usable_rows[-12:]
+            ]
+            description = f"展示{value_label}随{category_label}的变化趋势。"
+        elif len(category_indices) >= 2 and any(
+            marker in semantic_text for marker in ("热力", "矩阵", "heatmap", "matrix")
+        ):
+            group_index = category_indices[1]
+            points = [
+                {
+                    "label": str(row[category_index]),
+                    "group": str(row[group_index]),
+                    "value": _numeric_value(row[value_index]),
+                }
+                for row in usable_rows
+                if group_index < len(row) and str(row[group_index]).strip()
+            ][:60]
+            if len(points) < 2:
+                continue
+            chart_type = "heatmap"
+            group_label = _chart_axis_label(columns[group_index])
+            description = (
+                f"交叉观察{category_label}与{group_label}的{value_label}分布。"
+            )
+        else:
+            ranked = sorted(
+                usable_rows,
+                key=lambda row: _numeric_value(row[value_index]) or 0,
+                reverse=True,
+            )[:12]
+            points = [
+                {
+                    "label": str(row[category_index]),
+                    "value": _numeric_value(row[value_index]),
+                }
+                for row in ranked
+            ]
+            if any(marker in semantic_text for marker in ("pareto", "帕累托", "累计贡献")):
+                chart_type = "pareto"
+                total = sum(max(float(item["value"] or 0), 0) for item in points)
+                cumulative = 0.0
+                for item in points:
+                    cumulative += max(float(item["value"] or 0), 0)
+                    item["secondaryValue"] = round(cumulative / total * 100, 2) if total else 0.0
+                description = f"按{category_label}定位{value_label}的主要贡献项。"
+            elif (
+                any(
+                    marker in semantic_text
+                    for marker in ("占比", "构成", "份额", "比例", "share", "composition")
+                )
+                and len(points) <= 6
+                and all(float(item["value"] or 0) >= 0 for item in points)
+            ):
+                chart_type = "donut"
+                description = f"展示不同{category_label}的{value_label}构成。"
+            else:
+                chart_type = "bar"
+                description = f"按{category_label}对{value_label}进行降序比较。"
+
+        base_key = str(getattr(section, "code", "") or f"chart-{section_index + 1}")
+        key = base_key
+        suffix = 2
+        while key in used_keys:
+            key = f"{base_key}-{suffix}"
+            suffix += 1
+        used_keys.add(key)
+        charts.append(
+            {
+                "key": key,
+                "type": chart_type,
+                "title": title,
+                "description": description,
+                "unit": unit,
+                "categoryLabel": columns[category_index],
+                "valueLabel": value_label,
+                "points": points,
+                "evidenceArtifactIds": evidence,
+                "colorRole": _chart_color_role(section),
+            }
+        )
+    return charts
 
 
 def _structured_operational_items(sections: list[ReportSection]) -> tuple[list[dict], list[dict], list[dict]]:
@@ -638,6 +945,7 @@ def build_structured_content(
     metrics, trends, definitions = _structured_metrics(
         sections, period_end=report.period_end
     )
+    charts = _structured_charts(sections, period_end=report.period_end)
     anomalies, progress, recommendations = _structured_operational_items(sections)
     period_duration = report.period_end - report.period_start
     comparison_start = report.period_start - period_duration
@@ -663,9 +971,10 @@ def build_structured_content(
             "comparisonPeriodEnd": report.period_start.isoformat(),
             "timezone": timezone_name,
         },
-        "managementSummary": compose_management_summary(raw_summary, sections),
+        "managementSummary": compose_management_summary(raw_summary, sections, metrics),
         "metrics": metrics,
         "trends": trends,
+        "charts": charts,
         "anomalies": anomalies,
         "progress": progress,
         "recommendations": recommendations,

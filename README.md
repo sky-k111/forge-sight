@@ -275,6 +275,10 @@ SMTP_PORT=465
 SMTP_USERNAME=你的QQ邮箱@qq.com
 SMTP_PASSWORD=你的QQ邮箱SMTP授权码
 SMTP_USE_TLS=true
+
+# 独立灰度/回滚开关（修改后重启后端）
+REPORT_SCHEDULER_ENABLED=true
+MAIL_WORKER_ENABLED=true
 ```
 
 `SMTP_PASSWORD` 填 QQ 邮箱生成的 SMTP 授权码，不是 QQ 密码，也不是用户收到的六位验证码。
@@ -386,6 +390,13 @@ npm test
 npm run build
 ```
 
+## 运行监控与发布
+
+- 管理员可在“公告与投递”页查看调度到期数、队列状态、邮件耗时 P95 和死信/积压告警。
+- 管理员接口 `GET /api/v1/operations/metrics` 只返回脱敏计数、状态和耗时，不返回邮箱、正文、验证码或凭据。
+- 邮件故障时设置 `MAIL_WORKER_ENABLED=false`；调度故障时设置 `REPORT_SCHEDULER_ENABLED=false`。两个开关都不会影响历史周报、站内消息和已授权文件读取。
+- 发布前按 [T 发布评审](docs/release/T_RELEASE_REVIEW.md) 执行；日常告警处置见 [运维手册](docs/release/T_OPERATIONS_RUNBOOK.md)，灰度与回滚见 [发布方案](docs/release/T_ROLLOUT_ROLLBACK.md)。
+
 ## 安全约束
 
 - 不提交 `backend/.env`、邮箱凭据、Webhook 密钥或本地数据库备份。
@@ -398,4 +409,4 @@ npm run build
 
 - 智能问析、知识管理、数据资源、报告流程和安全审计已接入后端。
 - 用户注册登录、历史会话、检查点分支和智能建模已实现。
-- 周报 Agent、消息中心、邮箱绑定、精美周报 Web 体验与文件导出已完成；邮件投递后端和 U 前端任务已进入待合并状态，开发状态以 [任务中心](docs/tasks/README.md) 为准。
+- 周报 Agent、消息中心、邮箱绑定、邮件投递、精美周报 Web 与文件导出已完成；U 前端和 T 上线验收已实现并等待 Owner 合并，开发状态以 [任务中心](docs/tasks/README.md) 为准。

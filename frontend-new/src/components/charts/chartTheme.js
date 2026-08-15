@@ -8,7 +8,7 @@ export const seriesColors = [
 ];
 
 export const axisDefaults = {
-  tick: { fill: "var(--color-muted)", fontSize: 11 },
+  tick: { fill: "var(--color-muted)", fontSize: 12 },
   tickLine: false,
   axisLine: { stroke: "var(--color-line-strong)" },
   tickMargin: 8,

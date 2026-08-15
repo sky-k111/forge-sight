@@ -161,6 +161,33 @@ def test_pdf_is_multi_page_searchable_and_contains_a_data_insight_image():
     assert any(item.get_object().get("/Subtype") == "/Image" for item in xobjects.values())
 
 
+def test_pdf_uses_the_same_agent_chart_spec_title_and_description_as_the_web():
+    content = _report_content()
+    content["charts"] = [
+        {
+            "key": "quality",
+            "type": "pareto",
+            "title": "缺陷类型 Pareto",
+            "description": "按缺陷类型定位不良数量的主要贡献项。",
+            "unit": "件",
+            "categoryLabel": "缺陷类型",
+            "valueLabel": "不良数量",
+            "points": [
+                {"label": "划伤", "value": 60, "secondaryValue": 60},
+                {"label": "脏污", "value": 40, "secondaryValue": 100},
+            ],
+            "evidenceArtifactIds": ["artifact-quality"],
+            "colorRole": "quality",
+        }
+    ]
+
+    reader = PdfReader(BytesIO(render_pdf_bytes(content)))
+    extracted = "".join(page.extract_text() or "" for page in reader.pages)
+
+    assert "缺陷类型 Pareto" in extracted
+    assert "按缺陷类型定位不良数量的主要贡献项" in extracted
+
+
 def test_excel_uses_required_sheets_and_real_numeric_cells():
     payload = render_excel_bytes(_report_content())
 
@@ -172,6 +199,17 @@ def test_excel_uses_required_sheets_and_real_numeric_cells():
     assert overview["B7"].data_type == "n"
     assert overview["F7"].value == 94
     assert workbook["异常明细"]["A7"].value == "AOI 工序不良率偏高"
+
+
+def test_excel_dates_and_print_layout_are_readable_in_desktop_excel():
+    workbook = load_workbook(BytesIO(render_excel_bytes(_report_content())))
+
+    for sheet in workbook.worksheets:
+        assert sheet["B3"].number_format == "yyyy-mm-dd"
+        assert sheet["D3"].number_format == "yyyy-mm-dd"
+        assert sheet.page_setup.orientation == "landscape"
+        assert sheet.page_setup.fitToWidth == 1
+        assert sheet.sheet_properties.pageSetUpPr.fitToPage is True
 
 
 def test_long_pdf_table_repeats_cleanly_and_keeps_last_row_searchable():

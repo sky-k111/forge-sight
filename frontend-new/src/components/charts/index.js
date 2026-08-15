@@ -3,6 +3,7 @@ export { ChartTooltip } from "./ChartTooltip";
 export { ChartLegend } from "./ChartLegend";
 export { TrendLineChart } from "./TrendLineChart";
 export { RankBarChart } from "./RankBarChart";
+export { HorizontalRankChart } from "./HorizontalRankChart";
 export { ShareDonutChart } from "./ShareDonutChart";
 export { CorrelationScatterChart } from "./CorrelationScatterChart";
 export { ComboMetricChart } from "./ComboMetricChart";

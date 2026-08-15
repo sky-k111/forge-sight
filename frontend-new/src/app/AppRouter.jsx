@@ -43,7 +43,7 @@ const AnnouncementsPage = lazy(
 const DeliveriesPage = lazy(() => import("../pages/admin/DeliveriesPage"));
 
 export function EmailGate({
-  allowDemo = import.meta.env.DEV || import.meta.env.VITE_DEMO_MODE === "true",
+  allowDemo = import.meta.env.VITE_DEMO_MODE === "true",
 }) {
   const location = useLocation();
   const token = getToken();

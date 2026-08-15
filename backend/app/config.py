@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     agent_worker_enabled: bool = True
     agent_worker_poll_seconds: float = 0.75
     agent_worker_lease_seconds: int = 60
+    report_scheduler_enabled: bool = True
+    mail_worker_enabled: bool = True
 
     sql_max_rows: int = 10000
     sql_timeout_seconds: int = 30
@@ -67,6 +69,7 @@ class Settings(BaseSettings):
     mail_attachment_max_bytes: int = 10 * 1024 * 1024
     mail_max_attempts: int = 3
     mail_worker_lease_seconds: int = 60
+    operations_queue_backlog_warning: int = 100
     smtp_host: str = ""
     smtp_port: int = 465
     smtp_username: str = ""

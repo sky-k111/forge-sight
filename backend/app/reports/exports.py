@@ -14,6 +14,7 @@ from PIL import Image as PillowImage
 from PIL import ImageDraw
 from PIL import ImageFont
 from reportlab.graphics.charts.linecharts import HorizontalLineChart
+from reportlab.graphics.charts.barcharts import HorizontalBarChart
 from reportlab.graphics.shapes import Drawing
 from reportlab.lib import colors
 from reportlab.lib.colors import HexColor
@@ -255,18 +256,38 @@ def _metric_table(report: StructuredWeeklyReport, styles: dict) -> Table:
     return table
 
 
-def _trend_chart(report: StructuredWeeklyReport) -> Drawing | None:
-    if not report.trends or len(report.trends[0].points) < 2:
+def _report_chart(report: StructuredWeeklyReport) -> Drawing | None:
+    spec = report.charts[0] if report.charts else None
+    series = report.trends[0] if report.trends else None
+    points = spec.points if spec is not None else series.points if series is not None else []
+    if len(points) < 2:
         return None
-    series = report.trends[0]
     drawing = Drawing(480, 190)
+    if spec is not None and spec.type in {"bar", "pareto", "donut"}:
+        chart = HorizontalBarChart()
+        chart.x = 80
+        chart.y = 28
+        chart.height = 132
+        chart.width = 350
+        chart.data = [[point.value for point in reversed(points[:10])]]
+        chart.categoryAxis.categoryNames = [point.label for point in reversed(points[:10])]
+        chart.categoryAxis.labels.fontName = _register_fonts()[0]
+        chart.categoryAxis.labels.fontSize = 7
+        chart.valueAxis.labels.fontName = "Helvetica"
+        chart.valueAxis.labels.fontSize = 7
+        chart.bars[0].fillColor = AMBER if spec.color_role == "quality" else BRAND
+        chart.bars[0].strokeColor = None
+        chart.valueAxis.gridStrokeColor = LINE
+        chart.valueAxis.gridStrokeDashArray = (2, 2)
+        drawing.add(chart)
+        return drawing
     chart = HorizontalLineChart()
     chart.x = 55
     chart.y = 34
     chart.height = 120
     chart.width = 390
-    chart.data = [[point.value for point in series.points]]
-    chart.categoryAxis.categoryNames = [point.label for point in series.points]
+    chart.data = [[point.value for point in points]]
+    chart.categoryAxis.categoryNames = [point.label for point in points]
     chart.categoryAxis.labels.fontName = _register_fonts()[0]
     chart.categoryAxis.labels.fontSize = 7
     chart.valueAxis.labels.fontName = "Helvetica"
@@ -331,7 +352,16 @@ def render_pdf_bytes(content: dict) -> bytes:
             Paragraph("图表仅使用已冻结版本中的结构化数值，确保与站内展示一致。", styles["small"]),
         ]
     )
-    chart = _trend_chart(report)
+    chart_spec = report.charts[0] if report.charts else None
+    if chart_spec is not None:
+        story.extend(
+            [
+                Spacer(1, 3 * mm),
+                Paragraph(_pdf_text(chart_spec.title), styles["subheading"]),
+                Paragraph(_pdf_text(chart_spec.description), styles["small"]),
+            ]
+        )
+    chart = _report_chart(report)
     if chart is not None:
         story.extend([Spacer(1, 3 * mm), chart])
     else:
@@ -441,11 +471,18 @@ def _prepare_sheet(sheet, title: str, report: StructuredWeeklyReport, headers: l
     sheet.cell(3, 2, report.identity.period_start)
     sheet.cell(3, 3, "至")
     sheet.cell(3, 4, report.identity.period_end)
+    sheet.cell(3, 2).number_format = "yyyy-mm-dd"
+    sheet.cell(3, 4).number_format = "yyyy-mm-dd"
     sheet.cell(4, 1, "报告版本")
     sheet.cell(4, 2, report.identity.version_id)
     sheet.cell(4, 3, "导出说明")
     sheet.cell(4, 4, "数据来自同一已冻结周报版本")
     sheet.freeze_panes = "A6"
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.print_title_rows = "1:6"
     for column, value in enumerate(headers, start=1):
         cell = sheet.cell(6, column, value)
         cell.font = Font(name="Microsoft YaHei", bold=True, color="FFFFFF")

@@ -116,6 +116,35 @@ def test_publish_validation_reports_machine_readable_hard_rule_failures():
     } <= {item["code"] for item in result["rules"] if item["level"] == "error"}
 
 
+def test_publish_validation_rejects_unsupported_or_untraceable_chart_specs():
+    unsupported = _content()
+    unsupported["charts"] = [
+        {
+            "key": "output",
+            "type": "radar",
+            "title": "产量",
+            "description": "不在受控图表白名单内。",
+            "unit": "件",
+            "categoryLabel": "产线",
+            "valueLabel": "产量",
+            "points": [{"label": "一线", "value": 1}, {"label": "二线", "value": 2}],
+            "evidenceArtifactIds": ["artifact-1"],
+            "colorRole": "production",
+        }
+    ]
+    untraceable = _content()
+    untraceable["charts"] = [
+        {
+            **unsupported["charts"][0],
+            "type": "bar",
+            "evidenceArtifactIds": [],
+        }
+    ]
+
+    assert "V-HARD-001" in {item["code"] for item in validate_for_publish(unsupported)["rules"]}
+    assert "V-HARD-004" in {item["code"] for item in validate_for_publish(untraceable)["rules"]}
+
+
 def test_normal_report_without_structured_metrics_is_blocked():
     content = _content(metrics=[], trends=[])
 
@@ -279,7 +308,7 @@ def test_structured_content_extracts_metric_trend_and_definition_from_frozen_res
     assert content["appendix"]["definitions"][0]["name"] == "总产量"
 
 
-def test_grouped_category_rows_are_not_misread_as_period_over_period_metrics():
+def test_grouped_category_rows_create_a_distribution_without_period_comparison():
     from types import SimpleNamespace
 
     report = SimpleNamespace(
@@ -330,10 +359,208 @@ def test_grouped_category_rows_are_not_misread_as_period_over_period_metrics():
         timezone_name="Asia/Shanghai",
     )
 
-    assert content["metrics"] == []
-    assert content["trends"] == []
+    assert [metric["value"] for metric in content["metrics"]] == [12100, 12840]
+    assert all(metric["previousValue"] is None for metric in content["metrics"])
+    assert all(metric["changeRate"] is None for metric in content["metrics"])
+    assert content["trends"] == [
+        {
+            "metricKey": "output_qty:一线",
+            "label": "总产量分布",
+            "unit": "件",
+            "points": [
+                {"label": "一线", "value": 12100.0},
+                {"label": "二线", "value": 12840.0},
+            ],
+        }
+    ]
+    assert content["charts"] == [
+        {
+            "key": "output",
+            "type": "bar",
+            "title": "产线表现",
+            "description": "按产线对总产量进行降序比较。",
+            "unit": "件",
+            "categoryLabel": "production_line",
+            "valueLabel": "总产量",
+            "points": [
+                {"label": "二线", "value": 12840.0},
+                {"label": "一线", "value": 12100.0},
+            ],
+            "evidenceArtifactIds": ["artifact-result"],
+            "colorRole": "production",
+        }
+    ]
     assert content["anomalies"][0]["title"] == "产线表现"
     assert content["recommendations"][0]["evidenceStatus"] == "verified"
+
+
+def test_agent_selects_pareto_chart_and_calculates_cumulative_share():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1",
+        title="质量周报",
+        source_id=1,
+        period_start=datetime(2026, 8, 3),
+        period_end=datetime(2026, 8, 10),
+        scope_json={},
+        audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 100})
+    section = SimpleNamespace(
+        code="quality",
+        title="缺陷 Pareto",
+        status="succeeded",
+        summary="前三类缺陷贡献集中。",
+        confidence=96,
+        artifact_ids_json=["artifact-quality"],
+        content_json={
+            "result": {
+                "columns": ["缺陷类型", "不良数量"],
+                "rows": [["划伤", 60], ["脏污", 30], ["尺寸", 10]],
+            },
+            "metricResolution": {
+                "metricId": "defect_count",
+                "name": "不良数量",
+                "unit": "件",
+            },
+        },
+    )
+
+    content = build_structured_content(
+        report=report,
+        version=version,
+        sections=[section],
+        raw_summary=section.summary,
+        timezone_name="Asia/Shanghai",
+    )
+
+    assert content["charts"][0]["type"] == "pareto"
+    assert content["charts"][0]["colorRole"] == "quality"
+    assert content["charts"][0]["points"] == [
+        {"label": "划伤", "value": 60.0, "secondaryValue": 60.0},
+        {"label": "脏污", "value": 30.0, "secondaryValue": 90.0},
+        {"label": "尺寸", "value": 10.0, "secondaryValue": 100.0},
+    ]
+
+
+def test_agent_selects_temporal_chart_without_mixing_section_series():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1",
+        title="生产周报",
+        source_id=1,
+        period_start=datetime(2026, 8, 3),
+        period_end=datetime(2026, 8, 10),
+        scope_json={},
+        audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 100})
+    section = SimpleNamespace(
+        code="production",
+        title="日产量趋势",
+        status="succeeded",
+        summary="日产量稳步增长。",
+        confidence=95,
+        artifact_ids_json=["artifact-output"],
+        content_json={
+            "result": {
+                "columns": ["日期", "产量"],
+                "rows": [["2026-08-08", 100], ["2026-08-09", 120]],
+            },
+            "metricResolution": {"metricId": "daily_output", "name": "产量", "unit": "件"},
+        },
+    )
+
+    content = build_structured_content(
+        report=report,
+        version=version,
+        sections=[section],
+        raw_summary=section.summary,
+        timezone_name="Asia/Shanghai",
+    )
+
+    assert content["charts"] == [
+        {
+            "key": "production",
+            "type": "area",
+            "title": "日产量趋势",
+            "description": "展示产量随日期的变化趋势。",
+            "unit": "件",
+            "categoryLabel": "日期",
+            "valueLabel": "产量",
+            "points": [
+                {"label": "2026-08-08", "value": 100.0},
+                {"label": "2026-08-09", "value": 120.0},
+            ],
+            "evidenceArtifactIds": ["artifact-output"],
+            "colorRole": "production",
+        }
+    ]
+
+
+def test_agent_category_result_accepts_metric_id_and_numeric_strings():
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(
+        id="report-1",
+        title="生产经营周报",
+        source_id=1,
+        period_start=datetime(2026, 7, 6),
+        period_end=datetime(2026, 7, 13),
+        scope_json={},
+        audience_scope_hash="scope-a",
+    )
+    version = SimpleNamespace(id="version-1", data_quality_json={"coverageScore": 100})
+    section = SimpleNamespace(
+        code="production",
+        title="生产达成与趋势",
+        status="succeeded",
+        summary=(
+            "一线首末日产量增长 25.61%，二线变化率为 -38.71%；"
+            "重点偏差阈值为 20%，两条产线合计占比约 40%。"
+        ),
+        confidence=98,
+        artifact_ids_json=["artifact-result"],
+        content_json={
+            "result": {
+                "columns": ["产线", "产量", "首末日变化率_pct"],
+                "rows": [
+                    ["一线", "159046", "25.61"],
+                    ["二线", "153872", "-38.71"],
+                ],
+            },
+            "metricResolution": {
+                "metricId": "M-001",
+                "name": "产量",
+                "definition": "统计周期内良品与不良品数量之和。",
+            },
+        },
+    )
+
+    content = build_structured_content(
+        report=report,
+        version=version,
+        sections=[section],
+        raw_summary=section.summary,
+        timezone_name="Asia/Shanghai",
+    )
+    validation = validate_for_publish(content)
+
+    assert content["trends"][0]["label"] == "产量分布"
+    assert content["trends"][0]["points"] == [
+        {"label": "一线", "value": 159046.0},
+        {"label": "二线", "value": 153872.0},
+    ]
+    assert {metric["value"] for metric in content["metrics"] if metric["unit"] == "%"} == {
+        25.61,
+        -38.71,
+    }
+    assert content["managementSummary"]["findings"][0]["text"] == (
+        "生产达成与趋势：一线·产量为 159046件，详细分布与证据见正文。"
+    )
+    assert "V-HARD-007" not in {rule["code"] for rule in validation["rules"]}
 
 
 def test_temporal_rows_are_sorted_before_current_and_previous_values_are_selected():
