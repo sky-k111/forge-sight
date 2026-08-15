@@ -85,12 +85,18 @@ class ChartPoint(ReportContentModel):
 
 class ChartSpec(ReportContentModel):
     key: str = Field(min_length=1)
-    type: Literal["line", "area", "bar", "pareto", "donut", "heatmap"]
+    type: Literal["line", "area", "bar", "pareto", "donut", "heatmap", "scatter", "combo"]
     title: str = Field(min_length=1, max_length=120)
     description: str = Field(min_length=1, max_length=240)
     unit: str = Field(min_length=1, max_length=24)
     category_label: str = Field(alias="categoryLabel", min_length=1, max_length=80)
     value_label: str = Field(alias="valueLabel", min_length=1, max_length=80)
+    secondary_value_label: str | None = Field(
+        default=None, alias="secondaryValueLabel", min_length=1, max_length=80
+    )
+    secondary_unit: str | None = Field(
+        default=None, alias="secondaryUnit", min_length=1, max_length=24
+    )
     points: list[ChartPoint] = Field(min_length=2, max_length=60)
     evidence_artifact_ids: list[str] = Field(alias="evidenceArtifactIds")
     color_role: Literal[

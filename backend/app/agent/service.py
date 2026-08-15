@@ -1,12 +1,18 @@
 """Session/Run 当前投影和提交入口。"""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func
 
 from app.agent.budgets import default_budget
 from app.agent.event_store import append_event, serialize_event
 from app.agent.ids import new_id
+from app.agent.intent import (
+    build_smalltalk_response,
+    classify_request_kind,
+    is_deterministic_conversation,
+)
+from app.config import settings
 from app.db.models import (
     AnalysisArtifact,
     AnalysisBranch,
@@ -138,6 +144,7 @@ def get_session(session_id: str) -> dict:
 
 
 def create_run(session_id: str, question: str, idempotency_key: str | None = None) -> dict:
+    normalized_question = question.strip()
     with PlatformSession() as session:
         parent = session.query(AnalysisSession).filter_by(id=session_id).with_for_update().first()
         if parent is None:
@@ -150,6 +157,22 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
             ).first()
             if existing:
                 return _run_acceptance(existing)
+        history_rows = (
+            session.query(AnalysisMessage)
+            .filter_by(session_id=session_id)
+            .order_by(AnalysisMessage.sequence_no.desc())
+            .limit(6)
+            .all()
+        )
+        conversation_context = [
+            {"role": item.role, "content": item.content}
+            for item in reversed(history_rows)
+        ]
+        request_kind = classify_request_kind(normalized_question, conversation_context)
+        inline_conversation = request_kind in {"conversation", "unknown"}
+        deterministic_conversation = (
+            inline_conversation and is_deterministic_conversation(normalized_question)
+        )
         sequence_no = (
             session.query(func.coalesce(func.max(AnalysisMessage.sequence_no), 0))
             .filter_by(session_id=session_id)
@@ -160,7 +183,7 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
             id=new_id("msg"),
             session_id=session_id,
             role="user",
-            content=question.strip(),
+            content=normalized_question,
             sequence_no=sequence_no,
         )
         run = AnalysisRun(
@@ -171,6 +194,14 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
             source_id=parent.source_id,
             budget_snapshot_json=default_budget(),
         )
+        if inline_conversation:
+            now = datetime.now()
+            run.status = "running"
+            run.started_at = now
+            run.lease_owner = "inline-conversation"
+            run.lease_expires_at = now + timedelta(
+                seconds=max(settings.agent_worker_lease_seconds, settings.llm_timeout_seconds + 15)
+            )
         message.run_id = run.id
         session.add_all([message, run])
         parent.updated_at = datetime.now()
@@ -178,10 +209,34 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
             session,
             run,
             "run.accepted",
-            {"status": "queued", "question": question.strip(), "sourceId": parent.source_id},
+            {
+                "status": "running" if inline_conversation else "queued",
+                "question": normalized_question,
+                "sourceId": parent.source_id,
+                "executionPath": "inline-conversation" if inline_conversation else "worker",
+            },
         )
         session.commit()
-        return _run_acceptance(run)
+        run_id = run.id
+        accepted = _run_acceptance(run)
+    if inline_conversation:
+        # Known turns are model-free; open conversation gets one small model call.
+        # Neither path enters schema retrieval, SQL generation or worker polling.
+        from app.agent.runner import execute_inline_conversation, execute_inline_route
+
+        if request_kind == "unknown":
+            execute_inline_route(run_id)
+        else:
+            execute_inline_conversation(
+                run_id,
+                build_smalltalk_response(normalized_question)
+                if deterministic_conversation
+                else None,
+            )
+        with PlatformSession() as session:
+            completed = session.query(AnalysisRun).filter_by(id=run_id).one()
+            return _run_acceptance(completed)
+    return accepted
 
 
 def get_run(run_id: str) -> dict:

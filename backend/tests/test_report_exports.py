@@ -4,8 +4,12 @@ from io import BytesIO
 
 from openpyxl import load_workbook
 from pypdf import PdfReader
+from reportlab.graphics.charts.barcharts import VerticalBarChart
+from reportlab.graphics.charts.linecharts import HorizontalLineChart
+from reportlab.graphics.shapes import Polygon
 
-from app.reports.exports import render_excel_bytes, render_pdf_bytes
+from app.reports.exports import _report_chart, render_excel_bytes, render_pdf_bytes
+from app.reports.schema import ChartSpec
 
 
 def _report_content() -> dict:
@@ -188,17 +192,154 @@ def test_pdf_uses_the_same_agent_chart_spec_title_and_description_as_the_web():
     assert "按缺陷类型定位不良数量的主要贡献项" in extracted
 
 
+def test_pdf_pareto_contains_bars_and_a_cumulative_curve():
+    chart = _report_chart(ChartSpec.model_validate({
+        "key": "quality", "type": "pareto", "title": "缺陷 Pareto",
+        "description": "主要贡献项", "unit": "件", "categoryLabel": "缺陷",
+        "valueLabel": "数量", "points": [
+            {"label": "划伤", "value": 60, "secondaryValue": 60},
+            {"label": "脏污", "value": 40, "secondaryValue": 100},
+        ], "evidenceArtifactIds": ["artifact-quality"], "colorRole": "quality",
+    }))
+
+    assert any(isinstance(item, VerticalBarChart) for item in chart.contents)
+    assert any(isinstance(item, HorizontalLineChart) for item in chart.contents)
+
+
+def test_pdf_area_chart_has_a_visible_filled_region():
+    chart = _report_chart(ChartSpec.model_validate({
+        "key": "output", "type": "area", "title": "日产量趋势",
+        "description": "产量变化", "unit": "件", "categoryLabel": "日期",
+        "valueLabel": "产量", "points": [
+            {"label": "08-08", "value": 100}, {"label": "08-09", "value": 120},
+        ], "evidenceArtifactIds": ["artifact-output"], "colorRole": "production",
+    }))
+
+    assert any(isinstance(item, Polygon) for item in chart.contents)
+
+
+def test_pdf_heatmap_keeps_missing_cells_blank_instead_of_zero():
+    table = _report_chart(ChartSpec.model_validate({
+        "key": "quality", "type": "heatmap", "title": "缺陷矩阵",
+        "description": "交叉分布", "unit": "件", "categoryLabel": "工序",
+        "valueLabel": "数量", "points": [
+            {"label": "AOI", "group": "划伤", "value": 8},
+            {"label": "SPI", "group": "脏污", "value": 5},
+        ], "evidenceArtifactIds": ["artifact-quality"], "colorRole": "quality",
+    }))
+
+    flattened = [str(cell) for row in table._cellvalues for cell in row]
+    assert flattened.count("—") == 2
+
+
+def test_pdf_exports_every_agent_chart_instead_of_only_the_first_one():
+    content = _report_content()
+    content["charts"] = [
+        {
+            "key": "trend", "type": "line", "title": "日产量趋势",
+            "description": "查看最近两日产量变化。", "unit": "件",
+            "categoryLabel": "日期", "valueLabel": "产量",
+            "points": [{"label": "08-08", "value": 100}, {"label": "08-09", "value": 120}],
+            "evidenceArtifactIds": ["artifact-output"], "colorRole": "production",
+        },
+        {
+            "key": "share", "type": "donut", "title": "产品产量构成",
+            "description": "查看产品产量份额。", "unit": "件",
+            "categoryLabel": "产品", "valueLabel": "产量",
+            "points": [{"label": "A", "value": 70}, {"label": "B", "value": 30}],
+            "evidenceArtifactIds": ["artifact-output"], "colorRole": "production",
+        },
+        {
+            "key": "relationship", "type": "scatter", "title": "运行与停机关系",
+            "description": "观察运行时长与停机时长的关系。", "unit": "小时",
+            "secondaryUnit": "分钟", "categoryLabel": "设备", "valueLabel": "运行时长",
+            "secondaryValueLabel": "停机时长",
+            "points": [
+                {"label": "A01", "value": 120, "secondaryValue": 8},
+                {"label": "A02", "value": 150, "secondaryValue": 4},
+            ],
+            "evidenceArtifactIds": ["artifact-equipment"], "colorRole": "equipment",
+        },
+    ]
+
+    reader = PdfReader(BytesIO(render_pdf_bytes(content)))
+    extracted = "".join(page.extract_text() or "" for page in reader.pages)
+
+    assert "日产量趋势" in extracted
+    assert "产品产量构成" in extracted
+    assert "运行与停机关系" in extracted
+    assert "观察运行时长与停机时长的关系" in extracted
+
+
+def test_pdf_bar_and_exact_table_keep_all_twelve_agent_points():
+    content = _report_content()
+    content["charts"] = [{
+        "key": "lines", "type": "bar", "title": "产线产量排名",
+        "description": "展示十二条产线。", "unit": "件",
+        "categoryLabel": "产线", "valueLabel": "产量",
+        "points": [
+            {"label": f"产线-{index:02d}", "value": 130 - index}
+            for index in range(1, 13)
+        ],
+        "evidenceArtifactIds": ["artifact-output"], "colorRole": "production",
+    }]
+
+    reader = PdfReader(BytesIO(render_pdf_bytes(content)))
+    extracted = "".join(page.extract_text() or "" for page in reader.pages)
+
+    assert "产线-11" in extracted
+    assert "产线-12" in extracted
+
+
 def test_excel_uses_required_sheets_and_real_numeric_cells():
     payload = render_excel_bytes(_report_content())
 
     workbook = load_workbook(BytesIO(payload), data_only=True)
-    assert workbook.sheetnames == ["指标概览", "异常明细", "行动建议", "数据来源与口径"]
+    assert workbook.sheetnames == ["指标概览", "图表数据", "异常明细", "行动建议", "数据来源与口径"]
     overview = workbook["指标概览"]
     assert overview.freeze_panes == "A6"
     assert overview["B7"].value == 12840
     assert overview["B7"].data_type == "n"
     assert overview["F7"].value == 94
     assert workbook["异常明细"]["A7"].value == "AOI 工序不良率偏高"
+
+
+def test_excel_exports_all_chart_data_and_native_visuals():
+    content = _report_content()
+    content["charts"] = [
+        {
+            "key": "trend", "type": "line", "title": "日产量趋势",
+            "description": "查看产量变化。", "unit": "件", "categoryLabel": "日期", "valueLabel": "产量",
+            "points": [{"label": "08-08", "value": 100}, {"label": "08-09", "value": 120}],
+            "evidenceArtifactIds": ["artifact-output"], "colorRole": "production",
+        },
+        {
+            "key": "share", "type": "donut", "title": "产品产量构成",
+            "description": "查看产量份额。", "unit": "件", "categoryLabel": "产品", "valueLabel": "产量",
+            "points": [{"label": "A", "value": 70}, {"label": "B", "value": 30}],
+            "evidenceArtifactIds": ["artifact-output"], "colorRole": "production",
+        },
+        {
+            "key": "relationship", "type": "scatter", "title": "运行与停机关系",
+            "description": "观察两个指标的关系。", "unit": "小时", "secondaryUnit": "分钟",
+            "categoryLabel": "设备", "valueLabel": "运行时长", "secondaryValueLabel": "停机时长",
+            "points": [
+                {"label": "A01", "value": 120, "secondaryValue": 8},
+                {"label": "A02", "value": 150, "secondaryValue": 4},
+            ],
+            "evidenceArtifactIds": ["artifact-equipment"], "colorRole": "equipment",
+        },
+    ]
+
+    workbook = load_workbook(BytesIO(render_excel_bytes(content)), data_only=False)
+    sheet = workbook["图表数据"]
+
+    assert len(sheet._charts) == 3
+    assert [sheet.cell(row, 1).value for row in range(1, sheet.max_row + 1)].count("日产量趋势") == 1
+    assert [sheet.cell(row, 1).value for row in range(1, sheet.max_row + 1)].count("产品产量构成") == 1
+    assert [sheet.cell(row, 1).value for row in range(1, sheet.max_row + 1)].count("运行与停机关系") == 1
+    numeric_values = [sheet.cell(row, 3).value for row in range(1, sheet.max_row + 1)]
+    assert 120 in numeric_values
 
 
 def test_excel_dates_and_print_layout_are_readable_in_desktop_excel():

@@ -627,18 +627,21 @@ def _clarification_answers(response: Any, fields: list[dict[str, Any]]) -> dict[
     return {fields[0]["id"]: text} if len(fields) == 1 and text else {}
 
 
-def _model_route_labels(raw: str, unknown_segments: list[dict[str, Any]]) -> dict[int, str]:
+def _model_route_decision(
+    raw: str, unknown_segments: list[dict[str, Any]]
+) -> tuple[dict[int, str], dict[int, str]]:
     fenced = re.search(r"```(?:json)?\s*(.*?)```", str(raw), flags=re.IGNORECASE | re.DOTALL)
     candidate = (fenced.group(1) if fenced else str(raw)).strip()
     try:
         decoded = json.loads(candidate)
     except json.JSONDecodeError:
-        return {item["index"]: "conversation" for item in unknown_segments}
+        return {item["index"]: "conversation" for item in unknown_segments}, {}
     items = decoded.get("segments", decoded) if isinstance(decoded, dict) else decoded
     if not isinstance(items, list):
-        return {item["index"]: "conversation" for item in unknown_segments}
+        return {item["index"]: "conversation" for item in unknown_segments}, {}
     allowed_indices = {item["index"] for item in unknown_segments}
     labels: dict[int, str] = {}
+    responses: dict[int, str] = {}
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -649,28 +652,71 @@ def _model_route_labels(raw: str, unknown_segments: list[dict[str, Any]]) -> dic
         kind = str(item.get("kind", "")).lower()
         if index in allowed_indices and kind in {"analysis", "conversation"}:
             labels[index] = kind
+            response = str(item.get("response") or "").strip()
+            if kind == "conversation" and response:
+                responses[index] = response[:800]
     for item in unknown_segments:
         labels.setdefault(item["index"], "conversation")
-    return labels
+    return labels, responses
+
+
+def _route_model_prompt(
+    unknown_segments: list[dict[str, Any]],
+    conversation_context: list[dict[str, str]],
+) -> tuple[str, str]:
+    system = (
+        "你是 ForgeSight，面向制造业数据底座的智能问析 Agent。你的角色是帮助企业用户理解生产、"
+        "质量、设备和库存数据；涉及企业数据时只能走只读分析，不编造数据，也不执行写操作。"
+        "现在结合最近对话，对每个片段判断是否需要查询当前企业数据底座。"
+        "analysis=需要查询或解释企业生产、质量、设备、库存、指标、表字段；"
+        "conversation=不需要企业数据的正常对话。对 conversation 应以 ForgeSight 身份自然、简洁地回应，"
+        "可以正常交流，但不得假装已经查询过企业数据；必要时再引导用户提出业务问题。"
+        "仅输出 JSON：{\"segments\":[{\"index\":0,\"kind\":\"analysis|conversation\","
+        "\"response\":\"仅 conversation 填写的中文回答\"}]}。"
+    )
+    user = json.dumps(
+        {
+            "recentConversation": conversation_context[-4:],
+            "segments": [
+                {"index": item["index"], "text": item["text"]}
+                for item in unknown_segments
+            ],
+        },
+        ensure_ascii=False,
+    )
+    return system, user
 
 
 def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
     def route_request(state: AnalysisState) -> dict:
-        route = build_request_route(state["user_question"])
+        preclassified_labels = {
+            int(index): kind
+            for index, kind in (state.get("preclassified_route_labels") or {}).items()
+        }
+        preclassified_responses = {
+            int(index): response
+            for index, response in (state.get("preclassified_route_responses") or {}).items()
+        }
+        route = build_request_route(
+            state["user_question"],
+            preclassified_labels,
+            conversation_context=state.get("conversation_context") or [],
+        )
+        model_responses = [
+            preclassified_responses[item["index"]]
+            for item in route["segments"]
+            if item["kind"] == "conversation" and item["index"] in preclassified_responses
+        ]
+        if model_responses:
+            route["conversationResponse"] = "\n\n".join(model_responses)
         unknown = route["unknownSegments"]
         if unknown:
-            system = (
-                "你是企业数据问析系统的请求路由器。只判断每个片段是否需要查询当前企业制造数据底座。"
-                "analysis=需要查询或解释企业生产、质量、设备、库存、指标、表字段；"
-                "conversation=问候、致谢、能力咨询、天气新闻等领域外问题。"
-                "仅输出 JSON：{\"segments\":[{\"index\":0,\"kind\":\"analysis|conversation\"}]}。"
-            )
-            user = json.dumps(
-                [{"index": item["index"], "text": item["text"]} for item in unknown],
-                ensure_ascii=False,
+            system, user = _route_model_prompt(
+                unknown,
+                state.get("conversation_context") or [],
             )
             try:
-                labels = _model_route_labels(
+                labels, responses = _model_route_decision(
                     deps.generate_text(state, "intent.route", system, user),
                     unknown,
                 )
@@ -678,7 +724,19 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                 # When the router model is unavailable, unknown requests stay out of
                 # SQL rather than being silently promoted to an executable analysis.
                 labels = {item["index"]: "conversation" for item in unknown}
-            route = build_request_route(state["user_question"], labels)
+                responses = {}
+            route = build_request_route(
+                state["user_question"],
+                labels,
+                state.get("conversation_context") or [],
+            )
+            model_responses = [
+                responses[item["index"]]
+                for item in route["segments"]
+                if item["kind"] == "conversation" and item["index"] in responses
+            ]
+            if model_responses:
+                route["conversationResponse"] = "\n\n".join(model_responses)
         return {
             "intent_kind": route["kind"],
             "analysis_question": route["analysisQuestion"],

@@ -14,8 +14,14 @@ from sqlalchemy import func
 from app.agent import usage
 from app.agent.contracts import RunStatus
 from app.agent.event_store import append_event
-from app.agent.graph import GraphDependencies, build_analysis_graph
+from app.agent.graph import (
+    GraphDependencies,
+    _model_route_decision,
+    _route_model_prompt,
+    build_analysis_graph,
+)
 from app.agent.ids import new_id
+from app.agent.intent import build_request_route
 from app.config import settings
 from app.db.models import (
     AnalysisArtifact,
@@ -81,7 +87,17 @@ def _tracked_generate(state: dict, step_key: str, system: str, user: str) -> str
     )
     started = time.perf_counter()
     try:
-        response = provider.chat_completion(system, user, max_tokens=2400)
+        max_tokens = {
+            "intent.route": 500,
+            "conversation.reply": 600,
+            "result.explain": 1200,
+        }.get(step_key, 2400)
+        response = provider.chat_completion(
+            system,
+            user,
+            temperature=0.1,
+            max_tokens=max_tokens,
+        )
     except Exception as exc:
         usage.finish_call(
             call_id,
@@ -212,7 +228,10 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
         attempt = state.get("retry_count", 0)
     with PlatformSession() as session:
         run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
-        if run.status == "cancelled":
+        expected_owner = state.get("expected_lease_owner")
+        if run.status in TERMINAL_STATUSES or (
+            expected_owner and run.lease_owner != expected_owner
+        ):
             return
         run.current_step_key = step_key
         if node == "prepare_retry":
@@ -453,7 +472,10 @@ def _project_checkpoint(run_id: str, node: str, state: dict, graph, config: dict
 def _finish_run(run_id: str, state: dict) -> None:
     with PlatformSession() as session:
         run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
-        if run.status == "cancelled":
+        expected_owner = state.get("expected_lease_owner")
+        if run.status in TERMINAL_STATUSES or (
+            expected_owner and run.lease_owner != expected_owner
+        ):
             return
         if state.get("blocked"):
             run.status = "blocked"
@@ -566,6 +588,169 @@ def _mark_unexpected_failure(run_id: str, exc: Exception) -> None:
         session.commit()
 
 
+def execute_inline_conversation(run_id: str, direct_response: str | None = None) -> dict:
+    """Complete a non-data turn without entering retrieval/SQL worker stages."""
+
+    with PlatformSession() as session:
+        run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
+        if run.status in TERMINAL_STATUSES:
+            return {"runId": run.id, "status": run.status}
+        message = session.query(AnalysisMessage).filter_by(id=run.trigger_message_id).one()
+        history_rows = (
+            session.query(AnalysisMessage)
+            .filter(
+                AnalysisMessage.session_id == run.session_id,
+                AnalysisMessage.sequence_no < message.sequence_no,
+            )
+            .order_by(AnalysisMessage.sequence_no.desc())
+            .limit(6)
+            .all()
+        )
+        context = [
+            {"role": item.role, "content": item.content}
+            for item in reversed(history_rows)
+        ]
+        run.status = "running"
+        run.started_at = run.started_at or datetime.now()
+        session.commit()
+        state = {
+            "session_id": run.session_id,
+            "run_id": run.id,
+            "source_id": run.source_id,
+            "user_question": message.content,
+            "conversation_context": context,
+            "retry_count": 0,
+            "attempted_sqls": [],
+            "expected_lease_owner": "inline-conversation",
+        }
+
+    response = direct_response
+    if response is None:
+        system = (
+            "你是 ForgeSight，面向制造企业数据底座的智能问析 Agent。"
+            "你可以自然、友善、简洁地正常对话；你的核心职责是帮助用户理解生产、质量、设备和库存数据，"
+            "在企业数据场景中只做已授权的只读分析，绝不假装查询过数据，也不编造业务事实。"
+            "当前问题不需要查询数据库，请直接回应，不输出 JSON，不复述规则；通常控制在 180 字以内。"
+        )
+        user = json.dumps(
+            {"recentConversation": context[-4:], "currentMessage": state["user_question"]},
+            ensure_ascii=False,
+        )
+        try:
+            response = _tracked_generate(state, "conversation.reply", system, user).strip()[:2000]
+        except Exception:  # noqa: BLE001 - keep ordinary dialogue available during provider outages
+            response = (
+                "我是 ForgeSight，主要负责生产、质量、设备和库存数据的只读问析。"
+                "当前对话模型暂时不可用，你仍可以直接告诉我想分析的业务问题。"
+            )
+
+    update = {
+        "intent_kind": "conversation",
+        "analysis_question": "",
+        "direct_response": response,
+        "tasks": [],
+        "blocked": False,
+        "error": None,
+    }
+    state.update(update)
+    _persist_update(run_id, "route_request", update, state)
+    _finish_run(run_id, state)
+    return {"runId": run_id, "status": "succeeded"}
+
+
+def execute_inline_route(run_id: str) -> dict:
+    """Use one small call to route ambiguous text, then finish chat or queue analysis."""
+
+    with PlatformSession() as session:
+        run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
+        if run.status in TERMINAL_STATUSES:
+            return {"runId": run.id, "status": run.status}
+        message = session.query(AnalysisMessage).filter_by(id=run.trigger_message_id).one()
+        history_rows = (
+            session.query(AnalysisMessage)
+            .filter(
+                AnalysisMessage.session_id == run.session_id,
+                AnalysisMessage.sequence_no < message.sequence_no,
+            )
+            .order_by(AnalysisMessage.sequence_no.desc())
+            .limit(6)
+            .all()
+        )
+        context = [{"role": item.role, "content": item.content} for item in reversed(history_rows)]
+        state = {
+            "session_id": run.session_id,
+            "run_id": run.id,
+            "source_id": run.source_id,
+            "user_question": message.content,
+            "conversation_context": context,
+            "retry_count": 0,
+            "attempted_sqls": [],
+            "expected_lease_owner": "inline-conversation",
+        }
+
+    local_route = build_request_route(state["user_question"], conversation_context=context)
+    unknown = local_route["unknownSegments"]
+    system, user = _route_model_prompt(unknown, context)
+    try:
+        labels, responses = _model_route_decision(
+            _tracked_generate(state, "intent.route", system, user),
+            unknown,
+        )
+    except Exception:  # noqa: BLE001 - let the worker retry ambiguous routing later
+        labels, responses = {}, {}
+
+    routed = build_request_route(
+        state["user_question"],
+        labels,
+        context,
+    )
+    if not labels or routed["kind"] in {"analysis", "mixed"}:
+        with PlatformSession() as session:
+            run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
+            if run.status in TERMINAL_STATUSES or run.lease_owner != "inline-conversation":
+                return {"runId": run.id, "status": run.status}
+            message = session.query(AnalysisMessage).filter_by(id=run.trigger_message_id).one()
+            metadata = dict(message.metadata_json or {})
+            if labels:
+                metadata["routeLabels"] = {str(index): kind for index, kind in labels.items()}
+                metadata["routeResponses"] = {
+                    str(index): response for index, response in responses.items()
+                }
+            message.metadata_json = metadata
+            run.status = "queued"
+            run.started_at = None
+            run.current_step_key = None
+            run.lease_owner = None
+            run.lease_expires_at = None
+            append_event(
+                session,
+                run,
+                "run.routed",
+                {"status": "queued", "kind": routed["kind"] if labels else "unknown"},
+                step_key="intent.route",
+            )
+            session.commit()
+        return {"runId": run_id, "status": "queued"}
+
+    direct_response = "\n\n".join(
+        responses[item["index"]]
+        for item in routed["segments"]
+        if item["kind"] == "conversation" and item["index"] in responses
+    ) or routed["conversationResponse"]
+    update = {
+        "intent_kind": "conversation",
+        "analysis_question": "",
+        "direct_response": direct_response,
+        "tasks": [],
+        "blocked": False,
+        "error": None,
+    }
+    state.update(update)
+    _persist_update(run_id, "route_request", update, state)
+    _finish_run(run_id, state)
+    return {"runId": run_id, "status": "succeeded"}
+
+
 def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies | None = None) -> dict:
     """执行一个已入队 Run。Worker 和测试均通过此入口，避免两套执行逻辑。"""
     with PlatformSession() as session:
@@ -644,6 +829,14 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
             "source_id": run.source_id,
             "user_question": message.content,
             "conversation_context": conversation_context,
+            "preclassified_route_labels": {
+                int(index): kind
+                for index, kind in (message.metadata_json or {}).get("routeLabels", {}).items()
+            },
+            "preclassified_route_responses": {
+                int(index): response
+                for index, response in (message.metadata_json or {}).get("routeResponses", {}).items()
+            },
             "retry_count": 0,
             "attempted_sqls": [],
             "tasks": [],

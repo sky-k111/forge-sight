@@ -15,19 +15,23 @@ from app.agent.ids import new_id
 
 
 ANALYSIS_VERBS = (
-    "分析", "统计", "比较", "对比", "查找", "找出", "查看", "计算", "汇总", "排名",
+    "分析", "统计", "比较", "对比", "查找", "查询", "找出", "查看", "计算", "汇总", "排名",
     "排行", "趋势", "相关", "分布", "占比", "生成", "识别",
 )
 BUSINESS_TERMS = (
-    "数据", "指标", "报表", "图表", "数据库", "表", "字段", "良率", "产量", "质量",
+    "数据", "指标", "报表", "图表", "数据库", "数据表", "表格", "字段", "良率", "产量", "质量",
     "缺陷", "不良", "设备", "停机", "报警", "库存", "工序", "产线", "产品", "工单",
     "订单", "物料", "趋势", "同比", "环比", "平均", "最大", "最小", "多少",
 )
 SMALLTALK_PATTERNS = (
     re.compile(r"^(?:你好|您好|嗨|哈喽|hello|hi|早上好|下午好|晚上好)[！!。，,.\s]*$", re.IGNORECASE),
     re.compile(r"^(?:谢谢(?:你|啦|了)?|感谢(?:你|啦)?|辛苦了|好的|好|明白了|知道了|再见|拜拜)[！!。，,.\s]*$", re.IGNORECASE),
-    re.compile(r"(?:你是谁|你叫什么|介绍一下你自己|你能做什么|你会什么|怎么称呼你)"),
+    re.compile(
+        r"(?:你是谁|你叫什么|介绍一下你自己|你能做什么|你会什么|你有什么能力|"
+        r"你能帮我什么|怎么称呼你|你的角色|你的职责|怎么使用|如何使用|可以问什么)"
+    ),
     re.compile(r"(?:讲个笑话|聊聊天|今天天气|心情怎么样|你好吗)"),
+    re.compile(r"(?:想.*聊|压力|心情|难过|焦虑|烦恼|陪我|表现不好)"),
 )
 OUT_OF_SCOPE_PATTERNS = (
     re.compile(r"(?:天气|下雨|下雪|气温|空气质量|穿什么衣服|带伞)"),
@@ -65,15 +69,51 @@ def _has_analysis_verb(text: str) -> bool:
     return any(term in text for term in ANALYSIS_VERBS)
 
 
-def classify_request_kind(text: str) -> str:
-    """Return a high-confidence local classification or ``unknown`` for model routing."""
+def _is_known_conversation(text: str) -> bool:
+    return any(pattern.search(text) for pattern in (*SMALLTALK_PATTERNS, *OUT_OF_SCOPE_PATTERNS))
+
+
+def is_deterministic_conversation(text: str) -> bool:
+    """Whether a fast, model-free ForgeSight response fully covers this turn."""
+
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    return not normalized or _is_known_conversation(normalized)
+
+
+def classify_request_kind(
+    text: str,
+    conversation_context: list[dict[str, str]] | None = None,
+) -> str:
+    """Classify locally; reserve the analysis worker for data-bearing turns."""
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
     if not normalized:
         return "conversation"
     if _has_analysis_verb(normalized) or any(term in normalized for term in BUSINESS_TERMS):
         return "analysis"
-    if any(pattern.search(normalized) for pattern in (*SMALLTALK_PATTERNS, *OUT_OF_SCOPE_PATTERNS)):
+    if _is_known_conversation(normalized):
         return "conversation"
+    history = conversation_context or []
+    previous_user_text = next(
+        (
+            str(item.get("content") or "")
+            for item in reversed(history[-6:])
+            if item.get("role") == "user"
+        ),
+        "",
+    )
+    previous_business_turn = bool(previous_user_text) and (
+        _has_analysis_verb(previous_user_text)
+        or any(term in previous_user_text for term in BUSINESS_TERMS)
+    )
+    references_previous_turn = bool(_OBJECT_REFERENCE_RE.search(normalized)) or any(
+        marker in normalized
+        for marker in (*VAGUE_TIME_TERMS, "继续", "接着", "上一个", "刚才", "前面", "昨天")
+    )
+    references_previous_turn = references_previous_turn or normalized.rstrip("？?!！").endswith("呢")
+    if previous_business_turn and references_previous_turn:
+        return "analysis"
+    # Ambiguous natural language is decided by one small routing call. This keeps
+    # ordinary conversation fast without silently downgrading short business asks.
     return "unknown"
 
 
@@ -100,13 +140,14 @@ def split_request_segments(question: str) -> list[str]:
 def build_request_route(
     question: str,
     model_labels: dict[int, str] | None = None,
+    conversation_context: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Build a route contract for pure conversation, analysis, or mixed input."""
     segments = split_request_segments(question)
     labels = model_labels or {}
     classified = []
     for index, segment in enumerate(segments):
-        local_kind = classify_request_kind(segment)
+        local_kind = classify_request_kind(segment, conversation_context)
         kind = labels.get(index, local_kind)
         if kind not in {"analysis", "conversation"}:
             kind = "unknown"
@@ -142,14 +183,26 @@ def build_smalltalk_response(text: str) -> str:
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
     if re.search(r"(?:谢谢|感谢|辛苦了)", normalized, re.IGNORECASE):
         return "不客气。你可以继续告诉我想查看的生产、质量、设备或库存问题。"
-    if re.search(r"(?:你是谁|你叫什么|介绍一下你自己|怎么称呼你)", normalized, re.IGNORECASE):
-        return "我是 ForgeSight，面向制造业数据底座的智能问析助手。我可以在只读边界内查询数据、解释指标、生成图表并保留分析证据。"
-    if re.search(r"(?:你能做什么|你会什么)", normalized, re.IGNORECASE):
-        return "我可以分析生产、质量、设备和库存数据，例如查看产量趋势、比较工序良率、定位不良产品或分析设备停机。"
+    if re.search(r"(?:你是谁|你叫什么|介绍一下你自己|怎么称呼你|你的角色|你的职责)", normalized, re.IGNORECASE):
+        return (
+            "我是 ForgeSight，面向制造业数据底座的智能问析 Agent。"
+            "我的职责是在只读边界内理解业务问题、查询企业数据、解释指标、选择合适图表，并保留可追溯证据。"
+        )
+    if re.search(r"(?:你能做什么|你会什么|你有什么能力|你能帮我什么|怎么使用|如何使用|可以问什么)", normalized, re.IGNORECASE):
+        return (
+            "我是 ForgeSight，负责制造业数据的只读问析。你可以直接问生产、质量、设备或库存问题，"
+            "例如“比较各产线最近 7 天的产量与不良率”。我会识别指标和时间范围、查询已授权数据、"
+            "选择合适图表并给出带证据的结论；信息不明确时会先向你确认。"
+        )
     if any(pattern.search(normalized) for pattern in OUT_OF_SCOPE_PATTERNS):
         return "这个问题不属于当前企业数据底座的分析范围。我主要支持生产、质量、设备和库存数据的只读问析。"
     if re.search(r"(?:讲个笑话|聊聊天|心情怎么样|你好吗)", normalized, re.IGNORECASE):
         return "我主要负责企业制造数据的只读问析。要不从一个业务问题开始，例如“统计各产线最近 7 天的产量趋势”？"
+    if re.search(r"(?:想.*聊|压力|心情|难过|焦虑|烦恼|陪我|表现不好)", normalized, re.IGNORECASE):
+        return (
+            "我在，你可以慢慢说说发生了什么。如果这件事和生产、质量、设备或库存工作有关，"
+            "我也能帮你把情况整理成清晰、可验证的业务问题。"
+        )
     return "你好，我是 ForgeSight。你可以直接用业务语言提问，例如“找出最近一个月不良数量最高的产品”。"
 
 
