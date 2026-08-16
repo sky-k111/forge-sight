@@ -19,7 +19,6 @@ from app.db.models import (
     DataSource,
     DataTable,
     KnowledgeMetric,
-    KnowledgeTopic,
     MetricFieldBinding,
     MetricSourceBinding,
     MetricTableBinding,
@@ -194,7 +193,7 @@ def _extract_product_entity(question: str) -> str:
         match = pattern.search(str(question or ""))
         if not match:
             continue
-        value = match.group("value").strip(" 的，,。；;？? ")
+        value = match.group("value").strip(" 的，,。；;？? ")  # noqa: B005 - 有意按字符集去掉中英文标点与空白
         value = re.sub(r"^(?:请问|请|查询|查看|统计)", "", value).strip()
         if value and value not in {"产品", "物料", "这个产品", "该产品"}:
             return value

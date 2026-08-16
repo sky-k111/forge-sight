@@ -6,17 +6,16 @@ from io import BytesIO
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+import reportlab
 from openpyxl import Workbook
 from openpyxl.chart import AreaChart, BarChart, DoughnutChart, LineChart, Reference, ScatterChart, Series
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-import reportlab
 from PIL import Image as PillowImage
-from PIL import ImageDraw
-from PIL import ImageFont
-from reportlab.graphics.charts.linecharts import HorizontalLineChart
+from PIL import ImageDraw, ImageFont
 from reportlab.graphics.charts.barcharts import HorizontalBarChart, VerticalBarChart
+from reportlab.graphics.charts.linecharts import HorizontalLineChart
 from reportlab.graphics.charts.lineplots import ScatterPlot
 from reportlab.graphics.charts.piecharts import Pie
 from reportlab.graphics.shapes import Drawing, Polygon, String
@@ -41,7 +40,6 @@ from reportlab.platypus import (
 )
 
 from app.reports.schema import ChartSpec, StructuredWeeklyReport, calculate_confidence
-
 
 INK = HexColor("#172033")
 MUTED = HexColor("#667085")

@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from app.agent.budgets import default_budget
@@ -25,10 +25,8 @@ from app.db.models import (
     ReportVersion,
 )
 from app.db.platform import PlatformSession
-from app.reports.repository import get_or_create_report
-from app.reports.repository import publish_version
+from app.reports.repository import get_or_create_report, publish_version
 from app.reports.schema import calculate_confidence, validate_for_publish
-
 
 WORKFLOW_VERSION = "weekly-agent-v1"
 log = logging.getLogger(__name__)
@@ -51,8 +49,8 @@ class ScanResult:
 
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def weekly_period(due_at: datetime, timezone_name: str) -> WeeklyPeriod:
@@ -89,14 +87,14 @@ def next_weekly_run(
     )
     if candidate <= local_after:
         candidate += timedelta(days=7)
-    return candidate.astimezone(timezone.utc).replace(tzinfo=None)
+    return candidate.astimezone(UTC).replace(tzinfo=None)
 
 
 def initialize_next_run(subscription: ReportSubscription, *, now: datetime | None = None) -> datetime:
     if subscription.cadence != "weekly":
         raise ValueError("当前自动生成仅支持 weekly 订阅")
     return next_weekly_run(
-        now or datetime.now(timezone.utc),
+        now or datetime.now(UTC),
         weekday=subscription.weekday or 1,
         send_time=subscription.send_time,
         timezone_name=subscription.timezone,
@@ -141,7 +139,7 @@ def scan_due_subscriptions(
 ) -> ScanResult:
     """扫描到期订阅；每个订阅在一个事务内创建 Report、Version 和 Agent Run。"""
 
-    now_utc = _utc(now or datetime.now(timezone.utc)).replace(tzinfo=None)
+    now_utc = _utc(now or datetime.now(UTC)).replace(tzinfo=None)
     with session_factory() as session:
         due_ids = [
             row[0]
@@ -294,7 +292,7 @@ def _schedule_subscription(subscription_id: str, *, now: datetime, session_facto
                     "reportId": report.id,
                 },
             )
-            for order, (item, item_plan) in enumerate(zip(template.sections_json or [], plan), start=1):
+            for order, (item, item_plan) in enumerate(zip(template.sections_json or [], plan, strict=False), start=1):
                 session.add(
                     ReportSection(
                         id=new_id("rps"),
@@ -370,7 +368,7 @@ def validate_generated_version(
         "passed": not hard_errors,
         "hardErrors": hard_errors,
         "warnings": warnings,
-        "checkedAt": datetime.now(timezone.utc).isoformat(),
+        "checkedAt": datetime.now(UTC).isoformat(),
         "ruleVersion": "weekly-report-validation-v2",
         "rules": structured_validation["rules"] if structured_validation else [],
     }

@@ -28,7 +28,6 @@ from app.reports.repository import (
     resolve_audience_scope,
 )
 
-
 SOURCE_LABELS = {
     "report-agent": "周报 Agent",
     "admin": "管理员公告",

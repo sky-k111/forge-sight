@@ -35,7 +35,6 @@ from app.reports.repository import (
     resolve_audience_scope,
 )
 
-
 DELIVERY_STATUSES = {
     "queued",
     "sending",

@@ -17,8 +17,8 @@ from app.api import (
     messages,
     model_governance,
     modeling,
-    overview,
     operations,
+    overview,
     reports,
     resources,
     retrieval,
@@ -32,16 +32,17 @@ log = logging.getLogger(__name__)
 
 
 def create_platform_tables():
-    from app.auth.deps import validate_email_gate_configuration
+    from app.auth.deps import validate_email_gate_configuration, validate_security_configuration
 
+    validate_security_configuration()
     validate_email_gate_configuration()
     Base.metadata.create_all(platform_engine)
     # 确保默认数据源存在；资源目录为空时自动做首次元数据扫描
     from app.db.models import DataTable
     from app.db.platform import PlatformSession
+    from app.knowledge.seed import seed_knowledge
     from app.metadata.datasources import seed_default_source
     from app.metadata.scanner import scan_default_source
-    from app.knowledge.seed import seed_knowledge
     from app.reports.templates import seed_report_templates
 
     seed_default_source()

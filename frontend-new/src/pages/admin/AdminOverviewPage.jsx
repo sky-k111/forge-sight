@@ -3,7 +3,6 @@ import { useOutletContext } from "react-router-dom";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
 import { Card, ErrorNotice, PageFrame, RouteSkeleton, SectionHeader, StatusPill } from "../../components/ui";
-import { Sparkline } from "../../components/charts";
 import { getAdminOverview } from "../../api/overview";
 
 const healthTones = {
@@ -11,13 +10,6 @@ const healthTones = {
   teal: "bg-teal-soft text-teal",
   violet: "bg-violet/8 text-violet",
   green: "bg-green/8 text-green",
-};
-
-const sparkTones = {
-  blue: "text-primary",
-  teal: "text-teal",
-  violet: "text-violet",
-  green: "text-green",
 };
 
 export default function AdminOverviewPage() {
@@ -46,14 +38,14 @@ export default function AdminOverviewPage() {
       <section className="flex flex-wrap items-end justify-between gap-6">
         <div className="min-w-0">
           <span className="text-[11px] font-semibold tracking-wide text-faint">今日治理待办</span>
-          <h2 className="mt-1.5 text-xl font-semibold tracking-tight text-ink">3 类治理事项</h2>
-          <p className="mt-1.5 text-body text-muted">3 个指标待审核 · 2 个字段待映射 · 1 条拦截记录待复核</p>
+          <h2 className="mt-1.5 text-xl font-semibold tracking-tight text-ink">{data.summary.categoryCount} 类治理事项</h2>
+          <p className="mt-1.5 text-body text-muted">{data.summary.detail}</p>
         </div>
         <div className="flex items-center gap-2.5 rounded-card border border-line bg-surface px-3.5 py-2.5 shadow-card">
-          <span className="h-[7px] w-[7px] rounded-full bg-green ring-2 ring-green/15" />
+          <span className={cn("h-[7px] w-[7px] rounded-full ring-2", data.summary.categoryCount === 0 ? "bg-green ring-green/15" : "bg-amber ring-amber/15")} />
           <div>
-            <strong className="block text-xs font-semibold text-ink">治理基线正常</strong>
-            <small className="text-[10px] text-faint">最后巡检 10:36</small>
+            <strong className="block text-xs font-semibold text-ink">{data.summary.baseline}</strong>
+            <small className="text-[10px] text-faint">最后巡检 {data.summary.lastCheck || "—"}</small>
           </div>
         </div>
       </section>
@@ -74,13 +66,7 @@ export default function AdminOverviewPage() {
             </div>
             <span className="mt-3 block text-[11px] text-muted">{item.label}</span>
             <strong className="mt-1 block font-mono text-2xl font-semibold tracking-tight text-ink">{item.value}</strong>
-            <div className="mt-1.5 flex items-end justify-between gap-3">
-              <span className="min-w-0">
-                <small className="block truncate text-[11px] text-faint">{item.note}</small>
-                <small className="mt-0.5 block font-mono text-[10px] text-faint">{item.delta}</small>
-              </span>
-              <Sparkline data={item.trend} className={cn("shrink-0", sparkTones[item.tone] ?? sparkTones.blue)} />
-            </div>
+            <small className="mt-1.5 block truncate text-[11px] text-faint">{item.note}</small>
           </button>
         ))}
       </div>
@@ -120,10 +106,10 @@ export default function AdminOverviewPage() {
             ))}
           </div>
           <div className="grid grid-cols-3 gap-3 px-5 pb-5 pt-4">
-            {[["生产主题", "92%"], ["质量主题", "96%"], ["设备主题", "84%"]].map(([label, value]) => (
-              <div key={label} className="rounded-control border border-line px-3 py-2.5">
-                <span className="block text-[11px] text-muted">{label}</span>
-                <strong className="mt-0.5 block font-mono text-lg font-semibold tracking-tight text-ink">{value}</strong>
+            {data.topics.map((item) => (
+              <div key={item.name} className="rounded-control border border-line px-3 py-2.5">
+                <span className="block text-[11px] text-muted">{item.name}主题</span>
+                <strong className="mt-0.5 block font-mono text-lg font-semibold tracking-tight text-ink">{item.coverage}%</strong>
               </div>
             ))}
           </div>

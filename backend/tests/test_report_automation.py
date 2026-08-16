@@ -1,6 +1,6 @@
 """R 智能周报：调度、编排、校验和自动发布。"""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.db.models import (
     AnalysisArtifact,
@@ -17,8 +17,7 @@ from app.db.models import (
 from app.reports import automation, service
 from app.reports.templates import seed_report_templates
 
-
-UTC = timezone.utc
+UTC = UTC
 
 
 def _subscription(session_factory, *, next_run_at: datetime) -> str:

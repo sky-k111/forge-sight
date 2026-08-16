@@ -6,14 +6,13 @@ import pytest
 
 from app.modeling.engine import (
     ALGORITHMS,
-    MIN_SAMPLE_COUNT,
+    ModelingEngineError,
     encode_input_record,
     evaluate_model,
     extract_importance,
     prepare_dataset,
     summarize_metric,
     train_model,
-    ModelingEngineError,
 )
 
 

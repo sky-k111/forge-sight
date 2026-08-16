@@ -7,8 +7,8 @@ from app.db.models import GovernedModel, ModelingInferenceLog, ModelingTask
 from app.modeling import service as modeling_service
 from app.modeling.contracts import ModelingTaskCreate
 from app.modeling.service import (
-    ModelNotFoundError,
     ModelingError,
+    ModelNotFoundError,
     TaskNotTrainedError,
     create_task,
     get_evaluation,

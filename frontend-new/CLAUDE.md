@@ -8,7 +8,7 @@
 ## 项目类型
 - 主类型：web-app（data-dashboard + ai-agent 展示型前端）
 - 复杂度：medium
-- 定位：A07 企业数据底座智能问析 Agent 平台前端。**大部分模块已接入真实 FastAPI 后端**（数据源/资源/知识/安全/问析/报告/建模），业务主线无 mock 残留；仅 `api/overview.js` 的管理端健康/治理队列仍是 mock 占位
+- 定位：A07 企业数据底座智能问析 Agent 平台前端。**全部业务与治理模块已接入真实 FastAPI 后端**（数据源/资源/知识/安全/问析/报告/建模/管理端治理总览），无 mock 残留
 
 ## 必读上下文
 修改代码前，必须先阅读以下文件（按任务相关性）：
@@ -29,7 +29,7 @@ src/
   app/                # 路由装配（routeConfig.js、AppRouter.jsx）
   api/                # HTTP 客户端层，页面获取数据的唯一入口
     _http.js          # 真实后端访问基座（httpGet/httpPost，BASE = VITE_API_BASE ?? http://127.0.0.1:8000）
-    _client.js        # 仅 overview.js 使用的 mock 响应工具
+    overview.js       # 业务总览 /api/overview 与管理端治理总览 /api/overview/admin
     modeling.js       # 智能建模/模型治理 API（/api/v1/modeling/*、/api/v1/model-governance/*）
     reports.js        # 报告 API，真实模块的代码风格参考
   mocks/              # mock 数据源，仅允许被 src/api/ 引用

@@ -127,9 +127,10 @@ export default function KnowledgePage() {
       setError(nextError);
     }
   };
+  // 仅挂载时加载一次；重试通过 onRetry={load} 手动触发
   useEffect(() => {
     load();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshMetrics = async (selectId) => {
     const metrics = await listMetrics({ sourceId: currentSourceId });

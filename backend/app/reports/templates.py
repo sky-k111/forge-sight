@@ -5,7 +5,6 @@ from __future__ import annotations
 from app.db.models import ReportTemplate
 from app.db.platform import PlatformSession
 
-
 REPORT_TEMPLATES = [
     {
         "id": "tpl-operations-weekly",

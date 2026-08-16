@@ -2,15 +2,15 @@
 
 import pytest
 
+from app.reports.contracts import SubscriptionCreate
 from app.reports.domain import (
-    ReportSectionStatus,
-    ReportVersionStatus,
     InvalidReportTransition,
     PublishedVersionImmutable,
+    ReportSectionStatus,
+    ReportVersionStatus,
     ensure_version_mutable,
     transition_report_status,
 )
-from app.reports.contracts import SubscriptionCreate
 
 
 def test_report_can_reach_published_without_manual_review_state():

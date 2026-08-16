@@ -76,7 +76,8 @@ export default function OverviewPage() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  // 仅挂载时加载一次；重试通过 onRetry={load} 手动触发
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectSource = async (nextSource) => {
     setPickerOpen(false);

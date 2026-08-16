@@ -17,12 +17,12 @@ from app.db.models import (
     DomainEventOutbox,
     Message,
     OrganizationUnit,
+    PlatformUser,
     Report,
     ReportDelivery,
     ReportFile,
     ReportVersion,
     UserMembership,
-    PlatformUser,
 )
 from app.reports.domain import PublishedVersionImmutable, ensure_version_mutable
 from app.reports.schema import content_checksum as compute_content_checksum

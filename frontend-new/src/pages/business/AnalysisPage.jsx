@@ -20,11 +20,11 @@ import { initialAnalysisRuntime, reduceAnalysisEvent } from "../../features/anal
 import { adaptAnalysisRun } from "../../features/analysis/runViewAdapter";
 import AnalysisAdjustmentPanel from "../../features/analysis/AnalysisAdjustmentPanel";
 import { buildTracePath, getTraceFitTransform } from "./traceGraphLayout";
+import { waitForAgentThinking } from "./analysisThinking";
 import { currentUserId } from "../../lib/auth";
 
 const USER_ID = currentUserId;
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "blocked", "cancelled"]);
-export const AGENT_THINKING_DELAY_MS = 1500;
 const EVIDENCE_PANEL_MIN_WIDTH = 320;
 const EVIDENCE_PANEL_DEFAULT_WIDTH = 400;
 const EVIDENCE_PANEL_COLLAPSED_WIDTH = 56;
@@ -34,10 +34,6 @@ const ANALYSIS_DRAFT_KEY = "forgesight:analysis-draft";
 const MODELING_DRAFT_KEY = "forgesight:modeling-draft";
 const ANALYSIS_SESSION_KEY = "forgesight:analysis-session-id";
 const ANALYSIS_SESSION_SELECTED_EVENT = "forgesight:analysis-session-selected";
-
-export function waitForAgentThinking() {
-  return new Promise((resolve) => window.setTimeout(resolve, AGENT_THINKING_DELAY_MS));
-}
 
 export default function AnalysisPage() {
   const { evidenceOpen, setEvidenceOpen, navigatePage, refreshSessions } = useOutletContext();
@@ -252,13 +248,15 @@ export default function AnalysisPage() {
   useEffect(() => {
     load();
     const handleSessionSelected = () => load();
+    const subscriptions = subscriptionsRef.current;
+    const refreshTimers = refreshTimersRef.current;
     window.addEventListener(ANALYSIS_SESSION_SELECTED_EVENT, handleSessionSelected);
     return () => {
       window.removeEventListener(ANALYSIS_SESSION_SELECTED_EVENT, handleSessionSelected);
-      subscriptionsRef.current.forEach((unsubscribe) => unsubscribe());
-      subscriptionsRef.current.clear();
-      refreshTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-      refreshTimersRef.current.clear();
+      subscriptions.forEach((unsubscribe) => unsubscribe());
+      subscriptions.clear();
+      refreshTimers.forEach((timer) => window.clearTimeout(timer));
+      refreshTimers.clear();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(scrollToBottom, [messages, pending]);

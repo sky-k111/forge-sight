@@ -21,8 +21,8 @@ from app.db.models import (
 )
 from app.messages.service import (
     AnnouncementConflict,
-    create_announcement,
     consume_published_event,
+    create_announcement,
     expire_announcements,
     get_user_message,
     list_user_messages,

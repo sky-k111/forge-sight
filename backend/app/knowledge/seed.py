@@ -19,7 +19,6 @@ from app.db.models import (
 )
 from app.db.platform import PlatformSession
 
-
 TOPICS = [
     {"code": "PROD", "name": "生产分析", "color": "blue", "description": "工单、产线、工序和产量趋势", "coverage": 92},
     {"code": "QUAL", "name": "质量分析", "color": "teal", "description": "检验、缺陷、不良品与质量趋势", "coverage": 96},

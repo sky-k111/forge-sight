@@ -13,7 +13,6 @@ from zoneinfo import ZoneInfo
 
 from app.agent.ids import new_id
 
-
 ANALYSIS_VERBS = (
     "分析", "统计", "比较", "对比", "查找", "查询", "找出", "查看", "计算", "汇总", "排名",
     "排行", "趋势", "相关", "分布", "占比", "生成", "识别",

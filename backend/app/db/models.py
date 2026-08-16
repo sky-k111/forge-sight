@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -10,7 +11,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    JSON,
     Numeric,
     String,
     Text,
@@ -21,7 +21,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.platform import Base
-
 
 # PostgreSQL 使用可索引的 JSONB，测试环境 SQLite 退化为标准 JSON。
 JSON_TYPE = JSON().with_variant(JSONB, "postgresql")
