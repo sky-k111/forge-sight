@@ -16,7 +16,6 @@ import {
   submitAnalysisRun,
   subscribeAnalysisRun,
 } from "../../features/analysis/api";
-import { initialAnalysisRuntime, reduceAnalysisEvent } from "../../features/analysis/eventReducer";
 import { adaptAnalysisRun } from "../../features/analysis/runViewAdapter";
 import AnalysisAdjustmentPanel from "../../features/analysis/AnalysisAdjustmentPanel";
 import { buildTracePath, getTraceFitTransform } from "./traceGraphLayout";
@@ -64,8 +63,9 @@ export default function AnalysisPage() {
   const [scopeOpen, setScopeOpen] = useState(false);
   const scrollRef = useRef(null);
   const subscriptionsRef = useRef(new Map());
-  const runtimesRef = useRef(new Map());
   const refreshTimersRef = useRef(new Map());
+  const [clarifySubmitting, setClarifySubmitting] = useState(false);
+  const [clarifyError, setClarifyError] = useState(null);
 
   const evidenceMaxWidth = Math.max(EVIDENCE_PANEL_MIN_WIDTH, viewportWidth - 252 - 480);
   const effectiveEvidenceWidth = Math.min(evidenceWidth, evidenceMaxWidth);
@@ -119,7 +119,8 @@ export default function AnalysisPage() {
       next[existingIndex] = { ...next[existingIndex], run, animate: false };
       return next;
     });
-    setEvidenceRun((current) => current?.id === run.id || TERMINAL_STATUSES.has(run.status) ? run : current);
+    // 仅当面板正在展示该 run（或尚无面板）时更新，避免后台 run 到达终态抢占当前证据链。
+    setEvidenceRun((current) => (current == null || current.id === run.id) ? run : current);
     if (TERMINAL_STATUSES.has(run.status)) setBusy(false);
     else if (["queued", "running", "retrying", "clarifying"].includes(run.status)) setBusy(true);
     return run;
@@ -144,30 +145,9 @@ export default function AnalysisPage() {
 
   const watchRun = (runId) => {
     if (subscriptionsRef.current.has(runId)) return;
-    if (typeof EventSource === "undefined") {
-      const poll = window.setInterval(async () => {
-        try {
-          const snapshot = await getAnalysisRun(runId);
-          upsertRun(snapshot);
-          if (TERMINAL_STATUSES.has(snapshot.status)) {
-            window.clearInterval(poll);
-            subscriptionsRef.current.delete(runId);
-          }
-        } catch {
-          // 下一轮轮询继续尝试，避免瞬时网络问题覆盖真实 Run 状态。
-        }
-      }, 350);
-      subscriptionsRef.current.set(runId, () => window.clearInterval(poll));
-      return;
-    }
-    const runtime = runtimesRef.current.get(runId) ?? { ...initialAnalysisRuntime, seenEventIds: new Set() };
-    runtimesRef.current.set(runId, runtime);
     const unsubscribe = subscribeAnalysisRun(runId, {
-      onEvent: (event) => {
-        const next = reduceAnalysisEvent(runtimesRef.current.get(runId), event);
-        runtimesRef.current.set(runId, next);
-        scheduleRefresh(runId);
-      },
+      // SSE 推送仅作变更通知：收到新事件/断流后触发一次全量快照刷新。
+      onEvent: () => scheduleRefresh(runId),
       onError: () => scheduleRefresh(runId),
     });
     subscriptionsRef.current.set(runId, unsubscribe);
@@ -176,6 +156,11 @@ export default function AnalysisPage() {
   const load = async () => {
     setLoadError(null);
     setMessages(null);
+    // 切换数据源/会话前先停掉旧 run 的订阅，避免旧分析串入新会话。
+    subscriptionsRef.current.forEach((unsubscribe) => unsubscribe());
+    subscriptionsRef.current.clear();
+    refreshTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    refreshTimersRef.current.clear();
     try {
       const sources = await listSources();
       setAvailableSources(sources);
@@ -263,44 +248,68 @@ export default function AnalysisPage() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(scrollToBottom, [messages, pending]);
 
+  const acceptRun = async (accepted, text) => {
+    setActiveSession((current) => current ? { ...current, title: text } : current);
+    refreshSessions?.(activeSession.id);
+    const immediateTerminal = TERMINAL_STATUSES.has(accepted.status);
+    const placeholder = adaptAnalysisRun({
+      id: accepted.runId,
+      sessionId: activeSession.id,
+      sourceId: activeSource?.id,
+      question: text,
+      status: immediateTerminal ? "running" : accepted.status,
+      tasks: [], steps: [], artifacts: [], checkpoints: [], usage: {},
+    });
+    setBusy(true);
+    setMessages((current) => [...current, { id: accepted.runId, role: "assistant", run: placeholder, animate: false }]);
+    if (immediateTerminal) {
+      await waitForAgentThinking();
+      await refreshRun(accepted.runId);
+    } else {
+      watchRun(accepted.runId);
+      await refreshRun(accepted.runId);
+    }
+  };
+
   const submit = async (prompt = query) => {
     const text = prompt.trim();
     if (!text || pending || busy || messages == null || !activeSession) return;
+    const idempotencyKey = crypto.randomUUID();
     const time = new Date().toTimeString().slice(0, 5);
     setMessages((current) => [...current, { id: `user-${Date.now()}`, role: "user", text, time }]);
     setQuery("");
     setBranchNotice("");
     setPending(true);
     try {
-      const accepted = await submitAnalysisRun(activeSession.id, text);
-      setActiveSession((current) => current ? { ...current, title: text } : current);
-      refreshSessions?.(activeSession.id);
-      const immediateTerminal = TERMINAL_STATUSES.has(accepted.status);
-      const placeholder = adaptAnalysisRun({
-        id: accepted.runId,
-        sessionId: activeSession.id,
-        sourceId: activeSource?.id,
-        question: text,
-        status: immediateTerminal ? "running" : accepted.status,
-        tasks: [], steps: [], artifacts: [], checkpoints: [], usage: {},
-      });
-      setBusy(true);
-      setMessages((current) => [...current, { id: accepted.runId, role: "assistant", run: placeholder, animate: false }]);
-      if (immediateTerminal) {
-        await waitForAgentThinking();
-        await refreshRun(accepted.runId);
-      } else {
-        watchRun(accepted.runId);
-        await refreshRun(accepted.runId);
-      }
+      const accepted = await submitAnalysisRun(activeSession.id, text, idempotencyKey);
+      await acceptRun(accepted, text);
     } catch {
-      setMessages((current) => [...current, { id: `error-${Date.now()}`, role: "assistant", failed: true }]);
+      // 失败时保留问题文字与幂等键，便于用同一 key 重试而不产生重复 run。
+      setMessages((current) => [...current, { id: `error-${Date.now()}`, role: "assistant", failed: true, retry: { text, idempotencyKey } }]);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const retryFailed = async (message) => {
+    const { text, idempotencyKey } = message.retry ?? {};
+    if (!text || !idempotencyKey || pending || busy || !activeSession) return;
+    setBranchNotice("");
+    setPending(true);
+    setMessages((current) => current.filter((item) => item.id !== message.id));
+    try {
+      const accepted = await submitAnalysisRun(activeSession.id, text, idempotencyKey);
+      await acceptRun(accepted, text);
+    } catch {
+      setMessages((current) => [...current, { id: `error-${Date.now()}`, role: "assistant", failed: true, retry: { text, idempotencyKey } }]);
     } finally {
       setPending(false);
     }
   };
 
   const clarify = async (_messageId, option, interactionId) => {
+    setClarifySubmitting(true);
+    setClarifyError(null);
     setBusy(true);
     try {
       const value = typeof option === "string"
@@ -315,7 +324,10 @@ export default function AnalysisPage() {
         await refreshRun(resumed.runId);
       }
     } catch {
+      setClarifyError("回答提交失败，请重试。");
       setBusy(false);
+    } finally {
+      setClarifySubmitting(false);
     }
   };
 
@@ -450,6 +462,15 @@ export default function AnalysisPage() {
                       ) : message.failed ? (
                         <div className="mt-1.5 rounded-card border border-red/25 bg-red-soft px-3.5 py-3 text-xs text-ink-2">
                           分析请求发送失败，请稍后重试。
+                          {message.retry && (
+                            <button
+                              type="button"
+                              onClick={() => retryFailed(message)}
+                              className="mt-2 inline-flex cursor-pointer items-center gap-1 rounded-control px-2 py-1 text-xs font-semibold text-red transition-colors hover:bg-red/10"
+                            >
+                              <Icon name="refresh" size={14} />重试
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <AssistantRunMessage
@@ -460,6 +481,8 @@ export default function AnalysisPage() {
                           onClarify={(option, interactionId) => clarify(message.id, option, interactionId)}
                           onFollowUp={(text) => submit(text)}
                           onOpenModeling={() => navigatePage("modeling")}
+                          clarifySubmitting={clarifySubmitting}
+                          clarifyError={clarifyError}
                         />
                       )}
                     </div>
@@ -792,11 +815,11 @@ function UserMessage({ text }) {
   );
 }
 
-function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClarify, onFollowUp, onOpenModeling }) {
+function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClarify, onFollowUp, onOpenModeling, clarifySubmitting = false, clarifyError = null }) {
   const hasEvidence = Boolean(run.plan?.length || run.artifacts?.length || run.checkpoints?.length);
   const openEvidence = hasEvidence ? () => onOpenEvidence(run) : null;
   if (run.status === "blocked") return <BlockedCard error={run.error} onOpenEvidence={openEvidence} />;
-  if (run.status === "clarifying") return <ClarifyCard clarification={run.clarification} onSelect={onClarify} />;
+  if (run.status === "clarifying") return <ClarifyCard clarification={run.clarification} onSelect={onClarify} submitting={clarifySubmitting} error={clarifyError} />;
   if (run.status === "failed" || run.status === "cancelled") return <FailedRunCard run={run} onOpenEvidence={openEvidence} />;
   if (["queued", "running", "retrying"].includes(run.status)) {
     const livePlan = run.plan?.length ? run.plan : [{ id: "accepted", label: "正在理解业务问题", caption: "任务已进入可靠执行队列" }];
@@ -874,13 +897,20 @@ function BlockedCard({ error, onOpenEvidence }) {
   );
 }
 
-function ClarifyCard({ clarification, onSelect }) {
+function ClarifyCard({ clarification, onSelect, submitting = false, error = null }) {
   const [chosen, setChosen] = useState(null);
   const [answers, setAnswers] = useState({});
   const [customFields, setCustomFields] = useState({});
   const fields = clarification.fields ?? [];
+
+  useEffect(() => {
+    setChosen(null);
+    setAnswers({});
+    setCustomFields({});
+  }, [clarification.interactionId]);
+
   const choose = (option) => {
-    if (chosen) return;
+    if (submitting) return;
     setChosen(option);
     onSelect(option, clarification.interactionId);
   };
@@ -895,7 +925,7 @@ function ClarifyCard({ clarification, onSelect }) {
   };
   const canSubmitFields = fields.length > 0 && fields.every((field) => String(answers[field.id] ?? "").trim());
   const submitFields = () => {
-    if (!canSubmitFields || chosen) return;
+    if (!canSubmitFields || submitting) return;
     setChosen({ label: "已确认", value: answers });
     onSelect(answers, clarification.interactionId);
   };
@@ -918,7 +948,7 @@ function ClarifyCard({ clarification, onSelect }) {
                       type="button"
                       key={option.value}
                       onClick={() => chooseFieldOption(field.id, option.value)}
-                      disabled={chosen != null}
+                      disabled={submitting}
                       className={cn("flex w-full cursor-pointer items-center gap-2.5 rounded-tag px-2.5 py-2 text-left text-xs transition-colors disabled:cursor-not-allowed", selected ? "bg-primary-soft text-primary" : "text-ink-2 hover:bg-surface-2 disabled:opacity-55")}
                     >
                       <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-[3px] border", selected ? "border-primary bg-primary text-white" : "border-line-strong bg-surface text-transparent")}><Icon name="check" size={11} strokeWidth={2.4} /></span>
@@ -931,7 +961,7 @@ function ClarifyCard({ clarification, onSelect }) {
                     <button
                       type="button"
                       onClick={() => enableCustomField(field.id)}
-                      disabled={chosen != null}
+                      disabled={submitting}
                       className={cn("flex w-full cursor-pointer items-center gap-2.5 rounded-tag px-2.5 py-2 text-left text-xs transition-colors disabled:cursor-not-allowed", customFields[field.id] ? "bg-primary-soft text-primary" : "text-ink-2 hover:bg-surface-2 disabled:opacity-55")}
                     >
                       <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-[3px] border", customFields[field.id] ? "border-primary bg-primary text-white" : "border-line-strong bg-surface text-transparent")}><Icon name="check" size={11} strokeWidth={2.4} /></span>
@@ -943,7 +973,7 @@ function ClarifyCard({ clarification, onSelect }) {
                           autoFocus
                           value={answers[field.id] ?? ""}
                           onChange={(event) => setField(field.id, event.target.value)}
-                          disabled={chosen != null}
+                          disabled={submitting}
                           placeholder={`输入${field.label}`}
                           className="h-8 w-full rounded-tag border border-line bg-surface px-2.5 text-xs text-ink outline-none transition placeholder:text-faint focus:border-primary/40 focus:ring-2 focus:ring-primary/10 disabled:opacity-55"
                         />
@@ -955,7 +985,7 @@ function ClarifyCard({ clarification, onSelect }) {
             </section>
           ))}
           <div className="mt-3 flex justify-end">
-            <Button size="sm" onClick={submitFields} disabled={!canSubmitFields || chosen != null}>确认继续 <Icon name="arrow" size={14} /></Button>
+            <Button size="sm" onClick={submitFields} disabled={!canSubmitFields || submitting}>确认继续 <Icon name="arrow" size={14} /></Button>
           </div>
         </div>
       ) : (
@@ -965,7 +995,7 @@ function ClarifyCard({ clarification, onSelect }) {
             type="button"
             key={option.value}
             onClick={() => choose(option)}
-            disabled={chosen != null}
+            disabled={submitting}
             className={cn(
               "cursor-pointer rounded-full border px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed",
               chosen?.value === option.value
@@ -978,7 +1008,8 @@ function ClarifyCard({ clarification, onSelect }) {
           ))}
         </div>
       )}
-      {chosen && <p className="mt-2.5 text-[11px] text-faint">已选择「{chosen.label}」，正在按该口径继续分析…</p>}
+      {error && <p className="mt-2.5 text-[11px] leading-relaxed text-red">{error}</p>}
+      {chosen && !error && <p className="mt-2.5 text-[11px] text-faint">已选择「{chosen.label}」，正在按该口径继续分析…</p>}
     </div>
   );
 }
