@@ -34,7 +34,7 @@ SMALLTALK_PATTERNS = (
     re.compile(r"(?:想.*聊|压力|心情|难过|焦虑|烦恼|陪我|表现不好)"),
 )
 _CLOCK_QUERY_PATTERN = re.compile(
-    r"^(?:请问|麻烦问一下)?(?:现在|当前|今天)?\s*(?:几点(?:了)?|几时|时间(?:是.*)?)?[？?！!。\s]*$"
+    r"(?:现在|当前|今天).{0,8}(?:几点|几时|时间)|(?:几点|几时).{0,8}(?:现在|当前|今天)"
 )
 _REPORT_TERMS = ("周报", "月报", "专题报告", "报告", "报表")
 _REPORT_REQUEST_PATTERNS = (
@@ -115,7 +115,7 @@ def is_report_request(text: str) -> bool:
 
 
 def _is_known_conversation(text: str) -> bool:
-    return _is_report_request(text) or bool(_CLOCK_QUERY_PATTERN.fullmatch(text)) or any(
+    return _is_report_request(text) or bool(_CLOCK_QUERY_PATTERN.search(text)) or any(
         pattern.search(text) for pattern in (*SMALLTALK_PATTERNS, *OUT_OF_SCOPE_PATTERNS)
     )
 
@@ -141,10 +141,10 @@ def classify_request_kind(
     # a misleading no-data error.
     if _is_report_request(normalized):
         return "conversation"
-    if _has_analysis_verb(normalized) or any(term in normalized for term in BUSINESS_TERMS):
-        return "analysis"
     if _is_known_conversation(normalized):
         return "conversation"
+    if _has_analysis_verb(normalized) or any(term in normalized for term in BUSINESS_TERMS):
+        return "analysis"
     history = conversation_context or []
     previous_user_text = next(
         (
@@ -250,7 +250,7 @@ def build_conversation_response(parts: list[str], *, mixed: bool = False) -> str
 
 def build_smalltalk_response(text: str) -> str:
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
-    if _CLOCK_QUERY_PATTERN.fullmatch(normalized):
+    if _CLOCK_QUERY_PATTERN.search(normalized):
         now = datetime.now(ZoneInfo("Asia/Shanghai"))
         return f"现在是北京时间 {now:%Y 年 %m 月 %d 日 %H:%M}。"
     if _is_report_request(normalized):

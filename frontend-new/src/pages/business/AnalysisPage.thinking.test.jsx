@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AGENT_THINKING_DELAY_MS, waitForAgentThinking } from "./AnalysisPage";
+import { AGENT_THINKING_DELAY_MS, isConversationRun, waitForAgentThinking } from "./AnalysisPage";
 
 describe("agent response thinking delay", () => {
   afterEach(() => {
@@ -18,5 +18,10 @@ describe("agent response thinking delay", () => {
     await vi.advanceTimersByTimeAsync(1);
     await pending;
     expect(resolved).toBe(true);
+  });
+
+  test("keeps ordinary conversation out of the analysis evidence panel", () => {
+    expect(isConversationRun({ result: { kind: "conversation" } })).toBe(true);
+    expect(isConversationRun({ result: { kind: "execution" } })).toBe(false);
   });
 });

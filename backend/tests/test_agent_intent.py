@@ -23,12 +23,11 @@ def test_obvious_smalltalk_is_routed_away_from_analysis():
 
 
 def test_current_time_question_is_answered_without_the_chat_model():
-    assert classify_request_kind("现在几点了？") == "conversation"
-
-    response = build_smalltalk_response("现在几点了？")
-
-    assert "北京时间" in response
-    assert "无法直接获取" not in response
+    for question in ("现在几点了？", "你知道现在几点吗？", "当前时间是多少？"):
+        assert classify_request_kind(question) == "conversation"
+        response = build_smalltalk_response(question)
+        assert "北京时间" in response
+        assert "无法直接获取" not in response
 
 
 def test_bare_report_request_asks_for_report_scope_instead_of_entering_data_analysis():

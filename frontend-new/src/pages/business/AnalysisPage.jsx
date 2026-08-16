@@ -39,6 +39,10 @@ export function waitForAgentThinking() {
   return new Promise((resolve) => window.setTimeout(resolve, AGENT_THINKING_DELAY_MS));
 }
 
+export function isConversationRun(run) {
+  return run?.result?.kind === "conversation";
+}
+
 export default function AnalysisPage() {
   const { evidenceOpen, setEvidenceOpen, navigatePage, refreshSessions } = useOutletContext();
   const [messages, setMessages] = useState(null);
@@ -120,8 +124,13 @@ export default function AnalysisPage() {
       next[existingIndex] = { ...next[existingIndex], run, animate: false };
       return next;
     });
-    // 仅当面板正在展示该 run（或尚无面板）时更新，避免后台 run 到达终态抢占当前证据链。
-    setEvidenceRun((current) => (current == null || current.id === run.id) ? run : current);
+    if (isConversationRun(run)) {
+      setEvidenceRun(null);
+      setEvidenceOpen(false);
+    } else {
+      // 仅当面板正在展示该 run（或尚无面板）时更新，避免后台 run 到达终态抢占当前证据链。
+      setEvidenceRun((current) => (current == null || current.id === run.id) ? run : current);
+    }
     if (TERMINAL_STATUSES.has(run.status)) setBusy(false);
     else if (["queued", "running", "retrying", "clarifying"].includes(run.status)) setBusy(true);
     return run;
@@ -263,6 +272,7 @@ export default function AnalysisPage() {
       question: text,
       status: immediateTerminal || needsCardData ? "running" : accepted.status,
       tasks: [], steps: [], artifacts: [], checkpoints: [], usage: {},
+      conversationPending: immediateTerminal,
     });
     setBusy(true);
     setMessages((current) => [...current, { id: accepted.runId, role: "assistant", run: placeholder, animate: false }]);
@@ -827,6 +837,7 @@ function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClari
   if (run.status === "failed" || run.status === "cancelled") return <FailedRunCard run={run} onOpenEvidence={openEvidence} />;
   if (run.status === "modeling-proposal" && run.proposal) return <ModelingProposalCard proposal={run.proposal} runId={run.id} onOpenModeling={onOpenModeling} />;
   if (run.report?.id) return <ReportGenerationMessage report={run.report} />;
+  if (run.conversationPending) return <ConversationThinking />;
   // 澄清/建模提案在缺少 interaction/proposal 数据（如占位快照或异常快照）时按“运行中”兜底，避免空数据卡片抛错。
   if (["queued", "running", "retrying", "clarifying", "modeling-proposal"].includes(run.status)) {
     const livePlan = run.plan?.length ? run.plan : [{ id: "accepted", label: "正在理解业务问题", caption: "任务已进入可靠执行队列" }];
@@ -1231,6 +1242,16 @@ function RunningAnalysis({ completed, plan }) {
         ))}
       </div>
     </Card>
+  );
+}
+
+function ConversationThinking() {
+  return (
+    <div className="mt-2 flex items-center gap-1.5 px-2 py-2 text-muted" role="status" aria-label="Agent 正在思考">
+      {[0, 1, 2].map((dot) => (
+        <span key={dot} className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" style={{ animationDelay: `${dot * 160}ms` }} />
+      ))}
+    </div>
   );
 }
 
