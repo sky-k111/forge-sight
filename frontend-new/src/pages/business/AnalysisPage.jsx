@@ -252,12 +252,15 @@ export default function AnalysisPage() {
     setActiveSession((current) => current ? { ...current, title: text } : current);
     refreshSessions?.(activeSession.id);
     const immediateTerminal = TERMINAL_STATUSES.has(accepted.status);
+    // 澄清（waiting_user）/建模提案（modeling_proposal）需要 interaction/proposal 数据才能渲染对应卡片，
+    // 而验收响应只回 runId/status；占位快照缺这些数据，先按“运行中”展示，待 refreshRun 拉取全量快照后再切换。
+    const needsCardData = ["waiting_user", "modeling_proposal"].includes(accepted.status);
     const placeholder = adaptAnalysisRun({
       id: accepted.runId,
       sessionId: activeSession.id,
       sourceId: activeSource?.id,
       question: text,
-      status: immediateTerminal ? "running" : accepted.status,
+      status: immediateTerminal || needsCardData ? "running" : accepted.status,
       tasks: [], steps: [], artifacts: [], checkpoints: [], usage: {},
     });
     setBusy(true);
@@ -819,14 +822,15 @@ function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClari
   const hasEvidence = Boolean(run.plan?.length || run.artifacts?.length || run.checkpoints?.length);
   const openEvidence = hasEvidence ? () => onOpenEvidence(run) : null;
   if (run.status === "blocked") return <BlockedCard error={run.error} onOpenEvidence={openEvidence} />;
-  if (run.status === "clarifying") return <ClarifyCard clarification={run.clarification} onSelect={onClarify} submitting={clarifySubmitting} error={clarifyError} />;
+  if (run.status === "clarifying" && run.clarification) return <ClarifyCard clarification={run.clarification} onSelect={onClarify} submitting={clarifySubmitting} error={clarifyError} />;
   if (run.status === "failed" || run.status === "cancelled") return <FailedRunCard run={run} onOpenEvidence={openEvidence} />;
-  if (["queued", "running", "retrying"].includes(run.status)) {
+  if (run.status === "modeling-proposal" && run.proposal) return <ModelingProposalCard proposal={run.proposal} runId={run.id} onOpenModeling={onOpenModeling} />;
+  // 澄清/建模提案在缺少 interaction/proposal 数据（如占位快照或异常快照）时按“运行中”兜底，避免空数据卡片抛错。
+  if (["queued", "running", "retrying", "clarifying", "modeling-proposal"].includes(run.status)) {
     const livePlan = run.plan?.length ? run.plan : [{ id: "accepted", label: "正在理解业务问题", caption: "任务已进入可靠执行队列" }];
     const completed = livePlan.filter((step) => step.status === "succeeded").length;
     return <RunningAnalysis completed={Math.min(completed, livePlan.length - 1)} plan={livePlan} />;
   }
-  if (run.status === "modeling-proposal") return <ModelingProposalCard proposal={run.proposal} runId={run.id} onOpenModeling={onOpenModeling} />;
   if (run.result?.kind === "conversation") return <AssistantConversationMessage text={run.conclusion.text} />;
   return <RunFlow run={run} animate={animate} onComplete={onComplete} onOpenEvidence={onOpenEvidence} onFollowUp={onFollowUp} />;
 }
