@@ -6,6 +6,7 @@ import { Button, Card, ErrorNotice, StatusPill } from "../../components/ui";
 import { ChartLegend, ComboMetricChart, CorrelationScatterChart, MatrixHeatmapChart, RankBarChart, ShareDonutChart, TrendLineChart } from "../../components/charts";
 import { listSources } from "../../api/datasources";
 import { createModelingTask } from "../../api/modeling";
+import { getReport } from "../../api/reports";
 import {
   createAnalysisBranch,
   createAnalysisSession,
@@ -825,6 +826,7 @@ function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClari
   if (run.status === "clarifying" && run.clarification) return <ClarifyCard clarification={run.clarification} onSelect={onClarify} submitting={clarifySubmitting} error={clarifyError} />;
   if (run.status === "failed" || run.status === "cancelled") return <FailedRunCard run={run} onOpenEvidence={openEvidence} />;
   if (run.status === "modeling-proposal" && run.proposal) return <ModelingProposalCard proposal={run.proposal} runId={run.id} onOpenModeling={onOpenModeling} />;
+  if (run.report?.id) return <ReportGenerationMessage report={run.report} />;
   // 澄清/建模提案在缺少 interaction/proposal 数据（如占位快照或异常快照）时按“运行中”兜底，避免空数据卡片抛错。
   if (["queued", "running", "retrying", "clarifying", "modeling-proposal"].includes(run.status)) {
     const livePlan = run.plan?.length ? run.plan : [{ id: "accepted", label: "正在理解业务问题", caption: "任务已进入可靠执行队列" }];
@@ -833,6 +835,41 @@ function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClari
   }
   if (run.result?.kind === "conversation") return <AssistantConversationMessage text={run.conclusion.text} />;
   return <RunFlow run={run} animate={animate} onComplete={onComplete} onOpenEvidence={onOpenEvidence} onFollowUp={onFollowUp} />;
+}
+
+function ReportGenerationMessage({ report }) {
+  const [liveReport, setLiveReport] = useState(report);
+  const pending = !["published", "partial", "failed", "validation_failed"].includes(liveReport.status);
+
+  useEffect(() => {
+    if (!pending) return undefined;
+    const refresh = () => getReport(report.id).then((next) => setLiveReport((current) => ({ ...current, ...next }))).catch(() => {});
+    refresh();
+    const timer = window.setInterval(refresh, 1800);
+    return () => window.clearInterval(timer);
+  }, [report.id, pending]);
+
+  const steps = ["汇集周期指标", "编排图表与结论", "校验并投递邮箱"];
+  const finished = liveReport.status === "published";
+  return (
+    <Card className="report-generation-card motion-soft-rise mt-2 max-w-[520px] overflow-hidden p-0">
+      <div className="report-generation-card__bar" />
+      <div className="p-4">
+        <div className="flex items-start gap-3">
+          <span className="report-generation-card__orb grid h-9 w-9 shrink-0 place-items-center rounded-full text-primary"><Icon name="report" size={17} /></span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2"><strong className="text-body font-semibold text-ink">{finished ? "周报已生成" : "正在生成周报"}</strong>{pending && <span className="report-generation-card__dots" aria-label="正在生成"><i /><i /><i /></span>}</div>
+            <p className="mt-1 text-xs leading-5 text-muted">{liveReport.title || "本期经营周报"}</p>
+          </div>
+          <StatusPill tone={finished ? "green" : "blue"}>{finished ? "已投递" : "生成中"}</StatusPill>
+        </div>
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          {steps.map((step, index) => <div key={step} className={cn("rounded-control border px-2 py-2 text-center text-[11px] leading-4", pending && index === 1 ? "border-primary/30 bg-primary-soft text-primary" : "border-line bg-surface-2 text-muted")}>{step}</div>)}
+        </div>
+        <p className="mt-3 text-[11px] leading-5 text-muted">{finished ? "报告中心与绑定邮箱均已收到本期周报。" : "生成期间已在消息中心创建不可打开的周报条目；完成后会自动投递至绑定邮箱。"}</p>
+      </div>
+    </Card>
+  );
 }
 
 function AssistantConversationMessage({ text }) {

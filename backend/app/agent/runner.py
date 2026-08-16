@@ -550,6 +550,7 @@ def _finish_run(run_id: str, state: dict) -> None:
                     role="assistant",
                     content=content,
                     sequence_no=sequence_no,
+                    metadata_json={"report": state["report_reference"]} if state.get("report_reference") else {},
                 )
             )
         if run.status != "succeeded":
@@ -785,6 +786,8 @@ def execute_inline_report_request(run_id: str, template_id: str | None = None) -
                 periodStart=period_start,
                 periodEnd=period_end,
                 ownerId=user_id,
+                # 对话发起的周报默认在生成完成后投递到用户已绑定邮箱。
+                emailEnabled=True,
             )
         )
         report_id = report.get("id", "")
@@ -802,6 +805,12 @@ def execute_inline_report_request(run_id: str, template_id: str | None = None) -
         "intent_kind": "report",
         "analysis_question": "",
         "direct_response": response,
+        "report_reference": ({
+            "id": report_id,
+            "title": title,
+            "status": report.get("status", "queued"),
+            "emailEnabled": True,
+        } if "report_id" in locals() and report_id else None),
         "tasks": [],
         "blocked": False,
         "error": None,

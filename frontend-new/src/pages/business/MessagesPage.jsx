@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { getMessage, listMessages } from "../../api/messages";
+import { listReports } from "../../api/reports";
 import {
   Button,
   Card,
@@ -34,6 +35,27 @@ function formatTime(value) {
   }).format(new Date(value));
 }
 
+const REPORT_TERMINAL = new Set(["published", "partial", "failed", "validation_failed"]);
+
+export function mergeInboxWithGeneratingReports(messages = [], reports = [], type = "") {
+  if (type && type !== "weekly_report") return messages;
+  const generating = reports
+    .filter((report) => !REPORT_TERMINAL.has(report.status))
+    .map((report) => ({
+      id: `generating-report-${report.id}`,
+      reportId: report.id,
+      type: "weekly_report",
+      priority: "normal",
+      sourceLabel: "Agent 周报",
+      title: report.title || "本期周报",
+      summaryLines: ["正在生成中，暂不可打开；完成后将自动投递到绑定邮箱。"],
+      publishedAt: report.createdAt || report.updatedAt,
+      isRead: true,
+      isGenerating: true,
+    }));
+  return [...generating, ...messages].sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0));
+}
+
 export default function MessagesPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -55,7 +77,7 @@ export default function MessagesPage() {
     setError(null);
     if (append) setLoadingMore(true);
     try {
-      const result = await listMessages({
+      const [result, reports] = await Promise.all([listMessages({
         type,
         read: read === "" ? undefined : read === "read",
         priority,
@@ -63,9 +85,10 @@ export default function MessagesPage() {
         publishedFrom: publishedFrom ? `${publishedFrom}T00:00:00` : undefined,
         publishedTo: publishedTo ? `${publishedTo}T23:59:59` : undefined,
         cursor: append ? nextCursor : undefined,
-      });
+      }), append ? Promise.resolve([]) : listReports()]);
+      const nextItems = append ? result.items : mergeInboxWithGeneratingReports(result.items, reports, type);
       setItems((current) =>
-        append ? [...(current ?? []), ...result.items] : result.items,
+        append ? [...(current ?? []), ...nextItems] : nextItems,
       );
       setNextCursor(result.nextCursor ?? null);
     } catch (nextError) {
@@ -78,6 +101,11 @@ export default function MessagesPage() {
   useEffect(() => {
     load();
   }, [type, read, priority, publishedFrom, publishedTo]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!items?.some((item) => item.isGenerating)) return undefined;
+    const timer = window.setInterval(() => load(), 1800);
+    return () => window.clearInterval(timer);
+  }, [items]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!messageId) {
       setSelected(null);
@@ -291,6 +319,12 @@ function Filter({ value, onChange, options, label }) {
 
 function MessageRow({ item, active, onOpen }) {
   const [priorityLabel, tone] = PRIORITY[item.priority] ?? PRIORITY.normal;
+  if (item.isGenerating) return (
+    <div className="message-row-generating relative grid w-full grid-cols-[12px_minmax(0,1fr)] gap-3 px-4 py-4 text-left" aria-label={`${item.title}，正在生成，暂不可打开`}>
+      <span className="mt-2 h-2 w-2 animate-pulse rounded-full bg-primary" />
+      <span className="min-w-0"><span className="flex flex-wrap items-center gap-2"><strong className="text-[13px] text-primary">Agent 周报</strong><StatusPill tone="blue">生成中</StatusPill><time className="ml-auto text-[12px] text-muted">{formatTime(item.publishedAt)}</time></span><span className="mt-2 block truncate text-base font-semibold text-ink">{item.title}</span><span className="mt-1 flex items-center gap-1.5 text-sm leading-6 text-muted"><span className="report-generation-card__dots" aria-hidden="true"><i /><i /><i /></span>正在生成中，暂不可打开</span></span>
+    </div>
+  );
   return (
     <button
       type="button"

@@ -601,6 +601,7 @@ export function adaptAnalysisRun(snapshot) {
       allowCustom: interactionPrompt.allowCustom,
     } : null,
     error: businessError,
+    report: snapshot.assistantMessage?.metadata?.report ?? null,
     plan,
     planDetails,
     result: {

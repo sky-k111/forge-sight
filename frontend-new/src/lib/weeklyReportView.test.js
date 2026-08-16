@@ -30,6 +30,20 @@ describe("structured weekly report view", () => {
     expect(view.quality.coverage).toBe(96);
   });
 
+  test("removes markdown decoration from report copy before it reaches the reading view", () => {
+    const view = buildReportView({
+      summary: "**本周重点**：良率改善",
+      content: {
+        schemaVersion: "weekly-report/v1",
+        managementSummary: { findings: [{ level: "confirmed", text: "**良率**改善", evidenceStatus: "verified" }] },
+        metrics: [], anomalies: [], progress: [], recommendations: [], dataQuality: {}, appendix: {},
+      },
+    });
+
+    expect(view.headline).toBe("良率改善");
+    expect(view.findings[0].text).toBe("良率改善");
+  });
+
   test("merges trend series by label without losing sparse points", () => {
     expect(mergeTrendSeries([
       { metricKey: "a", points: [{ label: "周一", value: 2 }] },

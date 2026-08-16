@@ -319,8 +319,15 @@ def test_chat_report_request_creates_report_with_session_scope(analysis_session,
     assert captured["payload"].templateId == "tpl-operations-weekly"
     assert captured["payload"].sourceId == 1
     assert captured["payload"].ownerId == "u-report-create"
+    assert captured["payload"].emailEnabled is True
     assert "已创建" in snapshot["assistantMessage"]["content"]
     assert "rpt-chat-created" in snapshot["assistantMessage"]["content"]
+    assert snapshot["assistantMessage"]["metadata"]["report"] == {
+        "id": "rpt-chat-created",
+        "title": "聊天生成的制造运营综合周报",
+        "status": "queued",
+        "emailEnabled": True,
+    }
 
 
 def test_chat_report_request_first_asks_for_report_type(analysis_session, monkeypatch):

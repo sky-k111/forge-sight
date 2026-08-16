@@ -20,7 +20,7 @@ import {
 } from "../../components/ui";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
-import { buildReportView } from "../../lib/weeklyReportView";
+import { buildReportView, reportText } from "../../lib/weeklyReportView";
 
 const TERMINAL = new Set([
   "awaiting_review",
@@ -73,6 +73,7 @@ export default function ReportDetailPage() {
     return () => window.clearInterval(timer);
   }, [report?.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const view = useMemo(() => buildReportView(report), [report]);
+  const reportTitle = reportText(report?.title) || "本期经营周报";
   if (error)
     return (
       <PageFrame>
@@ -182,7 +183,7 @@ export default function ReportDetailPage() {
                 </span>
               </div>
               <h1 className="mt-4 max-w-4xl font-report text-[31px] font-semibold leading-[1.2] tracking-tight text-ink">
-                {report.title}
+                {reportTitle}
               </h1>
               <p className="mt-3 text-sm text-muted">
                 报告周期 {date(report.periodStart)} — {date(report.periodEnd)} ·
@@ -393,7 +394,7 @@ function LegacyReportDetail({
         </div>
         <div className="flex flex-wrap gap-2">
           {files.pdf && (
-            <DownloadButton
+              <DownloadButton
               format="pdf"
               file={files.pdf}
               busy={downloading}

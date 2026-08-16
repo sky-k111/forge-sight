@@ -1,5 +1,27 @@
 const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 
+// 报告正文来自 Agent 结构化输出。阅读页只展示纯文本，避免 Markdown 标记
+// （例如 **重点**）泄漏到正式周报的排版中。
+export function reportText(value) {
+  return String(value ?? "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/(\*\*|__|`|~~)/g, "")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .trim();
+}
+
+function cleanTextFields(items = [], fields = ["text", "title", "description", "note", "action", "owner"]) {
+  return items.map((item) => {
+    const copy = { ...item };
+    fields.forEach((field) => {
+      if (typeof copy[field] === "string") copy[field] = reportText(copy[field]);
+    });
+    return copy;
+  });
+}
+
 export function mergeTrendSeries(series = []) {
   const rows = new Map();
   series.forEach((item) =>
@@ -48,7 +70,7 @@ export function buildReportView(report = {}) {
   report = report ?? {};
   const content =
     report.content?.schemaVersion === "weekly-report/v1" ? report.content : {};
-  const findings = content.managementSummary?.findings ?? [];
+  const findings = cleanTextFields(content.managementSummary?.findings ?? []);
   const metrics = (content.metrics ?? []).map((metric) => ({
     ...metric,
     valueLabel: formatMetric(metric.value, metric.unit),
@@ -61,15 +83,15 @@ export function buildReportView(report = {}) {
         ? "—"
         : `${metric.changeRate > 0 ? "+" : ""}${(metric.changeRate * 100).toFixed(2)}%`,
   }));
-  const anomalies = [...(content.anomalies ?? [])].sort(
+  const anomalies = cleanTextFields(content.anomalies ?? []).sort(
     (a, b) =>
       (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9),
   );
   const headline =
-    findings.find((item) => item.level === "confirmed")?.text ??
-    findings[0]?.text ??
-    report.summary ??
-    "本周期尚未形成总体结论。";
+    findings.find((item) => item.level === "confirmed")?.text
+    || findings[0]?.text
+    || reportText(report.summary)
+    || "本周期尚未形成总体结论。";
   const charts = content.charts?.length
     ? content.charts
     : legacyTrendCharts(content.trends);
@@ -77,15 +99,15 @@ export function buildReportView(report = {}) {
     structured: Boolean(content.schemaVersion),
     headline,
     findings,
-    actions: content.managementSummary?.actions ?? [],
+    actions: cleanTextFields(content.managementSummary?.actions ?? []),
     metrics,
     trends: content.trends ?? [],
     trendRows: mergeTrendSeries(content.trends),
     charts,
     anomalies,
     topAnomaly: anomalies[0] ?? null,
-    progress: content.progress ?? [],
-    recommendations: content.recommendations ?? [],
+    progress: cleanTextFields(content.progress ?? []),
+    recommendations: cleanTextFields(content.recommendations ?? []),
     quality: content.dataQuality ?? {
       coverage: 0,
       delayedSources: [],
