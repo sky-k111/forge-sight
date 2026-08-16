@@ -33,6 +33,9 @@ SMALLTALK_PATTERNS = (
     re.compile(r"(?:讲个笑话|聊聊天|今天天气|心情怎么样|你好吗)"),
     re.compile(r"(?:想.*聊|压力|心情|难过|焦虑|烦恼|陪我|表现不好)"),
 )
+_CLOCK_QUERY_PATTERN = re.compile(
+    r"^(?:请问|麻烦问一下)?(?:现在|当前|今天)?\s*(?:几点(?:了)?|几时|时间(?:是.*)?)?[？?！!。\s]*$"
+)
 _REPORT_TERMS = ("周报", "月报", "专题报告", "报告", "报表")
 _REPORT_REQUEST_PATTERNS = (
     # Creation verbs may be separated from the report noun by a template or
@@ -112,7 +115,7 @@ def is_report_request(text: str) -> bool:
 
 
 def _is_known_conversation(text: str) -> bool:
-    return _is_report_request(text) or any(
+    return _is_report_request(text) or bool(_CLOCK_QUERY_PATTERN.fullmatch(text)) or any(
         pattern.search(text) for pattern in (*SMALLTALK_PATTERNS, *OUT_OF_SCOPE_PATTERNS)
     )
 
@@ -247,6 +250,9 @@ def build_conversation_response(parts: list[str], *, mixed: bool = False) -> str
 
 def build_smalltalk_response(text: str) -> str:
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if _CLOCK_QUERY_PATTERN.fullmatch(normalized):
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        return f"现在是北京时间 {now:%Y 年 %m 月 %d 日 %H:%M}。"
     if _is_report_request(normalized):
         return (
             "可以生成，但还需要报告类型、统计周期和数据范围。"

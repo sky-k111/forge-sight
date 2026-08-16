@@ -3,7 +3,13 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.agent.intent import build_intent_plan, build_request_route, classify_analysis_type, classify_request_kind
+from app.agent.intent import (
+    build_intent_plan,
+    build_request_route,
+    build_smalltalk_response,
+    classify_analysis_type,
+    classify_request_kind,
+)
 
 
 def test_obvious_smalltalk_is_routed_away_from_analysis():
@@ -14,6 +20,15 @@ def test_obvious_smalltalk_is_routed_away_from_analysis():
     assert classify_request_kind("明年下雨吗") == "conversation"
     assert classify_request_kind("分析最近 7 天的工序良率") == "analysis"
     assert classify_request_kind("什么是工序良率") == "analysis"
+
+
+def test_current_time_question_is_answered_without_the_chat_model():
+    assert classify_request_kind("现在几点了？") == "conversation"
+
+    response = build_smalltalk_response("现在几点了？")
+
+    assert "北京时间" in response
+    assert "无法直接获取" not in response
 
 
 def test_bare_report_request_asks_for_report_scope_instead_of_entering_data_analysis():
