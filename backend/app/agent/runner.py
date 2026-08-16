@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -35,6 +35,7 @@ from app.db.models import (
     AnalysisSession,
     AnalysisTask,
     AuditLog,
+    DataTable,
     DataSource,
     LlmCallAttempt,
 )
@@ -725,9 +726,28 @@ def _chat_report_template(question: str) -> str:
     return "tpl-operations-weekly"
 
 
-def _chat_report_period(question: str) -> tuple[datetime, datetime]:
+def _latest_report_data_date(source_id: int) -> date | None:
+    """Use catalogued freshness so a local/demo data source never yields an empty 'current week' report."""
+
+    with PlatformSession() as session:
+        values = [
+            row.data_updated for row in session.query(DataTable)
+            .filter_by(source_id=source_id).all() if row.data_updated
+        ]
+    parsed = []
+    for value in values:
+        try:
+            parsed.append(datetime.fromisoformat(str(value)[:10]).date())
+        except ValueError:
+            continue
+    return max(parsed) if parsed else None
+
+
+def _chat_report_period(question: str, source_id: int | None = None) -> tuple[datetime, datetime]:
     now = datetime.now(CHAT_REPORT_TIMEZONE).replace(tzinfo=None)
-    today = now.date()
+    today = _latest_report_data_date(source_id) if source_id else None
+    today = today or now.date()
+    latest_day_end = datetime.combine(today, datetime.max.time())
     if "上周" in question:
         current_monday = today - timedelta(days=today.weekday())
         start = current_monday - timedelta(days=7)
@@ -735,19 +755,15 @@ def _chat_report_period(question: str) -> tuple[datetime, datetime]:
         return datetime.combine(start, datetime.min.time()), datetime.combine(end, datetime.max.time())
     if "本周" in question:
         start = today - timedelta(days=today.weekday())
-        return datetime.combine(start, datetime.min.time()), now.replace(
-            hour=23, minute=59, second=59, microsecond=999999
-        )
+        return datetime.combine(start, datetime.min.time()), latest_day_end
     if "本月" in question:
         start = today.replace(day=1)
-        return datetime.combine(start, datetime.min.time()), now.replace(
-            hour=23, minute=59, second=59, microsecond=999999
-        )
+        return datetime.combine(start, datetime.min.time()), latest_day_end
     match = re.search(r"最近\s*(\d+)\s*(?:天|日)", question)
     days = int(match.group(1)) if match else 7
     days = min(max(days, 1), 366)
-    start = today - timedelta(days=days)
-    end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    start = today - timedelta(days=days - 1)
+    end = latest_day_end
     return datetime.combine(start, datetime.min.time()), end
 
 
@@ -776,7 +792,7 @@ def execute_inline_report_request(run_id: str, template_id: str | None = None) -
     from app.reports import service as report_service
     from app.reports.contracts import ReportCreate
 
-    period_start, period_end = _chat_report_period(state["user_question"])
+    period_start, period_end = _chat_report_period(state["user_question"], state["source_id"])
     template_id = template_id or _chat_report_template(state["user_question"])
     try:
         report = report_service.create_report(

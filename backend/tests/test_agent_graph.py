@@ -1,6 +1,7 @@
 """阶段 5C 最小真实 LangGraph 与持久化投影。"""
 
 from copy import deepcopy
+from datetime import date
 
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -328,6 +329,15 @@ def test_chat_report_request_creates_report_with_session_scope(analysis_session,
         "status": "queued",
         "emailEnabled": True,
     }
+
+
+def test_chat_weekly_report_uses_latest_available_data_date(monkeypatch):
+    monkeypatch.setattr(runner, "_latest_report_data_date", lambda _source_id: date(2026, 7, 15))
+
+    start, end = runner._chat_report_period("给我一份周报", 1)
+
+    assert start.date() == date(2026, 7, 9)
+    assert end.date() == date(2026, 7, 15)
 
 
 def test_chat_report_request_first_asks_for_report_type(analysis_session, monkeypatch):

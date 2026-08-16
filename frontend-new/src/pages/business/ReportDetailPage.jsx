@@ -384,7 +384,7 @@ function LegacyReportDetail({
               </span>
             </div>
             <h1 className="mt-2 font-report text-[25px] font-semibold text-ink">
-              {report.title}
+              {reportText(report.title) || "报告"}
             </h1>
             <p className="mt-1 text-sm text-muted">
               {report.sourceName} · {date(report.periodStart)} —{" "}
@@ -465,7 +465,7 @@ function LegacyReportDetail({
           <span className="section-kicker">MANAGEMENT SUMMARY</span>
           <h2 className="mt-1 font-report text-xl font-semibold">管理摘要</h2>
           <p className="mt-3 whitespace-pre-wrap text-base leading-8 text-ink-2">
-            {report.summary || "Agent 完成分析后会在这里形成摘要。"}
+            {reportText(report.summary) || "Agent 完成分析后会在这里形成摘要。"}
           </p>
         </section>
         <div className="divide-y divide-line">
@@ -494,7 +494,7 @@ function LegacySection({ section }) {
           <span className="font-mono text-[11px] text-muted">
             SECTION {String(section.order ?? 0).padStart(2, "0")}
           </span>
-          <h2 className="mt-1 text-lg font-semibold">{section.title}</h2>
+          <h2 className="mt-1 text-lg font-semibold">{reportText(section.title) || "未命名章节"}</h2>
         </div>
         {section.confidence > 0 && (
           <StatusPill tone={section.confidence >= 80 ? "green" : "amber"}>
@@ -503,7 +503,7 @@ function LegacySection({ section }) {
         )}
       </div>
       <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-ink-2">
-        {section.summary || section.statusLabel || "正在生成"}
+        {reportText(section.summary) || reportText(section.statusLabel) || "正在生成"}
       </p>
       {result?.columns?.length > 0 && (
         <div className="mt-4 overflow-x-auto rounded-control border border-line">

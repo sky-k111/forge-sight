@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { getMessage, listMessages } from "../../api/messages";
-import { listReports } from "../../api/reports";
+import { getReport, listReports } from "../../api/reports";
+import { WeeklyReportCharts } from "../../components/WeeklyReportCharts";
 import {
   Button,
   Card,
@@ -14,6 +15,7 @@ import {
 } from "../../components/ui";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
+import { buildReportView, reportText } from "../../lib/weeklyReportView";
 
 const TYPE_LABEL = {
   weekly_report: "Agent 周报",
@@ -353,10 +355,10 @@ function MessageRow({ item, active, onOpen }) {
           </time>
         </span>
         <span className="mt-2 block truncate text-base font-semibold text-ink">
-          {item.title}
+          {reportText(item.title) || "未命名消息"}
         </span>
         <span className="mt-1 line-clamp-2 text-sm leading-6 text-muted">
-          {item.summaryLines?.join(" ") || "没有摘要"}
+          {reportText(item.summaryLines?.join(" ")) || "没有摘要"}
         </span>
       </span>
     </button>
@@ -364,6 +366,9 @@ function MessageRow({ item, active, onOpen }) {
 }
 
 function MessageDetail({ message, onOpenReport }) {
+  if (message.type === "weekly_report" && message.primaryAction?.resourceId) {
+    return <WeeklyReportMessagePreview message={message} onOpenReport={onOpenReport} />;
+  }
   const [priorityLabel, tone] = PRIORITY[message.priority] ?? PRIORITY.normal;
   return (
     <article className="mx-auto max-w-3xl p-5 sm:p-8">
@@ -376,14 +381,14 @@ function MessageDetail({ message, onOpenReport }) {
           {message.isPinned && <StatusPill tone="blue">置顶</StatusPill>}
         </div>
         <h2 className="mt-4 font-report text-[25px] font-semibold leading-tight text-ink">
-          {message.title}
+          {reportText(message.title) || "未命名消息"}
         </h2>
         <p className="mt-2 text-sm text-muted">
           发布于 {formatTime(message.publishedAt)}
         </p>
       </header>
       <div className="whitespace-pre-wrap py-7 text-base leading-8 text-ink-2">
-        {message.content || message.summaryLines?.join("\n") || "暂无正文"}
+        {reportText(message.content || message.summaryLines?.join("\n")) || "暂无正文"}
       </div>
       {message.status === "withdrawn" && (
         <p className="rounded-control border border-warning/25 bg-warning-soft p-3 text-sm text-warning">
@@ -401,6 +406,32 @@ function MessageDetail({ message, onOpenReport }) {
           </Button>
         </div>
       )}
+    </article>
+  );
+}
+
+function WeeklyReportMessagePreview({ message, onOpenReport }) {
+  const [report, setReport] = useState(null);
+  useEffect(() => {
+    getReport(message.primaryAction.resourceId).then(setReport).catch(() => setReport(false));
+  }, [message.primaryAction.resourceId]);
+  const view = buildReportView(report || {});
+  const summary = reportText(report?.summary || message.content || message.summaryLines?.join(" "));
+  const compactSummary = summary.split(/\n{2,}|。/).map((line) => line.trim()).find(Boolean) || "本期周报已发布。";
+  return (
+    <article className="mx-auto max-w-3xl p-5 sm:p-8">
+      <header className="border-b border-line pb-6">
+        <div className="flex items-center gap-2"><span className="section-kicker">AGENT WEEKLY BRIEF</span><StatusPill tone="blue">已发布</StatusPill></div>
+        <h2 className="mt-4 font-report text-[25px] font-semibold leading-tight text-ink">{reportText(message.title)}</h2>
+        <p className="mt-2 text-sm text-muted">发布于 {formatTime(message.publishedAt)} · 已投递绑定邮箱</p>
+      </header>
+      <section className="mt-6 rounded-section border border-primary/15 bg-primary-soft/45 p-5">
+        <span className="section-kicker">本期结论</span>
+        <p className="mt-2 text-base leading-7 text-ink">{view.headline !== "本周期尚未形成总体结论。" ? view.headline : compactSummary}</p>
+      </section>
+      {view.metrics.length ? <div className="mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-section border border-line bg-line">{view.metrics.slice(0, 4).map((metric) => <div key={metric.key} className="bg-paper p-4"><span className="text-xs text-muted">{reportText(metric.name || metric.key)}</span><strong className="mt-1 block text-xl text-ink">{metric.valueLabel}</strong><span className="mt-1 block text-xs text-muted">{metric.changeLabel} · {metric.previousLabel}</span></div>)}</div> : <div className="mt-5 rounded-section border border-amber/25 bg-amber-soft p-4"><strong className="text-sm text-ink">本期数据尚未覆盖</strong><p className="mt-1 text-sm leading-6 text-muted">当前统计周期没有可用业务记录，因此未生成虚假图表或指标。请在完整报告中查看数据范围说明。</p></div>}
+      {view.charts.length > 0 && <div className="mt-5"><WeeklyReportCharts charts={view.charts.slice(0, 1)} sourceName={report?.sourceName || "当前数据源"} /></div>}
+      <div className="mt-6 border-t border-line pt-5"><Button variant="primary" onClick={() => onOpenReport(message.primaryAction.resourceId)}>查看完整周报 <Icon name="arrow" size={15} /></Button></div>
     </article>
   );
 }

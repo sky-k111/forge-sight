@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { buildReportView, mergeTrendSeries } from "./weeklyReportView";
+import { buildReportView, mergeTrendSeries, reportText } from "./weeklyReportView";
 
 describe("structured weekly report view", () => {
   test("returns a safe loading view before report data arrives", () => {
@@ -42,6 +42,12 @@ describe("structured weekly report view", () => {
 
     expect(view.headline).toBe("良率改善");
     expect(view.findings[0].text).toBe("良率改善");
+  });
+
+  test("hides physical data identifiers from user-facing report copy", () => {
+    const text = reportText("请检查 `mes_process_output` 的 stat_date 字段");
+    expect(text).not.toContain("mes_process_output");
+    expect(text).not.toContain("stat_date");
   });
 
   test("merges trend series by label without losing sparse points", () => {

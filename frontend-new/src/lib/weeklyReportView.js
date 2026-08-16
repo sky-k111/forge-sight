@@ -6,9 +6,11 @@ export function reportText(value) {
   return String(value ?? "")
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/`[^`]+`/g, "业务数据")
     .replace(/(\*\*|__|`|~~)/g, "")
     .replace(/^\s{0,3}#{1,6}\s+/gm, "")
     .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/gi, "相关数据项")
     .trim();
 }
 

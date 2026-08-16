@@ -69,4 +69,19 @@ describe("ReportDetailPage", () => {
     expect(screen.queryByText("主题示意图，非数据证据")).toBeNull();
     expect(screen.queryByRole("img", { name: /主题示意图/ })).toBeNull();
   });
+
+  test("does not expose markdown markers in legacy report summaries", async () => {
+    vi.mocked(getReport).mockResolvedValue({
+      ...report,
+      content: {},
+      title: "**旧版**周报",
+      summary: "**重点结论**：良率提升。",
+      sections: [{ id: "section-1", order: 1, title: "**质量**", summary: "**没有异常**", statusLabel: "已完成", content: {} }],
+    });
+    render(<MemoryRouter initialEntries={["/workspace/reports/rpt-1"]}><Routes><Route path="/workspace/reports/:reportId" element={<ReportDetailPage />} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByText("重点结论：良率提升。")).toBeTruthy();
+    expect(screen.getByText("没有异常")).toBeTruthy();
+    expect(screen.queryByText(/\*\*/)).toBeNull();
+  });
 });
