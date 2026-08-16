@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from sklearn.cluster import KMeans
 from sklearn.ensemble import IsolationForest, RandomForestClassifier, RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LinearRegression, LogisticRegression
@@ -26,11 +27,9 @@ from sklearn.metrics import (
     roc_auc_score,
     silhouette_score,
 )
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-from sklearn.cluster import KMeans
 from sklearn.model_selection import train_test_split
-
+from sklearn.preprocessing import StandardScaler
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 # 算法目录：与前端 modelCatalog 对齐；family 决定训练分派
 ALGORITHMS = [
@@ -279,14 +278,14 @@ def extract_importance(algorithm: str, model, feature_names: list[str]) -> list[
         if total <= 0:
             return []
         items = [{"name": name, "importance": round(float(value / total) * 100, 1)}
-                 for name, value in zip(feature_names, raw)]
+                 for name, value in zip(feature_names, raw, strict=True)]
     elif algorithm in ("linear", "logistic") and hasattr(model, "coef_"):
         coefs = np.asarray(model.coef_, dtype=float).ravel()
         scale = np.abs(coefs).sum()
         if scale <= 0:
             return []
         items = [{"name": name, "importance": round(float(abs(value) / scale) * 100, 1)}
-                 for name, value in zip(feature_names, coefs)]
+                 for name, value in zip(feature_names, coefs, strict=True)]
     else:
         return []
     items.sort(key=lambda item: item["importance"], reverse=True)

@@ -15,7 +15,6 @@ from app.messages.contracts import (
     AnnouncementWithdraw,
 )
 
-
 router = APIRouter(prefix="/api/v1", tags=["messages"])
 
 INBOX_RESPONSE_EXAMPLE = {

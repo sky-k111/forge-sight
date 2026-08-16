@@ -6,7 +6,6 @@ from app.auth.deps import require_user
 from app.db.platform import PlatformSession
 from app.operations import operational_snapshot
 
-
 router = APIRouter(prefix="/api/v1/operations", tags=["operations"])
 
 

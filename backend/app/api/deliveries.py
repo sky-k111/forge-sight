@@ -10,7 +10,6 @@ from app.auth.deps import current_user_display, require_user
 from app.db.platform import PlatformSession
 from app.delivery.service import DELIVERY_STATUSES, list_deliveries, retry_delivery, serialize_delivery
 
-
 router = APIRouter(prefix="/api/v1/deliveries", tags=["deliveries"])
 
 

@@ -3,7 +3,7 @@
 from fastapi.testclient import TestClient
 
 from app.api import overview
-from app.db.models import AnalysisMessage, AnalysisRun, AnalysisSession, DataTable
+from app.db.models import AnalysisMessage, AnalysisRun, AnalysisSession, AuditLog, DataTable, KnowledgeMetric
 from app.main import app
 
 
@@ -83,3 +83,45 @@ def test_business_overview_only_returns_current_users_real_questions(knowledge_s
     assert body["recent"]["items"][0]["title"] == "分析本月各工序良率 并与目标值比较"
     assert "阶段5" not in str(body["recent"])
     assert "验收" not in str(body["recent"])
+
+
+def test_admin_overview_returns_real_governance_state(knowledge_session, monkeypatch):
+    monkeypatch.setattr(overview, "PlatformSession", knowledge_session)
+    body = TestClient(app).get("/api/overview/admin").json()
+
+    assert len(body["health"]) == 4
+    assert [item["page"] for item in body["health"]] == ["knowledge", "resources", "model-governance", "security"]
+    for item in body["health"]:
+        assert {"icon", "label", "value", "note", "tone", "page"} <= set(item)
+    assert set(body["summary"]) == {"categoryCount", "detail", "baseline", "lastCheck"}
+    assert body["summary"]["categoryCount"] >= 0
+    assert isinstance(body["topics"], list)
+    assert isinstance(body["queue"], list)
+
+
+def test_admin_overview_queue_reflects_pending_metrics_and_intercepts(knowledge_session, monkeypatch):
+    monkeypatch.setattr(overview, "PlatformSession", knowledge_session)
+    with knowledge_session() as session:
+        session.add(
+            KnowledgeMetric(
+                id="M-PEND-TEST",
+                name="设备可用率待审核指标",
+                topic="设备",
+                formula="AVG(运行时长)",
+                status="待审核",
+            )
+        )
+        session.add(
+            AuditLog(action="DELETE FROM dim_process", resource="dim_process", result="已拦截", detail="危险 SQL")
+        )
+        session.commit()
+
+    body = TestClient(app).get("/api/overview/admin").json()
+
+    statuses = {item["status"] for item in body["queue"]}
+    assert "待审核" in statuses
+    assert "已拦截" in statuses
+    pending = next(item for item in body["queue"] if item["status"] == "待审核")
+    assert "设备可用率待审核指标" in pending["title"]
+    intercept = next(item for item in body["queue"] if item["status"] == "已拦截")
+    assert "DELETE" in intercept["note"]

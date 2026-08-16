@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -268,7 +268,7 @@ def validate_for_publish(content: dict) -> dict:
             "passed": False,
             "ruleVersion": "weekly-report-validation-v2",
             "rules": invalid_rules,
-            "checkedAt": datetime.now(timezone.utc).isoformat(),
+            "checkedAt": datetime.now(UTC).isoformat(),
         }
 
     if report.identity.period_end <= report.identity.period_start:
@@ -452,7 +452,7 @@ def validate_for_publish(content: dict) -> dict:
         "passed": not any(rule["level"] == "error" for rule in rules),
         "ruleVersion": "weekly-report-validation-v2",
         "rules": rules,
-        "checkedAt": datetime.now(timezone.utc).isoformat(),
+        "checkedAt": datetime.now(UTC).isoformat(),
     }
 
 

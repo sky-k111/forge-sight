@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AGENT_THINKING_DELAY_MS, waitForAgentThinking } from "./AnalysisPage";
+import { AGENT_THINKING_DELAY_MS, waitForAgentThinking } from "./analysisThinking";
 
 describe("agent response thinking delay", () => {
   afterEach(() => {

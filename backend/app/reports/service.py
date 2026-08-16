@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import html
 from datetime import datetime
-from typing import Any
 
 from sqlalchemy import func
 
@@ -15,13 +14,12 @@ from app.db.models import (
     AnalysisArtifact,
     AnalysisMessage,
     AnalysisRun,
-    AnalysisRunStep,
     AnalysisTask,
     DataSource,
     KnowledgeMetric,
-    MetricSourceBinding,
     Message,
     MessageRecipient,
+    MetricSourceBinding,
     Report,
     ReportDelivery,
     ReportFile,
@@ -293,7 +291,7 @@ def list_reports(
             ).order_by(ReportFile.format):
                 files_by_report[item.report_id].append(item)
         read_by_report: dict[str, bool] = {}
-        for report_id, is_read, published_at in (
+        for report_id, is_read, _published_at in (
             session.query(Message.related_id, MessageRecipient.is_read, Message.published_at)
             .join(MessageRecipient, Message.id == MessageRecipient.message_id)
             .filter(
@@ -407,7 +405,7 @@ def _sync_running_sections(session, report: Report, run: AnalysisRun) -> None:
         .order_by(ReportSection.section_order)
         .all()
     )
-    for section, task in zip(sections, tasks):
+    for section, task in zip(sections, tasks, strict=False):
         section.analysis_task_id = task.id
         section.status = {
             "pending": "pending",
@@ -438,7 +436,7 @@ def _finalize_report(session, report: Report, run: AnalysisRun) -> None:
     succeeded = 0
     confidence_scores: list[int] = []
     frozen_sections = []
-    for section, task in zip(sections, tasks):
+    for section, task in zip(sections, tasks, strict=False):
         section.analysis_task_id = task.id
         artifacts = by_task.get(task.id, [])
         artifact_by_type = {item.type: item for item in artifacts}

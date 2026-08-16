@@ -39,12 +39,11 @@ from app.db.models import (
     LlmCallAttempt,
 )
 from app.db.platform import PlatformSession
-from app.gateway.executor import ExecutionResult, execute_readonly
 from app.gateway.cost_guard import ExplainCheckResult, explain_readonly
+from app.gateway.executor import ExecutionResult, execute_readonly
 from app.gateway.sql_validator import validate_sql
 from app.llm import provider
 from app.retrieval.service import build_context_package
-
 
 CHAT_REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
 CHAT_REPORT_TYPE_OPTIONS = (
@@ -110,7 +109,7 @@ def _tracked_generate(state: dict, step_key: str, system: str, user: str) -> str
             temperature=0.1,
             max_tokens=max_tokens,
         )
-    except Exception as exc:
+    except Exception:
         usage.finish_call(
             call_id,
             status="failed",

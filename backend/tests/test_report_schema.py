@@ -5,13 +5,13 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
+from app.reports.automation import build_structured_content
 from app.reports.schema import (
     StructuredWeeklyReport,
     calculate_confidence,
     content_checksum,
     validate_for_publish,
 )
-from app.reports.automation import build_structured_content
 
 
 def _content(**overrides) -> dict:

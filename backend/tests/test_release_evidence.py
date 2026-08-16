@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 RELEASE_DIR = ROOT / "docs" / "release"
 

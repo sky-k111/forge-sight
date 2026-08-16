@@ -116,7 +116,7 @@ export default function ReportsPage() {
 
   useEffect(() => {
     load();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!reports?.some((item) => !TERMINAL.has(item.status))) return undefined;

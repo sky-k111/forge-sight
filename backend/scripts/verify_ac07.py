@@ -4,12 +4,12 @@ import json
 import sys
 import urllib.request
 
+from sqlalchemy import text
+
 sys.path.insert(0, ".")
 sys.stdout.reconfigure(encoding="utf-8")
 
-from sqlalchemy import text
-
-from app.db.platform import platform_engine
+from app.db.platform import platform_engine  # noqa: E402
 
 BASE = "http://127.0.0.1:8000"
 

@@ -8,6 +8,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api import reports as reports_api
+from app.auth.deps import optional_user, require_user
 from app.db.models import (
     Base,
     DataScopePolicy,
@@ -18,15 +20,13 @@ from app.db.models import (
     ReportFile,
     ReportVersion,
 )
-from app.api import reports as reports_api
-from app.auth.deps import optional_user, require_user
 from app.main import app
+from app.reports import service as report_service
 from app.reports.files import (
     FileAccessDenied,
     FileNotReady,
     resolve_download,
 )
-from app.reports import service as report_service
 
 
 @pytest.fixture()

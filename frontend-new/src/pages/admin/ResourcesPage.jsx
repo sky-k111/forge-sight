@@ -355,7 +355,7 @@ export default function ResourcesPage() {
             <>
               <div className="flex items-start gap-3">
                 {editingId == null && (
-                  <Button size="sm" variant="ghost" aria-label="返回选择类型" onClick={() => setForm((value) => ({ ...EMPTY_FORM, type: "" }))}>
+                  <Button size="sm" variant="ghost" aria-label="返回选择类型" onClick={() => setForm(() => ({ ...EMPTY_FORM, type: "" }))}>
                     <Icon name="chevron" size={14} className="rotate-180" />
                   </Button>
                 )}
@@ -418,7 +418,7 @@ export default function ResourcesPage() {
                 </span>
                 {editingId == null ? (
                   <>
-                    <Button onClick={() => setForm((value) => ({ ...EMPTY_FORM, type: "" }))}>上一步</Button>
+                    <Button onClick={() => setForm(() => ({ ...EMPTY_FORM, type: "" }))}>上一步</Button>
                     <Button onClick={() => setConnectorOpen(false)}>取消</Button>
                     <Button variant="primary" onClick={saveAndTest} disabled={testing || !form.name || !form.database || !form.username}>
                       {testing ? "正在连接并扫描" : "保存并测试连接"}

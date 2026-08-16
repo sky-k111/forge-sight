@@ -12,10 +12,10 @@ from app.agent.graph import (
     build_analysis_graph,
 )
 from app.agent.intent import build_intent_plan
+from app.db.models import AuditLog
 from app.gateway.cost_guard import ExplainCheckResult
 from app.gateway.executor import ExecutionResult
 from app.gateway.sql_validator import SqlCheckResult
-from app.db.models import AuditLog
 
 
 def _context():

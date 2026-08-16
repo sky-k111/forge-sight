@@ -21,7 +21,7 @@ const CHART_OPTIONS = [
   { value: "热力图", label: "热力图", icon: "scan" },
 ];
 
-export function buildAdjustmentInstruction(sourceQuestion, adjustments) {
+function buildAdjustmentInstruction(sourceQuestion, adjustments) {
   const clauses = [];
   if (adjustments.timeRange) clauses.push(`时间范围调整为${adjustments.timeRange}`);
   if (adjustments.objectScope) clauses.push(`分析对象限定为${adjustments.objectScope}`);

@@ -1,0 +1,16 @@
+# ForgeSight 后端 lint 配置（ruff）
+# 选型聚焦高价值规则：错误 E、未定义 F、警告 W、import 排序 I、升级建议 UP、bugbear B。
+# 刻意不纳入 C4/SIM（与项目既有的 dict(...)/if 风格冲突，纯风格收益低）。
+target-version = "py314"
+line-length = 120
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E501",            # 行长交给 formatter 处理
+    "B008",            # FastAPI Depends() 在默认参数里是常规写法
+]
+
+[format]
+quote-style = "double"
+indent-style = "space"
