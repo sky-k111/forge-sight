@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import time
+from calendar import monthrange
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -671,19 +672,52 @@ def execute_inline_conversation(run_id: str, direct_response: str | None = None)
     return {"runId": run_id, "status": "succeeded"}
 
 
-def execute_inline_report_clarification(run_id: str) -> dict:
-    """Pause a chat report request until the user chooses a report template."""
+_CHAT_REPORT_PERIOD_RE = re.compile(
+    r"(?:最近|近)\s*(?:\d+|一|两|三|四|五|六|七|八|九|十|半|一个)\s*(?:天|日|周|个月|月)"
+    r"|(?:本周|这周|这个月|本月|这个季度|本季度|今年|今天|昨天|上周|上月)"
+    r"|20\d{2}\s*(?:[-年/])\s*\d{1,2}(?:\s*(?:[-月/])\s*\d{1,2})?"
+)
+_CHAT_REPORT_FOCUS_TERMS = ("生产", "产量", "产线", "质量", "良率", "缺陷", "不良", "设备", "停机", "库存", "物料", "经营", "运营", "综合")
 
-    prompt = {
-        "kind": "clarification",
-        "question": "你想生成哪一种周报？请选择报告类型；选择后我会在报告中心创建并开始生成。",
-        "options": list(CHAT_REPORT_TYPE_OPTIONS),
-        "allowCustom": False,
-    }
+
+def report_brief_missing_details(brief: str) -> list[str]:
+    """Return the report inputs that cannot safely be assumed from a chat turn."""
+
+    normalized = str(brief or "")
+    missing = []
+    if not _CHAT_REPORT_PERIOD_RE.search(normalized):
+        missing.append("统计时间")
+    if not any(term in normalized for term in _CHAT_REPORT_FOCUS_TERMS):
+        missing.append("关注内容")
+    return missing
+
+
+def _report_brief_question(brief: str) -> str:
+    missing = report_brief_missing_details(brief)
+    if len(missing) == 2:
+        return "可以。为了生成准确的报告，请告诉我统计时间和关注内容（生产、质量、设备、库存或经营）。例如：‘生成最近 30 天的质量与设备专题报告’。"
+    if missing == ["统计时间"]:
+        return "已了解报告关注内容。请再告诉我统计时间，例如‘最近 30 天’、‘上周’或‘2026 年 7 月’。"
+    return "已了解统计时间。请再告诉我希望关注的内容，例如生产、质量、设备、库存或经营。"
+
+
+def execute_inline_report_clarification(run_id: str, report_brief: str | None = None) -> dict:
+    """Pause a chat report request until its missing business details are supplied."""
+
     with PlatformSession() as session:
         run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
         if run.status in TERMINAL_STATUSES:
             return {"runId": run.id, "status": run.status}
+        message = session.query(AnalysisMessage).filter_by(id=run.trigger_message_id).one()
+        brief = (report_brief or message.content).strip()
+        prompt = {
+            "kind": "clarification",
+            "question": _report_brief_question(brief),
+            "options": [],
+            "allowCustom": True,
+            "inputPlaceholder": "例如：最近 30 天的质量与设备专题报告",
+            "reportBrief": brief,
+        }
         existing = session.query(AnalysisInteraction).filter_by(
             run_id=run.id, status="pending"
         ).first()
@@ -747,6 +781,13 @@ def _chat_report_period(question: str, source_id: int | None = None) -> tuple[da
     today = _latest_report_data_date(source_id) if source_id else None
     today = today or now.date()
     latest_day_end = datetime.combine(today, datetime.max.time())
+    month_match = re.search(r"(20\d{2})\s*(?:年|[-/])\s*(\d{1,2})\s*(?:月)?", question)
+    if month_match:
+        year, month = (int(value) for value in month_match.groups())
+        if 1 <= month <= 12:
+            start = date(year, month, 1)
+            end = date(year, month, monthrange(year, month)[1])
+            return datetime.combine(start, datetime.min.time()), datetime.combine(end, datetime.max.time())
     if "上周" in question:
         current_monday = today - timedelta(days=today.weekday())
         start = current_monday - timedelta(days=7)
@@ -766,7 +807,7 @@ def _chat_report_period(question: str, source_id: int | None = None) -> tuple[da
     return datetime.combine(start, datetime.min.time()), end
 
 
-def execute_inline_report_request(run_id: str, template_id: str | None = None) -> dict:
+def execute_inline_report_request(run_id: str, template_id: str | None = None, report_brief: str | None = None) -> dict:
     """Create a real report from a direct chat request and keep the chat run inline."""
 
     with PlatformSession() as session:
@@ -786,13 +827,14 @@ def execute_inline_report_request(run_id: str, template_id: str | None = None) -
             "expected_lease_owner": "inline-conversation",
         }
         user_id = business_session.user_id
+        report_question = report_brief or message.content
         session.commit()
 
     from app.reports import service as report_service
     from app.reports.contracts import ReportCreate
 
-    period_start, period_end = _chat_report_period(state["user_question"], state["source_id"])
-    template_id = template_id or _chat_report_template(state["user_question"])
+    period_start, period_end = _chat_report_period(report_question, state["source_id"])
+    template_id = template_id or _chat_report_template(report_question)
     try:
         report = report_service.create_report(
             ReportCreate(

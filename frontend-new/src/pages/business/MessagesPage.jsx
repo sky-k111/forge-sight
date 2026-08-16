@@ -58,6 +58,16 @@ export function mergeInboxWithGeneratingReports(messages = [], reports = [], typ
   return [...generating, ...messages].sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0));
 }
 
+export function splitMessageParagraphs(content = "") {
+  const normalized = reportText(content)
+    .replace(/\r\n/g, "\n")
+    .replace(/\s+(?=(?:\d+|[一二三四五六七八九十]+)[.、]\s*)/g, "\n");
+  return normalized
+    .split(/\n+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export default function MessagesPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -370,6 +380,7 @@ function MessageDetail({ message, onOpenReport }) {
     return <WeeklyReportMessagePreview message={message} onOpenReport={onOpenReport} />;
   }
   const [priorityLabel, tone] = PRIORITY[message.priority] ?? PRIORITY.normal;
+  const paragraphs = splitMessageParagraphs(message.content || message.summaryLines?.join("\n"));
   return (
     <article className="mx-auto max-w-3xl p-5 sm:p-8">
       <header className="border-b border-line pb-6">
@@ -387,8 +398,12 @@ function MessageDetail({ message, onOpenReport }) {
           发布于 {formatTime(message.publishedAt)}
         </p>
       </header>
-      <div className="whitespace-pre-wrap py-7 text-base leading-8 text-ink-2">
-        {reportText(message.content || message.summaryLines?.join("\n")) || "暂无正文"}
+      <div className="grid gap-4 py-7 text-base leading-8 text-ink-2">
+        {paragraphs.length ? paragraphs.map((paragraph, index) => (
+          <p key={`${paragraph}-${index}`} className="border-l-2 border-transparent pl-0 first:text-ink">
+            {paragraph}
+          </p>
+        )) : <p>暂无正文</p>}
       </div>
       {message.status === "withdrawn" && (
         <p className="rounded-control border border-warning/25 bg-warning-soft p-3 text-sm text-warning">
@@ -417,7 +432,12 @@ function WeeklyReportMessagePreview({ message, onOpenReport }) {
   }, [message.primaryAction.resourceId]);
   const view = buildReportView(report || {});
   const summary = reportText(report?.summary || message.content || message.summaryLines?.join(" "));
-  const compactSummary = summary.split(/\n{2,}|。/).map((line) => line.trim()).find(Boolean) || "本期周报已发布。";
+  const conclusionItems = (view.findings ?? [])
+    .flatMap((finding) => splitMessageParagraphs(finding.text))
+    .filter(Boolean);
+  const previewItems = conclusionItems.length
+    ? conclusionItems.slice(0, 4)
+    : splitMessageParagraphs(summary).slice(0, 4);
   return (
     <article className="mx-auto max-w-3xl p-5 sm:p-8">
       <header className="border-b border-line pb-6">
@@ -427,7 +447,14 @@ function WeeklyReportMessagePreview({ message, onOpenReport }) {
       </header>
       <section className="mt-6 rounded-section border border-primary/15 bg-primary-soft/45 p-5">
         <span className="section-kicker">本期结论</span>
-        <p className="mt-2 text-base leading-7 text-ink">{view.headline !== "本周期尚未形成总体结论。" ? view.headline : compactSummary}</p>
+        <div className="mt-3 grid gap-3" aria-label="本期结论列表">
+          {(previewItems.length ? previewItems : ["本期周报已发布，请查看完整报告了解详情。"]).map((item, index) => (
+            <div key={`${item}-${index}`} className="grid grid-cols-[24px_minmax(0,1fr)] gap-3 border-t border-primary/10 pt-3 first:border-t-0 first:pt-0">
+              <span className="pt-0.5 text-xs font-semibold text-primary">{String(index + 1).padStart(2, "0")}</span>
+              <p className="text-base leading-7 text-ink">{item}</p>
+            </div>
+          ))}
+        </div>
       </section>
       {view.metrics.length ? <div className="mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-section border border-line bg-line">{view.metrics.slice(0, 4).map((metric) => <div key={metric.key} className="bg-paper p-4"><span className="text-xs text-muted">{reportText(metric.name || metric.key)}</span><strong className="mt-1 block text-xl text-ink">{metric.valueLabel}</strong><span className="mt-1 block text-xs text-muted">{metric.changeLabel} · {metric.previousLabel}</span></div>)}</div> : <div className="mt-5 rounded-section border border-amber/25 bg-amber-soft p-4"><strong className="text-sm text-ink">本期数据尚未覆盖</strong><p className="mt-1 text-sm leading-6 text-muted">当前统计周期没有可用业务记录，因此未生成虚假图表或指标。请在完整报告中查看数据范围说明。</p></div>}
       {view.charts.length > 0 && <div className="mt-5"><WeeklyReportCharts charts={view.charts.slice(0, 1)} sourceName={report?.sourceName || "当前数据源"} /></div>}

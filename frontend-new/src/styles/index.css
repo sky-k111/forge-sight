@@ -259,19 +259,15 @@
 
 .report-editorial .report-cover {
   position: relative;
-  background:
-    radial-gradient(circle at 91% 10%, rgb(22 122 118 / 10%), transparent 25rem),
-    linear-gradient(135deg, #fbfcfa 0%, #f4f8f6 100%);
+  background: var(--color-paper);
 }
 
 .report-editorial .report-cover::before {
-  content: "WEEKLY BRIEF";
+  content: "";
   display: block;
-  margin-bottom: 1rem;
-  color: var(--report-accent);
-  font-size: 10px;
-  font-weight: 750;
-  letter-spacing: .18em;
+  width: 72px;
+  border-top: 3px solid var(--report-accent);
+  margin-bottom: 1.5rem;
 }
 
 .report-editorial .chart-frame {

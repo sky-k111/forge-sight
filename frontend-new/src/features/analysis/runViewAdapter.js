@@ -599,6 +599,7 @@ export function adaptAnalysisRun(snapshot) {
         options: (field.options ?? []).map((item) => typeof item === "string" ? { label: item, value: item } : item),
       })),
       allowCustom: interactionPrompt.allowCustom,
+      inputPlaceholder: interactionPrompt.inputPlaceholder,
     } : null,
     error: businessError,
     report: snapshot.assistantMessage?.metadata?.report ?? null,

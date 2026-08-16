@@ -940,12 +940,14 @@ function BlockedCard({ error, onOpenEvidence }) {
 
 function ClarifyCard({ clarification, onSelect, submitting = false, error = null }) {
   const [chosen, setChosen] = useState(null);
+  const [freeText, setFreeText] = useState("");
   const [answers, setAnswers] = useState({});
   const [customFields, setCustomFields] = useState({});
   const fields = clarification.fields ?? [];
 
   useEffect(() => {
     setChosen(null);
+    setFreeText("");
     setAnswers({});
     setCustomFields({});
   }, [clarification.interactionId]);
@@ -969,6 +971,12 @@ function ClarifyCard({ clarification, onSelect, submitting = false, error = null
     if (!canSubmitFields || submitting) return;
     setChosen({ label: "已确认", value: answers });
     onSelect(answers, clarification.interactionId);
+  };
+  const submitFreeText = () => {
+    const answer = freeText.trim();
+    if (!answer || submitting) return;
+    setChosen({ label: answer, value: answer });
+    onSelect(answer, clarification.interactionId);
   };
   return (
     <div className="motion-soft-rise mt-5 max-w-[420px]">
@@ -1029,7 +1037,7 @@ function ClarifyCard({ clarification, onSelect, submitting = false, error = null
             <Button size="sm" onClick={submitFields} disabled={!canSubmitFields || submitting}>确认继续 <Icon name="arrow" size={14} /></Button>
           </div>
         </div>
-      ) : (
+      ) : clarification.options.length ? (
         <div className="mt-3 flex flex-wrap gap-2">
           {clarification.options.map((option) => (
           <button
@@ -1047,6 +1055,22 @@ function ClarifyCard({ clarification, onSelect, submitting = false, error = null
             {option.label}
           </button>
           ))}
+        </div>
+      ) : (
+        <div className="mt-3 max-w-[420px]">
+          <label className="sr-only" htmlFor={`clarification-${clarification.interactionId}`}>补充报告要求</label>
+          <textarea
+            id={`clarification-${clarification.interactionId}`}
+            value={freeText}
+            onChange={(event) => setFreeText(event.target.value)}
+            disabled={submitting}
+            rows={3}
+            placeholder={clarification.inputPlaceholder || "用一句话补充你的要求"}
+            className="w-full resize-y rounded-control border border-line bg-surface px-3 py-2.5 text-sm leading-6 text-ink outline-none transition placeholder:text-faint focus:border-primary/40 focus:ring-2 focus:ring-primary/10 disabled:opacity-55"
+          />
+          <div className="mt-3 flex justify-end">
+            <Button size="sm" onClick={submitFreeText} disabled={!freeText.trim() || submitting}>继续生成 <Icon name="arrow" size={14} /></Button>
+          </div>
         </div>
       )}
       {error && <p className="mt-2.5 text-[11px] leading-relaxed text-red">{error}</p>}

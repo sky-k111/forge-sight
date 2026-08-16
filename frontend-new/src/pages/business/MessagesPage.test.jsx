@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { mergeInboxWithGeneratingReports } from "./MessagesPage";
+import { mergeInboxWithGeneratingReports, splitMessageParagraphs } from "./MessagesPage";
 
 describe("message inbox report generation state", () => {
   test("adds an unopened generating weekly report before published messages", () => {
@@ -15,5 +15,18 @@ describe("message inbox report generation state", () => {
 
   test("does not duplicate a report after it has been published", () => {
     expect(mergeInboxWithGeneratingReports([], [{ id: "rpt-1", status: "published" }])).toEqual([]);
+  });
+
+  test("splits message content into readable numbered paragraphs", () => {
+    expect(splitMessageParagraphs("1. 首先处理产线风险。\n2. 再复核交付计划。"))
+      .toEqual(["1. 首先处理产线风险。", "2. 再复核交付计划。"]);
+  });
+
+  test("splits same-line numbered weekly findings into separate paragraphs", () => {
+    expect(splitMessageParagraphs("1. 产线数据尚未同步，请核实采集状态。 2. 工序数据为空，暂不生成良率结论。"))
+      .toEqual([
+        "1. 产线数据尚未同步，请核实采集状态。",
+        "2. 工序数据为空，暂不生成良率结论。",
+      ]);
   });
 });

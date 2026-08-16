@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import date
 
 from langgraph.checkpoint.memory import InMemorySaver
+import pytest
 
 from app.agent import runner, service
 from app.agent.graph import (
@@ -340,7 +341,16 @@ def test_chat_weekly_report_uses_latest_available_data_date(monkeypatch):
     assert end.date() == date(2026, 7, 15)
 
 
-def test_chat_report_request_first_asks_for_report_type(analysis_session, monkeypatch):
+def test_chat_report_period_understands_a_natural_language_month(monkeypatch):
+    monkeypatch.setattr(runner, "_latest_report_data_date", lambda _source_id: date(2026, 8, 16))
+
+    start, end = runner._chat_report_period("生成 2026 年 7 月的质量专题报告", 1)
+
+    assert start.date() == date(2026, 7, 1)
+    assert end.date() == date(2026, 7, 31)
+
+
+def test_chat_report_request_asks_for_missing_time_and_focus_in_natural_language(analysis_session, monkeypatch):
     from app.reports import service as report_service
 
     created = []
@@ -353,16 +363,14 @@ def test_chat_report_request_first_asks_for_report_type(analysis_session, monkey
     assert accepted["status"] == "waiting_user"
     assert snapshot["status"] == "waiting_user"
     assert snapshot["interaction"]["resumeNode"] == "report.create"
-    assert "哪一种周报" in snapshot["interaction"]["prompt"]["question"]
-    assert {item["value"] for item in snapshot["interaction"]["prompt"]["options"]} >= {
-        "tpl-operations-weekly",
-        "tpl-production-weekly",
-        "tpl-quality-weekly",
-    }
+    assert "统计时间" in snapshot["interaction"]["prompt"]["question"]
+    assert "关注内容" in snapshot["interaction"]["prompt"]["question"]
+    assert snapshot["interaction"]["prompt"]["allowCustom"] is True
+    assert snapshot["interaction"]["prompt"]["options"] == []
     assert created == []
 
 
-def test_report_type_selection_creates_the_requested_report(analysis_session, monkeypatch):
+def test_report_brief_creates_the_matching_report_after_natural_language_reply(analysis_session, monkeypatch):
     from app.reports import service as report_service
 
     captured = {}
@@ -381,7 +389,7 @@ def test_report_type_selection_creates_the_requested_report(analysis_session, mo
     pending = service.get_run(accepted["runId"])
 
     resumed = service.respond_to_interaction(
-        pending["interaction"]["id"], "tpl-quality-weekly"
+        pending["interaction"]["id"], "生成最近 30 天的质量与设备专题报告"
     )
     snapshot = service.get_run(accepted["runId"])
 
@@ -391,6 +399,22 @@ def test_report_type_selection_creates_the_requested_report(analysis_session, mo
     assert captured["payload"].templateId == "tpl-quality-weekly"
     assert captured["payload"].ownerId == "u-report-selection"
     assert "质量周报" in snapshot["assistantMessage"]["content"]
+
+
+def test_report_brief_asks_again_when_time_is_still_missing(analysis_session, monkeypatch):
+    from app.reports import service as report_service
+
+    monkeypatch.setattr(report_service, "create_report", lambda _payload: pytest.fail("不应在缺少时间时创建报告"))
+    session = service.create_session("报告二次澄清测试", 1, "u-report-follow-up")
+    accepted = service.create_run(session["id"], "帮我生成一份报告", "report-follow-up")
+    pending = service.get_run(accepted["runId"])
+
+    resumed = service.respond_to_interaction(pending["interaction"]["id"], "质量情况")
+    snapshot = service.get_run(accepted["runId"])
+
+    assert resumed["status"] == "waiting_user"
+    assert snapshot["interaction"]["status"] == "pending"
+    assert "统计时间" in snapshot["interaction"]["prompt"]["question"]
 
 
 def test_free_conversation_completes_inline_with_one_small_model_call(analysis_session, monkeypatch):
@@ -481,7 +505,8 @@ def test_router_understands_natural_report_request_without_report_keyword(analys
 
     assert accepted["status"] == "waiting_user"
     assert snapshot["status"] == "waiting_user"
-    assert "哪一种周报" in snapshot["interaction"]["prompt"]["question"]
+    assert snapshot["interaction"]["prompt"]["allowCustom"] is True
+    assert snapshot["interaction"]["prompt"]["options"] == []
 
 
 def test_inline_conversation_cannot_complete_twice(analysis_session):
