@@ -1,4 +1,4 @@
-import { apiUrl, httpDelete, httpGet, httpPost, httpRequest } from "../../api/_http";
+import { httpDelete, httpGet, httpPost, httpRequest } from "../../api/_http";
 import { currentUserId } from "../../lib/auth";
 
 export function createAnalysisSession({ title, sourceId, userId = currentUserId() }) {
@@ -80,23 +80,39 @@ const EVENT_TYPES = [
 ];
 
 export function subscribeAnalysisRun(runId, { onEvent, onError, includeAdmin = false } = {}) {
-  const source = new EventSource(apiUrl(`/api/analysis/runs/${runId}/stream?includeAdmin=${includeAdmin}`));
-  const listeners = [];
-  for (const type of EVENT_TYPES) {
-    const listener = (message) => {
-      if (!message.data || message.data === "{}") return;
-      try {
-        onEvent?.(JSON.parse(message.data));
-      } catch (error) {
-        onError?.(error);
+  let stopped = false;
+  let timer = null;
+  let afterSeq = 0;
+  const terminalEvents = new Set(["run.completed", "run.failed", "run.blocked", "run.cancelled"]);
+
+  const poll = async () => {
+    if (stopped) return;
+    try {
+      const suffix = includeAdmin ? "&includeAdmin=true" : "";
+      const response = await httpGet(
+        `/api/analysis/runs/${runId}/events?afterSeq=${afterSeq}${suffix}`,
+      );
+      if (stopped) return;
+      const events = (response.items ?? []).filter((event) => EVENT_TYPES.includes(event.type));
+      for (const event of events) {
+        afterSeq = Math.max(afterSeq, Number(event.seq) || 0);
+        onEvent?.(event);
       }
-    };
-    source.addEventListener(type, listener);
-    listeners.push([type, listener]);
-  }
-  source.onerror = (error) => onError?.(error);
+      if (events.some((event) => terminalEvents.has(event.type))) {
+        stopped = true;
+        return;
+      }
+      timer = window.setTimeout(poll, events.length >= 500 ? 0 : 350);
+    } catch (error) {
+      if (stopped) return;
+      onError?.(error);
+      timer = window.setTimeout(poll, 700);
+    }
+  };
+
+  poll();
   return () => {
-    for (const [type, listener] of listeners) source.removeEventListener(type, listener);
-    source.close();
+    stopped = true;
+    window.clearTimeout(timer);
   };
 }
