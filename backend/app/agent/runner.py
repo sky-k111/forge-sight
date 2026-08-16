@@ -35,17 +35,16 @@ from app.db.models import (
     AnalysisSession,
     AnalysisTask,
     AuditLog,
-    DataTable,
     DataSource,
+    DataTable,
     LlmCallAttempt,
 )
 from app.db.platform import PlatformSession
-from app.gateway.executor import ExecutionResult, execute_readonly
 from app.gateway.cost_guard import ExplainCheckResult, explain_readonly
+from app.gateway.executor import ExecutionResult, execute_readonly
 from app.gateway.sql_validator import validate_sql
 from app.llm import provider
 from app.retrieval.service import build_context_package
-
 
 CHAT_REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
 CHAT_REPORT_TYPE_OPTIONS = (
