@@ -108,6 +108,9 @@ export default function KnowledgePage() {
   const [currentSourceId, setCurrentSourceId] = useState(null);
   const [editor, setEditor] = useState(null);
   const [actionError, setActionError] = useState("");
+  const [metricFilterOpen, setMetricFilterOpen] = useState(false);
+  const [metricStatusFilter, setMetricStatusFilter] = useState("all");
+  const [metricTopicFilter, setMetricTopicFilter] = useState("all");
 
   const load = async () => {
     setError(null);
@@ -167,8 +170,14 @@ export default function KnowledgePage() {
   };
 
   const visibleMetrics = useMemo(
-    () => (data?.metrics ?? []).filter((metric) => `${metric.name}${metric.source}${metric.topic}`.includes(search.trim())),
-    [search, data],
+    () => (data?.metrics ?? []).filter((metric) => {
+      const matchesSearch = `${metric.name}${metric.source}${metric.topic}`.includes(search.trim());
+      const matchesStatus = metricStatusFilter === "all"
+        || (metricStatusFilter === "available" ? metric.availableForAnalysis : !metric.availableForAnalysis);
+      const matchesTopic = metricTopicFilter === "all" || metric.topic === metricTopicFilter;
+      return matchesSearch && matchesStatus && matchesTopic;
+    }),
+    [search, data, metricStatusFilter, metricTopicFilter],
   );
   const selectedMetric = data?.metrics.find((metric) => metric.id === selectedMetricId) ?? data?.metrics[0];
   const knowledgeCount = data ? data.metrics.length + data.objects.length + data.rules.length + data.topics.length : 0;
@@ -252,7 +261,36 @@ export default function KnowledgePage() {
                   className="h-9 w-full rounded-control border border-line bg-surface pl-8 pr-2.5 text-xs text-ink outline-none transition placeholder:text-faint focus:border-primary/50 focus:ring-2 focus:ring-primary/25"
                 />
               </label>
-              <Button size="sm"><Icon name="filter" size={14} />筛选</Button>
+              <div className="relative">
+                <Button
+                  size="sm"
+                  aria-expanded={metricFilterOpen}
+                  aria-haspopup="dialog"
+                  onClick={() => setMetricFilterOpen((value) => !value)}
+                >
+                  <Icon name="filter" size={14} />筛选
+                </Button>
+                {metricFilterOpen && (
+                  <div role="dialog" aria-label="筛选指标" className="absolute right-0 top-[calc(100%+8px)] z-30 grid min-w-[240px] gap-3 rounded-card border border-line bg-surface p-3 shadow-card-hover">
+                    <label className="grid gap-1 text-[11px] font-semibold text-muted">
+                      指标状态
+                      <select aria-label="指标状态" value={metricStatusFilter} onChange={(event) => setMetricStatusFilter(event.target.value)} className="h-9 rounded-control border border-line bg-surface-2 px-2 text-xs font-normal text-ink">
+                        <option value="all">全部状态</option>
+                        <option value="available">可分析</option>
+                        <option value="pending">待审核或验证</option>
+                      </select>
+                    </label>
+                    <label className="grid gap-1 text-[11px] font-semibold text-muted">
+                      所属主题
+                      <select aria-label="指标主题" value={metricTopicFilter} onChange={(event) => setMetricTopicFilter(event.target.value)} className="h-9 rounded-control border border-line bg-surface-2 px-2 text-xs font-normal text-ink">
+                        <option value="all">全部主题</option>
+                        {[...new Set((data.metrics ?? []).map((metric) => metric.topic).filter(Boolean))].map((topic) => <option key={topic} value={topic}>{topic}</option>)}
+                      </select>
+                    </label>
+                    <Button size="sm" onClick={() => { setMetricStatusFilter("all"); setMetricTopicFilter("all"); setMetricFilterOpen(false); }}>清除筛选</Button>
+                  </div>
+                )}
+              </div>
             </div>
             {visibleMetrics.length ? (
               <div className="px-4 pb-4">
@@ -298,7 +336,7 @@ export default function KnowledgePage() {
       )}
       {tab === "objects" && <KnowledgeObjects objects={data.objects} />}
       {tab === "rules" && <KnowledgeRules rules={data.rules} />}
-      {tab === "topics" && <KnowledgeTopics topics={data.topics} />}
+      {tab === "topics" && <KnowledgeTopics topics={data.topics} onOpen={(topic) => { setTab("metrics"); setSearch(topic.name); }} />}
       {editor && (
         <MetricEditorModal
           metric={editor.metric}
@@ -505,6 +543,7 @@ function MetricEditorModal({ metric, sourceId, onClose, onSaved }) {
 }
 
 function KnowledgeObjects({ objects }) {
+  const [expandedId, setExpandedId] = useState(null);
   return (
     <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-3">
       {objects.map((item) => (
@@ -516,9 +555,10 @@ function KnowledgeObjects({ objects }) {
           <h3 className="mt-1 text-body font-semibold text-ink">{item.name}</h3>
           <p className="text-xs leading-relaxed text-muted">{item.description}</p>
           <small className="text-[11px] text-faint">{item.relationCount} 条语义关系</small>
-          <button type="button" className="mt-1 flex cursor-pointer items-center gap-1 text-xs font-medium text-primary transition-opacity hover:opacity-75">
+          <button type="button" aria-expanded={expandedId === item.id} onClick={() => setExpandedId((current) => current === item.id ? null : item.id)} className="mt-1 flex cursor-pointer items-center gap-1 text-xs font-medium text-primary transition-opacity hover:opacity-75">
             查看关系 <Icon name="arrow" size={13} />
           </button>
+          {expandedId === item.id && <p className="rounded-control bg-surface-2 px-2.5 py-2 text-[11px] leading-5 text-muted">已登记 {item.relationCount} 条语义关系，所属主题：{item.topic}。</p>}
         </Card>
       ))}
     </div>
@@ -526,6 +566,7 @@ function KnowledgeObjects({ objects }) {
 }
 
 function KnowledgeRules({ rules }) {
+  const [expandedId, setExpandedId] = useState(null);
   return (
     <Card className="grid gap-1 p-4">
       {rules.map((rule) => (
@@ -536,9 +577,10 @@ function KnowledgeRules({ rules }) {
             <small className="mt-0.5 block text-xs text-faint">{rule.type} · {rule.scope}</small>
           </div>
           <StatusPill tone="green">已启用</StatusPill>
-          <button type="button" aria-label={`查看规则 ${rule.id}`} className="grid h-7 w-7 cursor-pointer place-items-center rounded-control text-muted transition-colors hover:bg-surface-3 hover:text-ink">
+          <button type="button" aria-label={`查看规则 ${rule.id}`} aria-expanded={expandedId === rule.id} onClick={() => setExpandedId((current) => current === rule.id ? null : rule.id)} className="grid h-7 w-7 cursor-pointer place-items-center rounded-control text-muted transition-colors hover:bg-surface-3 hover:text-ink">
             <Icon name="chevron" size={15} />
           </button>
+          {expandedId === rule.id && <p className="col-start-2 col-end-5 -mt-1 text-[11px] leading-5 text-muted">规则范围：{rule.scope} · 类型：{rule.type}</p>}
         </div>
       ))}
     </Card>

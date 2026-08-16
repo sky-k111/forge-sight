@@ -288,6 +288,94 @@ def test_known_role_question_is_completed_before_the_worker_poll(analysis_sessio
     assert "只读" in snapshot["assistantMessage"]["content"]
 
 
+def test_chat_report_request_creates_report_with_session_scope(analysis_session, monkeypatch):
+    from app.reports import service as report_service
+
+    captured = {}
+
+    def fake_create_report(payload):
+        captured["payload"] = payload
+        return {
+            "id": "rpt-chat-created",
+            "title": "聊天生成的制造运营综合周报",
+            "status": "queued",
+            "periodStart": "2026-08-09T00:00:00",
+            "periodEnd": "2026-08-16T23:59:59",
+        }
+
+    monkeypatch.setattr(report_service, "create_report", fake_create_report)
+    created = service.create_session("报告创建测试", 1, "u-report-create")
+
+    accepted = service.create_run(created["id"], "给我一份周报", "report-create")
+    pending = service.get_run(accepted["runId"])
+    resumed = service.respond_to_interaction(
+        pending["interaction"]["id"], "tpl-operations-weekly"
+    )
+    snapshot = service.get_run(accepted["runId"])
+
+    assert accepted["status"] == "waiting_user"
+    assert resumed["status"] == "succeeded"
+    assert snapshot["status"] == "succeeded"
+    assert captured["payload"].templateId == "tpl-operations-weekly"
+    assert captured["payload"].sourceId == 1
+    assert captured["payload"].ownerId == "u-report-create"
+    assert "已创建" in snapshot["assistantMessage"]["content"]
+    assert "rpt-chat-created" in snapshot["assistantMessage"]["content"]
+
+
+def test_chat_report_request_first_asks_for_report_type(analysis_session, monkeypatch):
+    from app.reports import service as report_service
+
+    created = []
+    monkeypatch.setattr(report_service, "create_report", lambda _payload: created.append(True))
+    session = service.create_session("报告类型澄清测试", 1, "u-report-clarify")
+
+    accepted = service.create_run(session["id"], "帮我生成一份报告", "report-clarify")
+    snapshot = service.get_run(accepted["runId"])
+
+    assert accepted["status"] == "waiting_user"
+    assert snapshot["status"] == "waiting_user"
+    assert snapshot["interaction"]["resumeNode"] == "report.create"
+    assert "哪一种周报" in snapshot["interaction"]["prompt"]["question"]
+    assert {item["value"] for item in snapshot["interaction"]["prompt"]["options"]} >= {
+        "tpl-operations-weekly",
+        "tpl-production-weekly",
+        "tpl-quality-weekly",
+    }
+    assert created == []
+
+
+def test_report_type_selection_creates_the_requested_report(analysis_session, monkeypatch):
+    from app.reports import service as report_service
+
+    captured = {}
+
+    def fake_create_report(payload):
+        captured["payload"] = payload
+        return {
+            "id": "rpt-quality-chat",
+            "title": "质量周报",
+            "status": "queued",
+        }
+
+    monkeypatch.setattr(report_service, "create_report", fake_create_report)
+    session = service.create_session("报告选择测试", 1, "u-report-selection")
+    accepted = service.create_run(session["id"], "帮我生成一份报告", "report-selection")
+    pending = service.get_run(accepted["runId"])
+
+    resumed = service.respond_to_interaction(
+        pending["interaction"]["id"], "tpl-quality-weekly"
+    )
+    snapshot = service.get_run(accepted["runId"])
+
+    assert resumed["status"] == "succeeded"
+    assert snapshot["status"] == "succeeded"
+    assert snapshot["interaction"]["status"] == "resolved"
+    assert captured["payload"].templateId == "tpl-quality-weekly"
+    assert captured["payload"].ownerId == "u-report-selection"
+    assert "质量周报" in snapshot["assistantMessage"]["content"]
+
+
 def test_free_conversation_completes_inline_with_one_small_model_call(analysis_session, monkeypatch):
     from app.llm.provider import LLMResponse, LLMUsage
 
@@ -350,6 +438,33 @@ def test_unknown_business_request_is_preclassified_once_then_queued(analysis_ses
         run = session.query(runner.AnalysisRun).filter_by(id=accepted["runId"]).one()
         message = session.query(runner.AnalysisMessage).filter_by(id=run.trigger_message_id).one()
         assert message.metadata_json["routeLabels"] == {"0": "analysis"}
+
+
+def test_router_understands_natural_report_request_without_report_keyword(analysis_session, monkeypatch):
+    from app.llm.provider import LLMResponse, LLMUsage
+
+    def fake_completion(system, user, *, temperature, max_tokens):
+        assert "report" in system.lower()
+        return LLMResponse(
+            content='{"segments":[{"index":0,"kind":"report","response":""}]}',
+            model="test-router",
+            provider_request_id="req-report-route",
+            usage=LLMUsage(input_tokens=18, output_tokens=8, total_tokens=26),
+        )
+
+    monkeypatch.setattr(runner.provider, "chat_completion", fake_completion)
+    created = service.create_session("自然报告问法", 1, "u-natural-report")
+
+    accepted = service.create_run(
+        created["id"],
+        "帮我把最近一周的经营情况整理成一份总结",
+        "natural-report",
+    )
+    snapshot = service.get_run(accepted["runId"])
+
+    assert accepted["status"] == "waiting_user"
+    assert snapshot["status"] == "waiting_user"
+    assert "哪一种周报" in snapshot["interaction"]["prompt"]["question"]
 
 
 def test_inline_conversation_cannot_complete_twice(analysis_session):

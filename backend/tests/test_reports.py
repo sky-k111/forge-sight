@@ -87,6 +87,9 @@ def test_create_and_finalize_topic_report_reuses_agent_artifacts(analysis_sessio
         session_factory=analysis_session,
     )
     with analysis_session() as session:
+        created = session.get(Report, report["id"])
+        assert created.scope_json["emailEnabled"] is True
+    with analysis_session() as session:
         run = AnalysisRun(
             id="run-report",
             session_id="ses-report",

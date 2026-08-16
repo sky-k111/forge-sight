@@ -244,10 +244,6 @@
   .report-editorial .chart-frame {
     margin-inline: -8px;
   }
-
-  .topic-figure {
-    min-height: 310px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

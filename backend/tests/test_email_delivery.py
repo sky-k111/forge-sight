@@ -243,6 +243,7 @@ def test_templates_escape_user_content_and_include_plain_text_links():
         fallback_summary="摘要",
         link="https://example.test/workspace/reports/report-1",
     )
+
     announcement = build_announcement_mail(
         title="公告 <重要>",
         body="内容 & 提醒",
@@ -259,6 +260,27 @@ def test_templates_escape_user_content_and_include_plain_text_links():
     assert "轻微波动" not in weekly.text_body
     assert "公告 &lt;重要&gt;" in announcement.html_body
     assert "内容 &amp; 提醒" in announcement.html_body
+
+
+def test_weekly_report_email_can_be_disabled_per_report(delivery_session, tmp_path):
+    _seed_weekly(delivery_session, tmp_path)
+    with delivery_session() as session:
+        report = session.get(Report, "report-1")
+        report.scope_json = {
+            **(report.scope_json or {}),
+            "emailEnabled": False,
+        }
+        session.flush()
+        consume_message_published_event(
+            session,
+            "event-weekly",
+            "event-worker",
+            now=datetime(2026, 8, 10, 10, 0),
+        )
+        delivery = session.query(ReportDelivery).filter_by(report_id="report-1").one()
+
+        assert delivery.status == "suppressed"
+        assert delivery.error_category == "email_disabled"
 
 
 def test_message_event_creates_one_delivery_per_recipient_and_suppresses_unverified(

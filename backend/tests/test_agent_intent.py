@@ -16,6 +16,42 @@ def test_obvious_smalltalk_is_routed_away_from_analysis():
     assert classify_request_kind("什么是工序良率") == "analysis"
 
 
+def test_bare_report_request_asks_for_report_scope_instead_of_entering_data_analysis():
+    route = build_request_route("给我生成一份报告")
+
+    assert classify_request_kind("给我生成一份报告") == "conversation"
+    assert route["kind"] == "conversation"
+    assert "报告类型" in route["conversationResponse"]
+    assert "统计周期" in route["conversationResponse"]
+
+
+def test_report_output_does_not_hide_a_real_business_analysis_request():
+    assert classify_request_kind("分析最近 7 天的产量并生成一份报告") == "analysis"
+
+
+def test_report_generation_variants_with_scope_stay_out_of_no_match_route():
+    assert classify_request_kind("请帮我生成一份报告") == "conversation"
+    assert classify_request_kind("生成最近 7 天的质量周报") == "conversation"
+    assert classify_request_kind("你好，帮我生成一份报告") == "conversation"
+
+
+def test_report_request_with_implicit_give_me_wording_stays_in_report_route():
+    for text in (
+        "给我一份周报",
+        "我要一份报告",
+        "来一份质量周报",
+        "我想要一份设备周报",
+        "可以帮我做个库存周报吗",
+        "请给我准备一份生产周报",
+        "帮我出个周报",
+    ):
+        assert classify_request_kind(text) == "conversation"
+
+
+def test_report_explanation_is_not_mistaken_for_report_creation():
+    assert classify_request_kind("请解释报告里的指标") == "analysis"
+
+
 def test_emotional_conversation_is_not_misclassified_by_a_single_character():
     assert classify_request_kind("我最近表现不好，想和你聊聊") == "conversation"
     assert classify_request_kind("最近压力有点大，想和你聊聊") == "conversation"

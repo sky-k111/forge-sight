@@ -10,6 +10,7 @@ from app.agent.ids import new_id
 from app.agent.intent import (
     build_smalltalk_response,
     classify_request_kind,
+    is_report_request,
     is_deterministic_conversation,
 )
 from app.config import settings
@@ -169,6 +170,7 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
             for item in reversed(history_rows)
         ]
         request_kind = classify_request_kind(normalized_question, conversation_context)
+        report_request = is_report_request(normalized_question)
         inline_conversation = request_kind in {"conversation", "unknown"}
         deterministic_conversation = (
             inline_conversation and is_deterministic_conversation(normalized_question)
@@ -222,9 +224,16 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
     if inline_conversation:
         # Known turns are model-free; open conversation gets one small model call.
         # Neither path enters schema retrieval, SQL generation or worker polling.
-        from app.agent.runner import execute_inline_conversation, execute_inline_route
+        from app.agent.runner import (
+            execute_inline_conversation,
+            execute_inline_report_clarification,
+            execute_inline_report_request,
+            execute_inline_route,
+        )
 
-        if request_kind == "unknown":
+        if report_request:
+            execute_inline_report_clarification(run_id)
+        elif request_kind == "unknown":
             execute_inline_route(run_id)
         else:
             execute_inline_conversation(
@@ -327,6 +336,43 @@ def respond_to_interaction(interaction_id: str, answer: str) -> dict:
         run = session.query(AnalysisRun).filter_by(id=interaction.run_id).with_for_update().one()
         if run.status != "waiting_user":
             raise AnalysisConflict("当前运行不在等待用户状态")
+        if interaction.resume_node == "report.create":
+            allowed_values = {
+                item.get("value")
+                for item in (interaction.prompt_json or {}).get("options", [])
+                if item.get("value")
+            }
+            selected = answer.strip()
+            if selected not in allowed_values:
+                raise AnalysisConflict("请选择一个有效的周报类型")
+            interaction.status = "resolved"
+            interaction.response_json = {"answer": selected}
+            interaction.resolved_at = datetime.now()
+            now = datetime.now()
+            run.status = "running"
+            run.started_at = run.started_at or now
+            run.finished_at = None
+            run.lease_owner = "inline-conversation"
+            run.lease_expires_at = now + timedelta(
+                seconds=max(settings.agent_worker_lease_seconds, settings.llm_timeout_seconds + 15)
+            )
+            parent_session = session.query(AnalysisSession).filter_by(id=run.session_id).first()
+            if parent_session:
+                parent_session.updated_at = now
+            append_event(
+                session,
+                run,
+                "clarification.resolved",
+                {"interactionId": interaction.id, "answer": selected, "status": "running"},
+                step_key="report.create",
+            )
+            session.commit()
+            from app.agent.runner import execute_inline_report_request
+
+            execute_inline_report_request(run.id, template_id=selected)
+            with PlatformSession() as completed_session:
+                completed = completed_session.query(AnalysisRun).filter_by(id=run.id).one()
+                return {**_run_acceptance(completed), "interactionId": interaction.id, "resumed": True}
         interaction.status = "resolved"
         interaction.response_json = {"answer": answer.strip()}
         interaction.resolved_at = datetime.now()

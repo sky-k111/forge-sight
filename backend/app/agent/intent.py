@@ -33,6 +33,31 @@ SMALLTALK_PATTERNS = (
     re.compile(r"(?:讲个笑话|聊聊天|今天天气|心情怎么样|你好吗)"),
     re.compile(r"(?:想.*聊|压力|心情|难过|焦虑|烦恼|陪我|表现不好)"),
 )
+_REPORT_TERMS = ("周报", "月报", "专题报告", "报告", "报表")
+_REPORT_REQUEST_PATTERNS = (
+    # Creation verbs may be separated from the report noun by a template or
+    # audience qualifier, for example "准备一份生产周报".
+    re.compile(
+        r"(?:生成|创建|制作|编制|撰写|产出|出|做|弄|准备|安排|提供|发送|发)"
+        r".{0,12}(?:周报|月报|专题报告|报告|报表)"
+    ),
+    # Natural request openings cover turns such as "给我一份周报" and
+    # "可以帮我做个库存周报吗" without requiring one fixed wording.
+    re.compile(
+        r"(?:给我|我要|需要|想要|来一份|帮我)"
+        r".{0,12}(?:周报|月报|专题报告|报告|报表)"
+    ),
+    # Polite prefixes must be followed by an actual request verb; otherwise
+    # phrases such as "请解释报告里的指标" would be mistaken for creation.
+    re.compile(
+        r"(?:请|能不能|可以)(?:给|帮|生成|创建|制作|编制|撰写|出|做|弄|准备|安排|提供|发送|发)"
+        r".{0,12}(?:周报|月报|专题报告|报告|报表)"
+    ),
+)
+_REPORT_ANALYSIS_ACTIONS = (
+    "分析", "统计", "比较", "对比", "查找", "查询", "找出", "查看", "计算", "汇总",
+    "排名", "排行", "识别",
+)
 OUT_OF_SCOPE_PATTERNS = (
     re.compile(r"(?:天气|下雨|下雪|气温|空气质量|穿什么衣服|带伞)"),
     re.compile(r"(?:新闻|股票|彩票|星座|电影|音乐|旅游攻略)"),
@@ -69,8 +94,27 @@ def _has_analysis_verb(text: str) -> bool:
     return any(term in text for term in ANALYSIS_VERBS)
 
 
+def _is_report_request(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip().rstrip("。.!！?？")
+    if not normalized or not any(term in normalized for term in _REPORT_TERMS):
+        return False
+    if not any(pattern.search(normalized) for pattern in _REPORT_REQUEST_PATTERNS):
+        return False
+    # A request that also contains a concrete analysis action should remain an
+    # analysis task; the report wording is only its requested output format.
+    return not any(term in normalized for term in _REPORT_ANALYSIS_ACTIONS)
+
+
+def is_report_request(text: str) -> bool:
+    """Return whether a turn explicitly asks the Agent to create a report."""
+
+    return _is_report_request(text)
+
+
 def _is_known_conversation(text: str) -> bool:
-    return any(pattern.search(text) for pattern in (*SMALLTALK_PATTERNS, *OUT_OF_SCOPE_PATTERNS))
+    return _is_report_request(text) or any(
+        pattern.search(text) for pattern in (*SMALLTALK_PATTERNS, *OUT_OF_SCOPE_PATTERNS)
+    )
 
 
 def is_deterministic_conversation(text: str) -> bool:
@@ -87,6 +131,12 @@ def classify_request_kind(
     """Classify locally; reserve the analysis worker for data-bearing turns."""
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
     if not normalized:
+        return "conversation"
+    # A bare report request does not contain a metric, period, or data scope.
+    # Keep it in the conversation path so it can ask for the missing report
+    # parameters instead of falling through to semantic retrieval and returning
+    # a misleading no-data error.
+    if _is_report_request(normalized):
         return "conversation"
     if _has_analysis_verb(normalized) or any(term in normalized for term in BUSINESS_TERMS):
         return "analysis"
@@ -142,25 +192,41 @@ def build_request_route(
     model_labels: dict[int, str] | None = None,
     conversation_context: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """Build a route contract for pure conversation, analysis, or mixed input."""
+    """Build a route contract for conversation, analysis, report, or mixed input.
+
+    ``report`` is deliberately a model-owned semantic label.  The deterministic
+    classifier still handles explicit report wording, while the model router can
+    use the same contract for natural requests such as “把最近一周的经营情况
+    整理成一份总结”。
+    """
     segments = split_request_segments(question)
     labels = model_labels or {}
     classified = []
     for index, segment in enumerate(segments):
         local_kind = classify_request_kind(segment, conversation_context)
         kind = labels.get(index, local_kind)
-        if kind not in {"analysis", "conversation"}:
+        if kind not in {"analysis", "conversation", "report"}:
             kind = "unknown"
         classified.append({"index": index, "text": segment, "kind": kind})
 
     analysis_parts = [item["text"] for item in classified if item["kind"] == "analysis"]
     conversation_parts = [item["text"] for item in classified if item["kind"] == "conversation"]
+    report_parts = [item["text"] for item in classified if item["kind"] == "report"]
     unknown_parts = [item for item in classified if item["kind"] == "unknown"]
-    route_kind = "mixed" if analysis_parts and conversation_parts else "analysis" if analysis_parts else "conversation"
+    route_kind = (
+        "mixed"
+        if analysis_parts and (conversation_parts or report_parts)
+        else "analysis"
+        if analysis_parts
+        else "report"
+        if report_parts
+        else "conversation"
+    )
     return {
         "kind": route_kind,
         "segments": classified,
         "unknownSegments": unknown_parts,
+        "reportSegments": [item for item in classified if item["kind"] == "report"],
         "analysisQuestion": "；".join(analysis_parts),
         "conversationResponse": build_conversation_response(conversation_parts, mixed=bool(analysis_parts)),
     }
@@ -181,6 +247,11 @@ def build_conversation_response(parts: list[str], *, mixed: bool = False) -> str
 
 def build_smalltalk_response(text: str) -> str:
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if _is_report_request(normalized):
+        return (
+            "可以生成，但还需要报告类型、统计周期和数据范围。"
+            "例如可以说“生成最近 7 天的质量周报”；也可以打开“周报中心”选择模板后创建。"
+        )
     if re.search(r"(?:谢谢|感谢|辛苦了)", normalized, re.IGNORECASE):
         return "不客气。你可以继续告诉我想查看的生产、质量、设备或库存问题。"
     if re.search(r"(?:你是谁|你叫什么|介绍一下你自己|怎么称呼你|你的角色|你的职责)", normalized, re.IGNORECASE):
