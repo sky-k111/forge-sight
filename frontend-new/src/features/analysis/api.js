@@ -1,5 +1,5 @@
-import { httpDelete, httpGet, httpPost, httpRequest } from "../../api/_http";
-import { currentUserId } from "../../lib/auth";
+import { apiUrl, httpDelete, httpGet, httpPost, httpRequest } from "../../api/_http";
+import { currentUserId, getToken } from "../../lib/auth";
 
 export function createAnalysisSession({ title, sourceId, userId = currentUserId() }) {
   return httpPost("/api/analysis/sessions", { title, sourceId, userId });
@@ -27,10 +27,6 @@ export function submitAnalysisRun(sessionId, question, idempotencyKey = crypto.r
 
 export function getAnalysisRun(runId) {
   return httpGet(`/api/analysis/runs/${runId}`);
-}
-
-export function getAnalysisEvents(runId, afterSeq = 0) {
-  return httpGet(`/api/analysis/runs/${runId}/events?afterSeq=${afterSeq}`);
 }
 
 export function getAnalysisUsage(runId, includeAttempts = false) {
@@ -68,51 +64,97 @@ export function createAnalysisBranch(
   });
 }
 
-const EVENT_TYPES = [
-  "run.accepted", "run.started", "run.resumed", "run.status.changed", "run.completed", "run.failed", "run.blocked", "run.cancelled",
-  "tasks.planned", "task.started", "task.completed", "task.failed", "task.skipped",
-  "step.started", "step.progress", "step.completed", "step.retrying", "step.failed", "step.blocked", "step.skipped",
-  "clarification.requested", "clarification.resolved", "clarification.expired",
-  "context.compiled", "sql.generated", "sql.validation.completed", "sql.execution.started", "sql.execution.completed",
-  "artifact.created", "message.delta", "message.completed", "checkpoint.created", "branch.created", "state.snapshot",
-  "llm.call.started", "llm.usage.recorded", "run.budget.warning", "run.budget.exceeded", "heartbeat",
-  "modeling.proposed", "run.modeling_proposed",
-];
+const TERMINAL_EVENT_TYPES = new Set(["run.completed", "run.failed", "run.blocked", "run.cancelled"]);
+const RECONNECT_DELAY_MS = 1000;
 
+function parseSseFrame(raw) {
+  const frame = { id: null, event: null, data: null };
+  for (const line of raw.split("\n")) {
+    if (line.startsWith(":")) continue;
+    if (line.startsWith("event:")) frame.event = line.slice(6).trim();
+    else if (line.startsWith("data:")) frame.data = (frame.data == null ? "" : frame.data + "\n") + line.slice(5).trimStart();
+    else if (line.startsWith("id:")) frame.id = line.slice(3).trim();
+  }
+  return frame;
+}
+
+// 通过 fetch + ReadableStream 消费后端真 SSE（/runs/{id}/stream）。
+// 原生 EventSource 无法携带 Authorization 头，故手动解析 event/data 帧。
 export function subscribeAnalysisRun(runId, { onEvent, onError, includeAdmin = false } = {}) {
   let stopped = false;
-  let timer = null;
-  let afterSeq = 0;
-  const terminalEvents = new Set(["run.completed", "run.failed", "run.blocked", "run.cancelled"]);
+  let controller = null;
+  let reconnectTimer = null;
+  let lastSeq = 0;
 
-  const poll = async () => {
+  const stop = () => {
+    stopped = true;
+    if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
+    controller?.abort();
+  };
+
+  const scheduleReconnect = () => {
     if (stopped) return;
+    reconnectTimer = window.setTimeout(connect, RECONNECT_DELAY_MS);
+  };
+
+  const readStream = async (body) => {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
     try {
-      const suffix = includeAdmin ? "&includeAdmin=true" : "";
-      const response = await httpGet(
-        `/api/analysis/runs/${runId}/events?afterSeq=${afterSeq}${suffix}`,
-      );
-      if (stopped) return;
-      const events = (response.items ?? []).filter((event) => EVENT_TYPES.includes(event.type));
-      for (const event of events) {
-        afterSeq = Math.max(afterSeq, Number(event.seq) || 0);
-        onEvent?.(event);
+      while (!stopped) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let separatorIndex;
+        while ((separatorIndex = buffer.indexOf("\n\n")) >= 0) {
+          const frame = parseSseFrame(buffer.slice(0, separatorIndex));
+          buffer = buffer.slice(separatorIndex + 2);
+          if (!frame.event || frame.event === "heartbeat") continue;
+          if (frame.id) lastSeq = Math.max(lastSeq, Number(frame.id) || 0);
+          if (frame.data == null) continue;
+          let event;
+          try {
+            event = JSON.parse(frame.data);
+          } catch {
+            continue;
+          }
+          if (TERMINAL_EVENT_TYPES.has(event.type)) stopped = true;
+          onEvent?.(event);
+        }
       }
-      if (events.some((event) => terminalEvents.has(event.type))) {
-        stopped = true;
-        return;
-      }
-      timer = window.setTimeout(poll, events.length >= 500 ? 0 : 350);
+    } finally {
+      try { reader.releaseLock(); } catch { /* 已释放或已取消 */ }
+    }
+    // 终态由事件置 stopped，不再重连；其余流结束/中断则退避重连。
+    if (!stopped) scheduleReconnect();
+  };
+
+  const connect = async () => {
+    if (stopped) return;
+    controller = new AbortController();
+    try {
+      const token = getToken();
+      const suffix = includeAdmin ? "?includeAdmin=true" : "";
+      const headers = {
+        Accept: "text/event-stream",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(lastSeq > 0 ? { "Last-Event-ID": String(lastSeq) } : {}),
+      };
+      const response = await fetch(apiUrl(`/api/analysis/runs/${runId}/stream${suffix}`), {
+        headers,
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.body) throw new Error("当前环境不支持流式响应");
+      await readStream(response.body);
     } catch (error) {
-      if (stopped) return;
+      if (stopped || error?.name === "AbortError") return;
       onError?.(error);
-      timer = window.setTimeout(poll, 700);
+      scheduleReconnect();
     }
   };
 
-  poll();
-  return () => {
-    stopped = true;
-    window.clearTimeout(timer);
-  };
+  connect();
+  return stop;
 }

@@ -38,7 +38,7 @@ src/
     ui/               # 通用原子组件（Button、Card、Badge、Table、Modal、Tabs、Icon...）
     charts/           # Recharts 统一主题封装（RankBarChart、TrendLineChart、ComboMetricChart 等，页面不得直接 import recharts）
   features/
-    analysis/         # 问析事件归约（eventReducer）、视图适配（runViewAdapter）、SSE 订阅（api.js）
+    analysis/         # 问析实时订阅（api.js，SSE 推送）、视图适配（runViewAdapter）
   pages/
     business/         # 业务人员工作区页面（AnalysisPage、ModelingPage...）
     admin/            # 管理员工作区页面（ModelGovernancePage...）
