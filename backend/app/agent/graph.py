@@ -650,7 +650,7 @@ def _model_route_decision(
         except (TypeError, ValueError):
             continue
         kind = str(item.get("kind", "")).lower()
-        if index in allowed_indices and kind in {"analysis", "conversation"}:
+        if index in allowed_indices and kind in {"analysis", "conversation", "report"}:
             labels[index] = kind
             response = str(item.get("response") or "").strip()
             if kind == "conversation" and response:
@@ -667,11 +667,15 @@ def _route_model_prompt(
     system = (
         "你是 ForgeSight，面向制造业数据底座的智能问析 Agent。你的角色是帮助企业用户理解生产、"
         "质量、设备和库存数据；涉及企业数据时只能走只读分析，不编造数据，也不执行写操作。"
-        "现在结合最近对话，对每个片段判断是否需要查询当前企业数据底座。"
+        "现在结合最近对话，对每个片段判断用户真正想做的事情。"
         "analysis=需要查询或解释企业生产、质量、设备、库存、指标、表字段；"
+        "report=用户想新建、生成、准备、整理、产出或发送一份周期性/专题业务报告，"
+        "即使没有出现“报告”或“周报”这些字样，只要语义是在请求一份可交付的经营总结，也归为 report。"
+        "report 只表示创建新报告，不包括查看、解释或总结已有报告；创建报告时先让用户选择报告类型，"
+        "不要在路由阶段查询数据。"
         "conversation=不需要企业数据的正常对话。对 conversation 应以 ForgeSight 身份自然、简洁地回应，"
         "可以正常交流，但不得假装已经查询过企业数据；必要时再引导用户提出业务问题。"
-        "仅输出 JSON：{\"segments\":[{\"index\":0,\"kind\":\"analysis|conversation\","
+        "仅输出 JSON：{\"segments\":[{\"index\":0,\"kind\":\"analysis|conversation|report\","
         "\"response\":\"仅 conversation 填写的中文回答\"}]}。"
     )
     user = json.dumps(

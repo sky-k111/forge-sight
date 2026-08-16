@@ -306,7 +306,7 @@ def test_chat_report_request_creates_report_with_session_scope(analysis_session,
     monkeypatch.setattr(report_service, "create_report", fake_create_report)
     created = service.create_session("报告创建测试", 1, "u-report-create")
 
-    accepted = service.create_run(created["id"], "帮我生成一份报告", "report-create")
+    accepted = service.create_run(created["id"], "给我一份周报", "report-create")
     pending = service.get_run(accepted["runId"])
     resumed = service.respond_to_interaction(
         pending["interaction"]["id"], "tpl-operations-weekly"
@@ -438,6 +438,33 @@ def test_unknown_business_request_is_preclassified_once_then_queued(analysis_ses
         run = session.query(runner.AnalysisRun).filter_by(id=accepted["runId"]).one()
         message = session.query(runner.AnalysisMessage).filter_by(id=run.trigger_message_id).one()
         assert message.metadata_json["routeLabels"] == {"0": "analysis"}
+
+
+def test_router_understands_natural_report_request_without_report_keyword(analysis_session, monkeypatch):
+    from app.llm.provider import LLMResponse, LLMUsage
+
+    def fake_completion(system, user, *, temperature, max_tokens):
+        assert "report" in system.lower()
+        return LLMResponse(
+            content='{"segments":[{"index":0,"kind":"report","response":""}]}',
+            model="test-router",
+            provider_request_id="req-report-route",
+            usage=LLMUsage(input_tokens=18, output_tokens=8, total_tokens=26),
+        )
+
+    monkeypatch.setattr(runner.provider, "chat_completion", fake_completion)
+    created = service.create_session("自然报告问法", 1, "u-natural-report")
+
+    accepted = service.create_run(
+        created["id"],
+        "帮我把最近一周的经营情况整理成一份总结",
+        "natural-report",
+    )
+    snapshot = service.get_run(accepted["runId"])
+
+    assert accepted["status"] == "waiting_user"
+    assert snapshot["status"] == "waiting_user"
+    assert "哪一种周报" in snapshot["interaction"]["prompt"]["question"]
 
 
 def test_inline_conversation_cannot_complete_twice(analysis_session):

@@ -35,6 +35,23 @@ def test_report_generation_variants_with_scope_stay_out_of_no_match_route():
     assert classify_request_kind("你好，帮我生成一份报告") == "conversation"
 
 
+def test_report_request_with_implicit_give_me_wording_stays_in_report_route():
+    for text in (
+        "给我一份周报",
+        "我要一份报告",
+        "来一份质量周报",
+        "我想要一份设备周报",
+        "可以帮我做个库存周报吗",
+        "请给我准备一份生产周报",
+        "帮我出个周报",
+    ):
+        assert classify_request_kind(text) == "conversation"
+
+
+def test_report_explanation_is_not_mistaken_for_report_creation():
+    assert classify_request_kind("请解释报告里的指标") == "analysis"
+
+
 def test_emotional_conversation_is_not_misclassified_by_a_single_character():
     assert classify_request_kind("我最近表现不好，想和你聊聊") == "conversation"
     assert classify_request_kind("最近压力有点大，想和你聊聊") == "conversation"

@@ -858,6 +858,12 @@ def execute_inline_route(run_id: str) -> dict:
         labels,
         context,
     )
+    # The router may recognize a report request from its meaning rather than
+    # from fixed report keywords (for example, “把最近一周的经营情况整理成
+    # 一份总结”).  Keep this on the same clarification path as explicit report
+    # requests and do not send it through SQL retrieval first.
+    if routed.get("reportSegments") and not routed.get("analysisQuestion"):
+        return execute_inline_report_clarification(run_id)
     if not labels or routed["kind"] in {"analysis", "mixed"}:
         with PlatformSession() as session:
             run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
@@ -1063,6 +1069,13 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
                 if interaction:
                     interaction.status = "consumed"
                 session.commit()
+        # A queued run can reach the worker when the first inline router call
+        # was unavailable.  If the worker's router then recognizes the same
+        # natural-language report intent, keep the UX consistent with the
+        # inline path and ask for a template instead of completing an empty
+        # “分析完成” run.
+        if state.get("intent_kind") == "report" and not state.get("analysis_question"):
+            return execute_inline_report_clarification(run_id)
         _finish_run(run_id, state)
     except Exception as exc:
         _mark_unexpected_failure(run_id, exc)
