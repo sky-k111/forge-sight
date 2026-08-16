@@ -19,6 +19,7 @@ import {
   StatusPill,
 } from "../../components/ui";
 import Icon from "../../components/ui/Icon";
+import cn from "../../lib/cn";
 import { buildReportView } from "../../lib/weeklyReportView";
 
 const TERMINAL = new Set([
@@ -195,6 +196,7 @@ export default function ReportDetailPage() {
                   {view.headline}
                 </p>
               </div>
+              <KeyFindings findings={view.findings} />
             </div>
             <TopAnomaly anomaly={view.topAnomaly} />
           </div>
@@ -231,7 +233,7 @@ export default function ReportDetailPage() {
           )}
         </section>
 
-        <section className="border-b border-line px-5 py-7 sm:px-8 xl:px-10">
+        <section className="border-b border-line bg-surface-2/25 px-5 py-7 sm:px-8 xl:px-10">
           <SectionTitle
             eyebrow="Agent 图表编排"
             title="让数据用适合它的方式说话"
@@ -239,12 +241,11 @@ export default function ReportDetailPage() {
           />
           {view.charts.length ? (
             <>
-              <div className="mt-6 grid items-stretch gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(280px,0.45fr)]">
+              <div className="mt-6">
                 <WeeklyReportCharts
                   charts={view.charts.slice(0, 1)}
                   sourceName={view.appendix.sources.join("、") || report.sourceName}
                 />
-                <TopicIllustration />
               </div>
               {view.charts.length > 1 && (
                 <div className="mt-5">
@@ -578,7 +579,7 @@ function SectionTitle({ id, eyebrow, title, description }) {
 function TopAnomaly({ anomaly }) {
   if (!anomaly)
     return (
-      <aside className="rounded-section border border-success/25 bg-success-soft p-5">
+      <aside className="rounded-section border border-success/25 border-l-4 bg-success-soft p-5">
         <span className="text-[13px] font-semibold text-success">最高风险</span>
         <h2 className="mt-2 text-xl font-semibold text-ink">
           本周未识别到结构化异常
@@ -590,7 +591,7 @@ function TopAnomaly({ anomaly }) {
     );
   const [label] = SEVERITY[anomaly.severity] ?? [anomaly.severity];
   return (
-    <aside className="rounded-section border border-critical/25 bg-critical-soft p-5">
+    <aside className="rounded-section border border-critical/25 border-l-4 bg-critical-soft p-5">
       <span className="text-[13px] font-semibold text-critical">
         最高风险 · {label}
       </span>
@@ -607,6 +608,27 @@ function TopAnomaly({ anomaly }) {
     </aside>
   );
 }
+function KeyFindings({ findings = [] }) {
+  const confirmed = findings.filter((item) => item?.text && (item.level === "confirmed" || item.evidenceStatus === "verified"));
+  const items = (confirmed.length ? confirmed : findings.filter((item) => item?.text)).slice(0, 3);
+  if (!items.length) return null;
+  return (
+    <div className="mt-6 border-t border-line pt-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="section-kicker">关键发现</span>
+        <span className="text-[11px] text-faint">优先展示有证据支撑的结论</span>
+      </div>
+      <ul className="mt-3 grid gap-2 sm:grid-cols-2" aria-label="本周关键发现">
+        {items.map((item, index) => (
+          <li key={`${item.text}-${index}`} className="flex min-w-0 items-start gap-2.5 rounded-control border border-line bg-surface/75 px-3 py-2.5 text-sm leading-6 text-ink-2">
+            <span className="shrink-0 font-mono text-[11px] font-semibold text-primary">{String(index + 1).padStart(2, "0")}</span>
+            <span className="min-w-0">{item.text}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 function MetricCell({ metric }) {
   return (
     <div className="bg-paper p-4">
@@ -616,75 +638,20 @@ function MetricCell({ metric }) {
       <strong className="mt-2 block font-mono text-[25px] font-semibold tracking-tight text-ink">
         {metric.valueLabel}
       </strong>
-      <div className="mt-3 grid gap-1 text-[12px]">
+      <div className="mt-3 flex items-center justify-between gap-2 text-[12px]">
         <span className="text-muted">{metric.previousLabel}</span>
-        <span className="font-mono font-semibold text-primary">
+        <span className={cn("font-mono font-semibold", metric.trend === "down" ? "text-critical" : metric.trend === "up" ? "text-success" : "text-muted")}>
           {metric.trend === "up" ? "↑ " : metric.trend === "down" ? "↓ " : ""}
           {metric.changeLabel}
         </span>
       </div>
-    </div>
-  );
-}
-function TopicIllustration() {
-  return (
-    <figure className="topic-figure relative min-h-[360px] overflow-hidden bg-ink p-6 text-white sm:p-8">
-      <svg
-        viewBox="0 0 420 260"
-        role="img"
-        aria-label="制造流程数据从设备汇聚为趋势和预警的主题示意图"
-        className="mx-auto w-full max-w-[460px]"
-      >
-        <defs>
-          <linearGradient id="flow" x1="0" x2="1">
-            <stop stopColor="#80B7C8" />
-            <stop offset="1" stopColor="#E0B36A" />
-          </linearGradient>
-        </defs>
-        <g fill="none" stroke="#80B7C8" strokeWidth="1.5" opacity=".42">
-          <path d="M32 214H388M32 162H388M32 110H388M32 58H388" />
-          <path d="M70 32V230M150 32V230M230 32V230M310 32V230" />
-        </g>
-        <path
-          d="M42 194 C92 188 112 124 156 138 S224 176 258 108 S326 64 382 54"
-          fill="none"
-          stroke="url(#flow)"
-          strokeWidth="5"
-          strokeLinecap="round"
+      <div className="mt-3 h-1 overflow-hidden rounded-full bg-surface-muted" aria-hidden="true">
+        <span
+          className={cn("block h-full rounded-full", metric.trend === "down" ? "bg-critical" : metric.trend === "up" ? "bg-success" : "bg-primary")}
+          style={{ width: `${Math.max(12, Math.min(100, Math.abs(Number(metric.changeRate ?? 0)) * 100 + 18))}%` }}
         />
-        <g fill="#FBFCFB">
-          <circle cx="42" cy="194" r="7" />
-          <circle cx="156" cy="138" r="7" />
-          <circle cx="258" cy="108" r="7" />
-          <circle cx="382" cy="54" r="7" />
-        </g>
-        <g fill="#172123" stroke="#80B7C8" strokeWidth="2">
-          <rect x="54" y="46" width="72" height="45" rx="7" />
-          <rect x="176" y="178" width="72" height="45" rx="7" />
-          <rect x="298" y="116" width="72" height="45" rx="7" />
-        </g>
-        <g fill="#EDF2F0" fontSize="13" fontFamily="sans-serif">
-          <text x="70" y="73">
-            设备数据
-          </text>
-          <text x="192" y="205">
-            过程指标
-          </text>
-          <text x="314" y="143">
-            风险信号
-          </text>
-        </g>
-      </svg>
-      <figcaption className="absolute bottom-6 left-6 right-6">
-        <span className="text-[12px] font-semibold tracking-[0.1em] text-white/55">
-          本周经营脉络
-        </span>
-        <p className="mt-2 max-w-md font-report text-xl font-semibold leading-snug">
-          从设备、过程到风险，让变化先于数据表被看见。
-        </p>
-        <p className="mt-2 text-[12px] text-white/55">主题示意图，非数据证据</p>
-      </figcaption>
-    </figure>
+      </div>
+    </div>
   );
 }
 function AnomalyTable({ anomalies }) {

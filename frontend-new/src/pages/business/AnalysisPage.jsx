@@ -24,6 +24,7 @@ import { currentUserId } from "../../lib/auth";
 
 const USER_ID = currentUserId;
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "blocked", "cancelled"]);
+export const AGENT_THINKING_DELAY_MS = 1500;
 const EVIDENCE_PANEL_MIN_WIDTH = 320;
 const EVIDENCE_PANEL_DEFAULT_WIDTH = 400;
 const EVIDENCE_PANEL_COLLAPSED_WIDTH = 56;
@@ -33,6 +34,10 @@ const ANALYSIS_DRAFT_KEY = "forgesight:analysis-draft";
 const MODELING_DRAFT_KEY = "forgesight:modeling-draft";
 const ANALYSIS_SESSION_KEY = "forgesight:analysis-session-id";
 const ANALYSIS_SESSION_SELECTED_EVENT = "forgesight:analysis-session-selected";
+
+export function waitForAgentThinking() {
+  return new Promise((resolve) => window.setTimeout(resolve, AGENT_THINKING_DELAY_MS));
+}
 
 export default function AnalysisPage() {
   const { evidenceOpen, setEvidenceOpen, navigatePage, refreshSessions } = useOutletContext();
@@ -55,6 +60,8 @@ export default function AnalysisPage() {
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [activeSession, setActiveSession] = useState(null);
   const [activeSource, setActiveSource] = useState(null);
+  const [availableSources, setAvailableSources] = useState([]);
+  const [scopeOpen, setScopeOpen] = useState(false);
   const scrollRef = useRef(null);
   const subscriptionsRef = useRef(new Map());
   const runtimesRef = useRef(new Map());
@@ -171,6 +178,7 @@ export default function AnalysisPage() {
     setMessages(null);
     try {
       const sources = await listSources();
+      setAvailableSources(sources);
       const preferredSourceId = Number(window.sessionStorage.getItem(ACTIVE_SOURCE_KEY));
       const source = sources.find((item) => item.id === preferredSourceId)
         ?? sources.find((item) => item.isDefault)
@@ -267,18 +275,24 @@ export default function AnalysisPage() {
       const accepted = await submitAnalysisRun(activeSession.id, text);
       setActiveSession((current) => current ? { ...current, title: text } : current);
       refreshSessions?.(activeSession.id);
+      const immediateTerminal = TERMINAL_STATUSES.has(accepted.status);
       const placeholder = adaptAnalysisRun({
         id: accepted.runId,
         sessionId: activeSession.id,
         sourceId: activeSource?.id,
         question: text,
-        status: accepted.status,
+        status: immediateTerminal ? "running" : accepted.status,
         tasks: [], steps: [], artifacts: [], checkpoints: [], usage: {},
       });
       setBusy(true);
       setMessages((current) => [...current, { id: accepted.runId, role: "assistant", run: placeholder, animate: false }]);
-      watchRun(accepted.runId);
-      await refreshRun(accepted.runId);
+      if (immediateTerminal) {
+        await waitForAgentThinking();
+        await refreshRun(accepted.runId);
+      } else {
+        watchRun(accepted.runId);
+        await refreshRun(accepted.runId);
+      }
     } catch {
       setMessages((current) => [...current, { id: `error-${Date.now()}`, role: "assistant", failed: true }]);
     } finally {
@@ -293,8 +307,13 @@ export default function AnalysisPage() {
         ? option
         : option?.value ?? JSON.stringify(option);
       const resumed = await respondToClarification(interactionId, value);
-      watchRun(resumed.runId);
-      await refreshRun(resumed.runId);
+      if (TERMINAL_STATUSES.has(resumed.status)) {
+        await waitForAgentThinking();
+        await refreshRun(resumed.runId);
+      } else {
+        watchRun(resumed.runId);
+        await refreshRun(resumed.runId);
+      }
     } catch {
       setBusy(false);
     }
@@ -366,6 +385,13 @@ export default function AnalysisPage() {
     } finally {
       setBranchSubmitting(false);
     }
+  };
+
+  const chooseAnalysisSource = (source) => {
+    setScopeOpen(false);
+    if (!source || source.id === activeSource?.id) return;
+    window.sessionStorage.setItem(ACTIVE_SOURCE_KEY, String(source.id));
+    load();
   };
 
   const examples = ["统计每条产线最近 7 天的产量趋势", "找出最近一个月不良数量最高的产品", "比较各产线的非计划停机时长"];
@@ -498,9 +524,47 @@ export default function AnalysisPage() {
               />
               <div className="flex items-center justify-between pt-1.5">
                 <div className="flex items-center gap-2.5">
-                  <button type="button" className="flex cursor-pointer items-center gap-1 rounded-control px-1.5 py-1 text-xs text-muted transition-colors hover:bg-surface-3 hover:text-ink">
-                    <Icon name="plus" size={16} />选择数据范围
-                  </button>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-expanded={scopeOpen}
+                      onClick={() => setScopeOpen((value) => !value)}
+                      className="flex cursor-pointer items-center gap-1 rounded-control px-1.5 py-1 text-xs text-muted transition-colors hover:bg-surface-3 hover:text-ink"
+                    >
+                      <Icon name="plus" size={16} />
+                      {activeSource?.name ?? "选择数据范围"}
+                      <Icon name="chevron" size={12} className={cn("transition-transform", scopeOpen && "rotate-180")} />
+                    </button>
+                    {scopeOpen && (
+                      <div
+                        role="listbox"
+                        aria-label="选择分析数据范围"
+                        className="absolute bottom-full left-0 z-20 mb-2 min-w-[250px] rounded-card border border-line bg-surface p-1.5 shadow-card-hover"
+                      >
+                        <p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-faint">分析数据范围</p>
+                        {availableSources.length ? availableSources.map((source) => (
+                          <button
+                            key={source.id}
+                            type="button"
+                            role="option"
+                            aria-selected={source.id === activeSource?.id}
+                            onClick={() => chooseAnalysisSource(source)}
+                            className={cn(
+                              "flex w-full cursor-pointer items-center gap-2 rounded-control px-2 py-2 text-left text-xs transition-colors",
+                              source.id === activeSource?.id ? "bg-primary-soft text-ink" : "text-muted hover:bg-surface-2 hover:text-ink",
+                            )}
+                          >
+                            <Icon name="database" size={14} className="shrink-0 text-primary" />
+                            <span className="min-w-0 flex-1 truncate">{source.name}</span>
+                            {source.id === activeSource?.id && <Icon name="check" size={14} className="shrink-0 text-primary" />}
+                          </button>
+                        )) : (
+                          <p className="px-2 py-2 text-xs text-muted">暂无可用数据源</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   <span className="text-[11px] text-faint">企业业务语义已启用</span>
                 </div>
                 <button

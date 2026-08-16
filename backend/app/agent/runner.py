@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from langgraph.types import Command
 from sqlalchemy import func
@@ -42,6 +44,16 @@ from app.gateway.cost_guard import ExplainCheckResult, explain_readonly
 from app.gateway.sql_validator import validate_sql
 from app.llm import provider
 from app.retrieval.service import build_context_package
+
+
+CHAT_REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
+CHAT_REPORT_TYPE_OPTIONS = (
+    {"label": "制造运营综合周报", "value": "tpl-operations-weekly"},
+    {"label": "生产周报", "value": "tpl-production-weekly"},
+    {"label": "质量周报", "value": "tpl-quality-weekly"},
+    {"label": "设备周报", "value": "tpl-equipment-weekly"},
+    {"label": "库存周报", "value": "tpl-inventory-weekly"},
+)
 
 
 TERMINAL_STATUSES = {"succeeded", "failed", "blocked", "cancelled"}
@@ -646,6 +658,148 @@ def execute_inline_conversation(run_id: str, direct_response: str | None = None)
 
     update = {
         "intent_kind": "conversation",
+        "analysis_question": "",
+        "direct_response": response,
+        "tasks": [],
+        "blocked": False,
+        "error": None,
+    }
+    state.update(update)
+    _persist_update(run_id, "route_request", update, state)
+    _finish_run(run_id, state)
+    return {"runId": run_id, "status": "succeeded"}
+
+
+def execute_inline_report_clarification(run_id: str) -> dict:
+    """Pause a chat report request until the user chooses a report template."""
+
+    prompt = {
+        "kind": "clarification",
+        "question": "你想生成哪一种周报？请选择报告类型；选择后我会在报告中心创建并开始生成。",
+        "options": list(CHAT_REPORT_TYPE_OPTIONS),
+        "allowCustom": False,
+    }
+    with PlatformSession() as session:
+        run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
+        if run.status in TERMINAL_STATUSES:
+            return {"runId": run.id, "status": run.status}
+        existing = session.query(AnalysisInteraction).filter_by(
+            run_id=run.id, status="pending"
+        ).first()
+        if existing is None:
+            existing = AnalysisInteraction(
+                id=new_id("int"),
+                run_id=run.id,
+                kind="clarification",
+                status="pending",
+                prompt_json=prompt,
+                resume_node="report.create",
+            )
+            session.add(existing)
+        run.status = "waiting_user"
+        run.current_step_key = "report.create"
+        run.lease_owner = None
+        run.lease_expires_at = None
+        append_event(
+            session,
+            run,
+            "clarification.requested",
+            {"interactionId": existing.id, **prompt},
+            step_key="report.create",
+        )
+        session.commit()
+        return {"runId": run.id, "status": run.status, "interactionId": existing.id}
+
+
+def _chat_report_template(question: str) -> str:
+    normalized = str(question or "")
+    if "质量" in normalized:
+        return "tpl-quality-weekly"
+    if "设备" in normalized or "停机" in normalized:
+        return "tpl-equipment-weekly"
+    if "库存" in normalized:
+        return "tpl-inventory-weekly"
+    if "生产" in normalized or "产量" in normalized or "产线" in normalized:
+        return "tpl-production-weekly"
+    return "tpl-operations-weekly"
+
+
+def _chat_report_period(question: str) -> tuple[datetime, datetime]:
+    now = datetime.now(CHAT_REPORT_TIMEZONE).replace(tzinfo=None)
+    today = now.date()
+    if "上周" in question:
+        current_monday = today - timedelta(days=today.weekday())
+        start = current_monday - timedelta(days=7)
+        end = current_monday - timedelta(days=1)
+        return datetime.combine(start, datetime.min.time()), datetime.combine(end, datetime.max.time())
+    if "本周" in question:
+        start = today - timedelta(days=today.weekday())
+        return datetime.combine(start, datetime.min.time()), now.replace(
+            hour=23, minute=59, second=59, microsecond=999999
+        )
+    if "本月" in question:
+        start = today.replace(day=1)
+        return datetime.combine(start, datetime.min.time()), now.replace(
+            hour=23, minute=59, second=59, microsecond=999999
+        )
+    match = re.search(r"最近\s*(\d+)\s*(?:天|日)", question)
+    days = int(match.group(1)) if match else 7
+    days = min(max(days, 1), 366)
+    start = today - timedelta(days=days)
+    end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return datetime.combine(start, datetime.min.time()), end
+
+
+def execute_inline_report_request(run_id: str, template_id: str | None = None) -> dict:
+    """Create a real report from a direct chat request and keep the chat run inline."""
+
+    with PlatformSession() as session:
+        run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
+        if run.status in TERMINAL_STATUSES:
+            return {"runId": run.id, "status": run.status}
+        message = session.query(AnalysisMessage).filter_by(id=run.trigger_message_id).one()
+        business_session = session.query(AnalysisSession).filter_by(id=run.session_id).one()
+        state = {
+            "session_id": run.session_id,
+            "run_id": run.id,
+            "source_id": run.source_id,
+            "user_question": message.content,
+            "conversation_context": [],
+            "retry_count": 0,
+            "attempted_sqls": [],
+            "expected_lease_owner": "inline-conversation",
+        }
+        user_id = business_session.user_id
+        session.commit()
+
+    from app.reports import service as report_service
+    from app.reports.contracts import ReportCreate
+
+    period_start, period_end = _chat_report_period(state["user_question"])
+    template_id = template_id or _chat_report_template(state["user_question"])
+    try:
+        report = report_service.create_report(
+            ReportCreate(
+                templateId=template_id,
+                sourceId=state["source_id"],
+                periodStart=period_start,
+                periodEnd=period_end,
+                ownerId=user_id,
+            )
+        )
+        report_id = report.get("id", "")
+        title = report.get("title") or "新报告"
+        response = (
+            f"已创建报告《{title}》，正在后台生成。"
+            f"报告 ID：{report_id}。完成后可在“报告中心”查看并下载 PDF。"
+        )
+    except report_service.ReportConflict as exc:
+        response = f"报告创建未完成：{exc}。请先在“报告中心”确认模板覆盖率或调整报告范围。"
+    except Exception:  # noqa: BLE001 - keep the chat run readable while preserving the report error in logs
+        response = "报告任务创建失败，请稍后重试；你也可以打开“报告中心”手动选择模板和统计周期。"
+
+    update = {
+        "intent_kind": "report",
         "analysis_question": "",
         "direct_response": response,
         "tasks": [],

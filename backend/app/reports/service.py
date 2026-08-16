@@ -163,6 +163,7 @@ def create_report(payload, session_factory=PlatformSession) -> dict:
             scope_json={
                 **(payload.scope or {}),
                 "prompt": (payload.prompt or "").strip(),
+                "emailEnabled": payload.emailEnabled,
                 "templateCoverage": coverage,
             },
         )

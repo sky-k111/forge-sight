@@ -84,6 +84,8 @@ def _suppression_reason(
         return "message_unavailable"
     if message.message_type == "weekly_report":
         report = session.get(Report, message.related_id)
+        if report is not None and (report.scope_json or {}).get("emailEnabled", True) is False:
+            return "email_disabled"
         if report is None or not _report_access_allowed(session, report, user.id, now):
             return "data_scope_denied"
     return None

@@ -17,6 +17,7 @@ class ReportCreate(BaseModel):
     ownerId: str = Field(default="local-test-user", min_length=1, max_length=64)
     prompt: str | None = Field(default=None, max_length=2000)
     scope: dict[str, Any] = Field(default_factory=dict)
+    emailEnabled: bool = True
 
     @model_validator(mode="after")
     def validate_period(self):

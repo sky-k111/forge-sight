@@ -40,6 +40,8 @@ export default function ResourcesPage() {
   const [pendingSourceId, setPendingSourceId] = useState(null);
   const [unregistered, setUnregistered] = useState([]);
   const [search, setSearch] = useState("");
+  const [tableFilterOpen, setTableFilterOpen] = useState(false);
+  const [tableTopicFilter, setTableTopicFilter] = useState("all");
   const [suggestion, setSuggestion] = useState(null);
   const [suggesting, setSuggesting] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -59,8 +61,11 @@ export default function ResourcesPage() {
   }, []);
 
   const visibleTables = useMemo(
-    () => (tables ?? []).filter((table) => `${table.cn}${table.name}${table.topic}`.includes(search.trim())),
-    [search, tables],
+    () => (tables ?? []).filter((table) => {
+      const matchesSearch = `${table.cn}${table.name}${table.topic}`.includes(search.trim());
+      return matchesSearch && (tableTopicFilter === "all" || table.topic === tableTopicFilter);
+    }),
+    [search, tables, tableTopicFilter],
   );
   const selectedTable = tables?.find((table) => table.name === selectedName) ?? tables?.[0];
   const currentSource = sources.find((source) => source.id === currentSourceId) ?? sources.find((source) => source.isDefault);
@@ -504,7 +509,21 @@ export default function ResourcesPage() {
                 className="h-9 w-full rounded-control border border-line bg-surface pl-8 pr-2.5 text-xs text-ink outline-none transition placeholder:text-faint focus:border-primary/50 focus:ring-2 focus:ring-primary/25"
               />
             </label>
-            <Button size="sm" aria-label="筛选数据表"><Icon name="filter" size={14} /></Button>
+            <div className="relative">
+              <Button size="sm" aria-label="筛选数据表" aria-expanded={tableFilterOpen} aria-haspopup="dialog" onClick={() => setTableFilterOpen((value) => !value)}><Icon name="filter" size={14} /></Button>
+              {tableFilterOpen && (
+                <div role="dialog" aria-label="筛选数据表" className="absolute right-0 top-[calc(100%+8px)] z-30 grid min-w-[220px] gap-3 rounded-card border border-line bg-surface p-3 shadow-card-hover">
+                  <label className="grid gap-1 text-[11px] font-semibold text-muted">
+                    业务主题
+                    <select aria-label="数据表主题" value={tableTopicFilter} onChange={(event) => setTableTopicFilter(event.target.value)} className="h-9 rounded-control border border-line bg-surface-2 px-2 text-xs font-normal text-ink">
+                      <option value="all">全部主题</option>
+                      {[...new Set((tables ?? []).map((table) => table.topic).filter(Boolean))].map((topic) => <option key={topic} value={topic}>{topic}</option>)}
+                    </select>
+                  </label>
+                  <Button size="sm" onClick={() => { setTableTopicFilter("all"); setTableFilterOpen(false); }}>清除筛选</Button>
+                </div>
+              )}
+            </div>
           </div>
           <div className="grid gap-1 p-3">
             {visibleTables.map((table) => (

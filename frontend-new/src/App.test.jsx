@@ -702,6 +702,17 @@ describe("ForgeSight application routes", () => {
     );
   });
 
+  test("opens the data scope selector from the analysis composer", async () => {
+    window.history.replaceState({}, "", "/workspace/analysis");
+    render(<App />);
+
+    await screen.findByPlaceholderText("用业务语言描述你想分析的问题…");
+    fireEvent.click(screen.getByRole("button", { name: "选择数据范围" }));
+
+    expect(screen.getByRole("listbox", { name: "选择分析数据范围" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "华东制造数据底座" })).toBeTruthy();
+  });
+
   test("renders analysis trace icons with the original node style instead of green span badges", async () => {
     window.history.replaceState({}, "", "/workspace/analysis");
     const { container } = render(<App />);

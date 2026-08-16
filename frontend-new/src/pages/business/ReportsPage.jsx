@@ -618,6 +618,7 @@ function ReportCreateWizard({
   const [periodEnd, setPeriodEnd] = useState(range.end);
   const [prompt, setPrompt] = useState("");
   const [title, setTitle] = useState("");
+  const [emailEnabled, setEmailEnabled] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const templateRequest = useRef(0);
@@ -639,6 +640,7 @@ function ReportCreateWizard({
     setPeriodEnd(range.end);
     setPrompt("");
     setTitle("");
+    setEmailEnabled(true);
     setError(null);
   }, [initialTemplateId, open, range.end, range.start, sourceId, templates]);
 
@@ -695,6 +697,7 @@ function ReportCreateWizard({
         periodEnd: `${periodEnd}T23:59:59`,
         prompt: prompt.trim() || undefined,
         title: title.trim() || undefined,
+        emailEnabled,
       });
       onCreated(created);
     } catch (nextError) {
@@ -843,6 +846,23 @@ function ReportCreateWizard({
                 className="input-control"
               />
             </Field>
+            <label className="flex cursor-pointer items-start gap-3 rounded-card border border-line bg-surface-2 p-3">
+              <input
+                type="checkbox"
+                aria-label="发布后发送到绑定邮箱"
+                checked={emailEnabled}
+                onChange={(event) => setEmailEnabled(event.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-primary"
+              />
+              <span className="grid gap-0.5 text-xs">
+                <span className="font-semibold text-ink">
+                  发布后发送到绑定邮箱
+                </span>
+                <span className="font-normal leading-relaxed text-muted">
+                  默认开启，可取消。邮件包含摘要、报告链接和 PDF 文件。
+                </span>
+              </span>
+            </label>
             <div className="rounded-card border border-line bg-surface-2 p-3 text-xs leading-relaxed text-muted">
               默认按已选周期生成。周期不完整或比较基线缺失时，报告会降低可信度并显示限制说明，不会强行给出比较结论。
             </div>
@@ -914,6 +934,10 @@ function ReportCreateWizard({
               <Summary
                 label="指标覆盖"
                 value={`${template?.coverage?.score ?? 0}%`}
+              />
+              <Summary
+                label="邮箱推送"
+                value={emailEnabled ? "已开启（摘要 + 链接 + PDF）" : "已关闭"}
               />
             </dl>
           </div>

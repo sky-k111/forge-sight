@@ -28,7 +28,7 @@ const ROLE_COLORS = {
 export function WeeklyReportCharts({ charts = [], sourceName = "业务数据源" }) {
   if (!charts.length) return null;
   return (
-    <div className={charts.length > 1 ? "grid gap-5 xl:grid-cols-2" : "grid gap-5"}>
+    <div className={charts.length > 1 ? "grid items-stretch gap-5 xl:grid-cols-2" : "grid gap-5"}>
       {charts.map((chart) => (
         <ChartArticle key={chart.key} chart={chart} sourceName={sourceName} />
       ))}
@@ -39,7 +39,7 @@ export function WeeklyReportCharts({ charts = [], sourceName = "业务数据源"
 function ChartArticle({ chart, sourceName }) {
   const evidenceCount = chart.evidenceArtifactIds?.length ?? 0;
   return (
-    <article className="min-w-0 rounded-section border border-line bg-paper p-4 shadow-[0_12px_34px_rgb(24_35_41_/5%)] sm:p-5">
+    <article className="flex min-w-0 flex-col rounded-section border border-line bg-paper p-4 shadow-[0_12px_34px_rgb(24_35_41_/5%)] transition-shadow hover:shadow-[0_16px_42px_rgb(24_35_41_/8%)] sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="section-kicker">{TYPE_LABELS[chart.type] ?? "数据图表"}</p>
@@ -49,13 +49,16 @@ function ChartArticle({ chart, sourceName }) {
           {chart.unit}
         </span>
       </div>
-      <p className="mt-2 min-h-10 text-sm leading-6 text-muted">{chart.description}</p>
-      <div className="mt-4" aria-label={`${chart.title}图表`}>
+      <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">{chart.description}</p>
+      <div className="chart-frame mt-4 overflow-hidden rounded-card border border-line bg-surface-2/45 px-2 py-3 sm:px-3" aria-label={`${chart.title}图表`}>
         <ChartVisual chart={chart} />
       </div>
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3 text-xs text-faint">
         <span>来源：{sourceName}</span>
-        <span>{chart.legacy ? "兼容旧版数据" : `证据 ${evidenceCount} 项`}</span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-hidden="true" />
+          {chart.legacy ? "兼容旧版数据" : `证据 ${evidenceCount} 项`}
+        </span>
       </div>
       <ChartDataTable chart={chart} />
     </article>
