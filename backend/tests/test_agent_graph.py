@@ -342,6 +342,11 @@ def test_chat_report_request_creates_report_with_session_scope(analysis_session,
         "status": "queued",
         "emailEnabled": True,
     }
+    session_view = service.get_session(created["id"])
+    assert [message["content"] for message in session_view["messages"] if message["role"] == "user"] == [
+        "给我一份周报",
+        "tpl-operations-weekly",
+    ]
 
 
 def test_chat_weekly_report_uses_latest_available_data_date(monkeypatch):

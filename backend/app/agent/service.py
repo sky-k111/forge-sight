@@ -340,8 +340,26 @@ def respond_to_interaction(interaction_id: str, answer: str) -> dict:
         run = session.query(AnalysisRun).filter_by(id=interaction.run_id).with_for_update().one()
         if run.status != "waiting_user":
             raise AnalysisConflict("当前运行不在等待用户状态")
+        normalized_answer = answer.strip()
+        answer_sequence = (
+            session.query(func.coalesce(func.max(AnalysisMessage.sequence_no), 0))
+            .filter_by(session_id=run.session_id)
+            .scalar()
+            + 1
+        )
+        session.add(
+            AnalysisMessage(
+                id=new_id("msg"),
+                session_id=run.session_id,
+                run_id=run.id,
+                role="user",
+                content=normalized_answer,
+                sequence_no=answer_sequence,
+                metadata_json={"clarificationInteractionId": interaction.id},
+            )
+        )
         if interaction.resume_node == "report.create":
-            selected = answer.strip()
+            selected = normalized_answer
             report_brief = " ".join(filter(None, [(interaction.prompt_json or {}).get("reportBrief"), selected]))
             from app.agent.runner import (
                 CHAT_REPORT_TYPE_OPTIONS,
@@ -392,7 +410,7 @@ def respond_to_interaction(interaction_id: str, answer: str) -> dict:
                 completed = completed_session.query(AnalysisRun).filter_by(id=run.id).one()
                 return {**_run_acceptance(completed), "interactionId": interaction.id, "resumed": True}
         interaction.status = "resolved"
-        interaction.response_json = {"answer": answer.strip()}
+        interaction.response_json = {"answer": normalized_answer}
         interaction.resolved_at = datetime.now()
         run.status = "queued"
         run.finished_at = None
@@ -408,7 +426,7 @@ def respond_to_interaction(interaction_id: str, answer: str) -> dict:
             session,
             run,
             "clarification.resolved",
-            {"interactionId": interaction.id, "answer": answer.strip(), "status": "queued"},
+            {"interactionId": interaction.id, "answer": normalized_answer, "status": "queued"},
             task_id=interaction.task_id,
             step_key=interaction.resume_node,
         )

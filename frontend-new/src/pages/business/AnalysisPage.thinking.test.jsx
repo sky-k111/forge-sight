@@ -68,6 +68,31 @@ describe("agent response thinking delay", () => {
     ]);
   });
 
+  test("moves the completed run below the latest clarification answer", () => {
+    const items = [
+      { id: "question-1", role: "user", text: "给我一份周报" },
+      {
+        id: "run-1",
+        role: "assistant",
+        run: {
+          id: "run-1",
+          status: "clarifying",
+          clarification: { interactionId: "interaction-1", question: "请补充统计时间" },
+        },
+      },
+      { id: "answer-1", role: "user", text: "最近 30 天的生产周报" },
+    ];
+    const updated = upsertAnalysisRunMessage(items, {
+      id: "run-1",
+      status: "succeeded",
+      clarification: { interactionId: "interaction-1", question: "请补充统计时间" },
+      report: { id: "report-1", title: "生产周报", status: "published" },
+    });
+
+    expect(updated.map((item) => item.role === "user" ? item.text : item.run?.report?.id ?? "clarification"))
+      .toEqual(["给我一份周报", "最近 30 天的生产周报", "report-1"]);
+  });
+
   test("restores the original user request instead of the generated report prompt", () => {
     const generatedPrompt = "为《2026-07-01 至 2026-07-31 制造运营综合周报》完成以下相互独立但范围一致的分析任务。";
     const items = buildAnalysisConversationItems(
@@ -139,6 +164,36 @@ describe("agent response thinking delay", () => {
 
     expect(items.find((item) => item.role === "user")?.text).toBe("生成《制造运营综合周报》");
     expect(items.some((item) => item.text === generatedPrompt)).toBe(false);
+  });
+
+  test("restores a clarification answer before the final run card", () => {
+    const items = buildAnalysisConversationItems(
+      {
+        messages: [
+          { id: "message-1", runId: "run-1", role: "user", content: "给我一份周报", sequenceNo: 1 },
+          { id: "message-2", runId: "run-1", role: "user", content: "最近 30 天的生产周报", sequenceNo: 2 },
+          { id: "message-3", runId: "run-1", role: "assistant", content: "已创建报告", sequenceNo: 3 },
+        ],
+      },
+      [{
+        id: "run-1",
+        question: "给我一份周报",
+        status: "succeeded",
+        createdAt: "2026-08-17T10:00:00+08:00",
+        tasks: [],
+        steps: [],
+        artifacts: [],
+        checkpoints: [],
+        usage: {},
+        assistantMessage: {
+          content: "已创建报告",
+          metadata: { report: { id: "report-1", title: "生产周报", status: "published" } },
+        },
+      }],
+    );
+
+    expect(items.map((item) => item.role === "user" ? item.text : item.run?.report?.id ?? "assistant"))
+      .toEqual(["给我一份周报", "最近 30 天的生产周报", "report-1"]);
   });
 
   test("opens the message center from a generated report card", () => {

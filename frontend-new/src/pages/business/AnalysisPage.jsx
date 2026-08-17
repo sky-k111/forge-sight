@@ -65,13 +65,31 @@ export function upsertAnalysisRunMessage(items, run) {
 
   const existing = items[existingIndex];
   const previousInteractionId = existing.run?.clarification?.interactionId;
-  const nextInteractionId = run.clarification?.interactionId;
+  const nextInteractionId = run.status === "clarifying" ? run.clarification?.interactionId : null;
   if (previousInteractionId && nextInteractionId && previousInteractionId !== nextInteractionId) {
     return [...items, { id: `${run.id}-clarification-${nextInteractionId}`, role: "assistant", run, animate: false }];
   }
 
   const next = [...items];
-  next[existingIndex] = { ...existing, run, animate: false };
+  const updated = { ...existing, run, animate: false };
+  next[existingIndex] = updated;
+  // A clarification answer is appended as a user message while the run keeps
+  // the same id. Once the run resumes, move its updated response below that
+  // answer instead of leaving the result above the user's latest message.
+  if (!nextInteractionId) {
+    const latestUserIndex = next.reduce(
+      (latest, item, index) => item.role === "user" ? index : latest,
+      -1,
+    );
+    if (latestUserIndex > existingIndex) {
+      next.splice(existingIndex, 1);
+      const targetIndex = next.reduce(
+        (latest, item, index) => item.role === "user" ? index : latest,
+        -1,
+      );
+      next.splice(targetIndex + 1, 0, updated);
+    }
+  }
   return next;
 }
 
@@ -114,10 +132,6 @@ export function buildAnalysisConversationItems(sessionView, snapshots = []) {
         ? safeRunQuestion(entry?.snapshot ?? { question: content })
         : content;
       items.push({ id: message.id, role: "user", text, time });
-      // A running report has a user message but no assistant message yet. Place the
-      // live card after the original request so a reload never falls back to the
-      // generated orchestration prompt.
-      appendRun(entry);
     } else if (message.role === "assistant") {
       if (entry) appendRun(entry);
       else if (String(message.content ?? "").trim()) {
@@ -126,16 +140,26 @@ export function buildAnalysisConversationItems(sessionView, snapshots = []) {
     }
   }
 
+  const lastUserIndexByRun = new Map();
+  messages.forEach((message) => {
+    if (message.role !== "user" || !runs.has(message.runId)) return;
+    const itemIndex = items.findIndex((item) => item.id === message.id);
+    if (itemIndex >= 0) lastUserIndexByRun.set(message.runId, itemIndex);
+  });
+
   // Keep older sessions recoverable when a message row was pruned or a run was
   // created before its trigger message became visible to the session endpoint.
-  for (const entry of entries) {
+  for (const entry of entries.slice().sort(
+    (left, right) => (lastUserIndexByRun.get(right.run.id) ?? -1) - (lastUserIndexByRun.get(left.run.id) ?? -1),
+  )) {
     if (renderedRuns.has(entry.run.id)) continue;
-    items.push({
-      id: `${entry.run.id}-q`,
-      role: "user",
-      text: safeRunQuestion(entry.snapshot),
-      time: messageTime(entry.snapshot.createdAt),
-    });
+    const lastUserIndex = lastUserIndexByRun.get(entry.run.id);
+    if (lastUserIndex != null) {
+      items.splice(lastUserIndex + 1, 0, { id: entry.run.id, role: "assistant", run: entry.run, animate: false });
+      renderedRuns.add(entry.run.id);
+      continue;
+    }
+    items.push({ id: `${entry.run.id}-q`, role: "user", text: safeRunQuestion(entry.snapshot), time: messageTime(entry.snapshot.createdAt) });
     appendRun(entry);
   }
   return items;
