@@ -230,13 +230,15 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
             execute_inline_report_request,
             execute_inline_route,
             report_brief_missing_details,
+            _resolve_report_brief_semantics,
         )
 
         if report_request:
-            if report_brief_missing_details(normalized_question):
-                execute_inline_report_clarification(run_id)
+            report_brief = _resolve_report_brief_semantics(normalized_question, run_id)
+            if report_brief_missing_details(report_brief):
+                execute_inline_report_clarification(run_id, report_brief=report_brief)
             else:
-                execute_inline_report_request(run_id, report_brief=normalized_question)
+                execute_inline_report_request(run_id, report_brief=report_brief)
         elif request_kind == "unknown":
             execute_inline_route(run_id)
         else:
@@ -370,7 +372,6 @@ def respond_to_interaction(interaction_id: str, answer: str) -> dict:
                 (item.get("value") for item in CHAT_REPORT_TYPE_OPTIONS if item.get("value") == selected),
                 None,
             )
-            missing = [] if legacy_template_id else report_brief_missing_details(report_brief)
             interaction.status = "resolved"
             interaction.response_json = {"answer": selected, "reportBrief": report_brief}
             interaction.resolved_at = datetime.now()
@@ -396,8 +397,11 @@ def respond_to_interaction(interaction_id: str, answer: str) -> dict:
             from app.agent.runner import (
                 execute_inline_report_clarification,
                 execute_inline_report_request,
+                _resolve_report_brief_semantics,
             )
 
+            report_brief = _resolve_report_brief_semantics(report_brief, run.id)
+            missing = [] if legacy_template_id else report_brief_missing_details(report_brief)
             if missing:
                 execute_inline_report_clarification(run.id, report_brief=report_brief)
             else:

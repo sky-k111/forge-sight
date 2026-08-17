@@ -412,6 +412,58 @@ def test_chat_report_period_understands_a_natural_language_month(monkeypatch):
     assert end.date() == date(2026, 7, 31)
 
 
+def test_chat_report_period_understands_chinese_numeral_month_from_a_follow_up(monkeypatch):
+    monkeypatch.setattr(runner, "_latest_report_data_date", lambda _source_id: date(2026, 8, 16))
+
+    brief = "制造运营综合周报，统计时间是 2026年七月"
+    assert runner.report_brief_missing_details(brief) == []
+    start, end = runner._chat_report_period(brief, 1)
+
+    assert start.date() == date(2026, 7, 1)
+    assert end.date() == date(2026, 7, 31)
+
+
+def test_chat_report_period_understands_relative_calendar_phrases(monkeypatch):
+    monkeypatch.setattr(runner, "_latest_report_data_date", lambda _source_id: date(2026, 8, 16))
+
+    previous_start, previous_end = runner._chat_report_period("上个月的设备总结", 1)
+    assert previous_start.date() == date(2026, 7, 1)
+    assert previous_end.date() == date(2026, 7, 31)
+
+    recent_start, recent_end = runner._chat_report_period("最近三周的生产总结", 1)
+    assert recent_start.date() == date(2026, 7, 27)
+    assert recent_end.date() == date(2026, 8, 16)
+
+
+def test_report_brief_uses_model_semantics_for_an_unlisted_focus_phrase(monkeypatch):
+    monkeypatch.setattr(runner.settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(
+        runner,
+        "_tracked_generate",
+        lambda _state, _step, _system, _user: '{"periodText":"上个月","focusTopics":["quality"],"focusEvidence":"客户体验","confidence":0.9}',
+    )
+
+    resolved = runner._resolve_report_brief_semantics("把上个月的客户体验表现整理成一份报告", "run-semantic-report")
+
+    assert "上个月" in resolved
+    assert "质量" in resolved
+    assert runner.report_brief_missing_details(resolved) == []
+
+
+def test_report_brief_does_not_spend_a_model_turn_to_invent_a_missing_period(monkeypatch):
+    monkeypatch.setattr(runner.settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(
+        runner,
+        "_tracked_generate",
+        lambda *_args: pytest.fail("缺少统计时间时不应让模型猜测周期"),
+    )
+
+    resolved = runner._resolve_report_brief_semantics("帮我生成制造运营综合周报", "run-missing-period")
+
+    assert resolved == "帮我生成制造运营综合周报"
+    assert runner.report_brief_missing_details(resolved) == ["统计时间"]
+
+
 def test_chat_report_request_asks_for_missing_time_and_focus_in_natural_language(analysis_session, monkeypatch):
     from app.reports import service as report_service
 
@@ -461,6 +513,29 @@ def test_report_brief_creates_the_matching_report_after_natural_language_reply(a
     assert captured["payload"].templateId == "tpl-quality-weekly"
     assert captured["payload"].ownerId == "u-report-selection"
     assert "质量周报" in snapshot["assistantMessage"]["content"]
+
+
+def test_report_brief_accepts_a_calendar_month_as_a_follow_up(analysis_session, monkeypatch):
+    from app.reports import service as report_service
+
+    captured = {}
+
+    def fake_create_report(payload):
+        captured["payload"] = payload
+        return {"id": "rpt-calendar-month", "title": "制造运营综合周报", "status": "queued"}
+
+    monkeypatch.setattr(report_service, "create_report", fake_create_report)
+    session = service.create_session("报告月份追问测试", 1, "u-report-calendar-month")
+    accepted = service.create_run(session["id"], "帮我生成制造运营综合周报", "report-calendar-month")
+    pending = service.get_run(accepted["runId"])
+
+    resumed = service.respond_to_interaction(pending["interaction"]["id"], "2026年七月")
+    snapshot = service.get_run(accepted["runId"])
+
+    assert resumed["status"] == "succeeded"
+    assert captured["payload"].periodStart.date() == date(2026, 7, 1)
+    assert captured["payload"].periodEnd.date() == date(2026, 7, 31)
+    assert snapshot["interaction"]["status"] == "resolved"
 
 
 def test_report_brief_asks_again_when_time_is_still_missing(analysis_session, monkeypatch):

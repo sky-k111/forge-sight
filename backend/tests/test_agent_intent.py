@@ -176,6 +176,19 @@ def test_current_month_is_time_not_an_object_reference():
     assert task["groupBy"] == []
 
 
+def test_chinese_calendar_month_is_not_requested_as_a_vague_time_clarification():
+    plan = build_intent_plan("查看 2026年七月的产量")
+
+    assert plan["clarification"] is None
+    assert plan["tasks"][0]["timeConstraint"] == {
+        "kind": "calendar_month",
+        "label": "2026 年 7 月",
+        "year": 2026,
+        "month": 7,
+        "timeGrain": "day",
+    }
+
+
 def test_current_and_previous_month_resolve_to_two_explicit_periods():
     task = build_intent_plan("这个月和上个月的良率比较")["tasks"][0]
     constraint = task["timeConstraint"]

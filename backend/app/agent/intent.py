@@ -12,6 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.agent.ids import new_id
+from app.agent.time_range import extract_year_month, has_time_reference
 
 
 ANALYSIS_VERBS = (
@@ -94,11 +95,6 @@ TIME_OPTIONS = (
     {"label": "本月至今", "value": "本月至今"},
 )
 
-_EXPLICIT_TIME_RE = re.compile(
-    r"(?:最近|近)\s*(?:\d+|一|两|三|四|五|六|七|八|九|十|半|一个)\s*(?:天|日|周|个月|月)"
-    r"|(?:本周|这周|这个月|本月|这个季度|本季度|今年|今天|昨天|上周|上月)"
-    r"|20\d{2}[-年/]\d{1,2}(?:[-月/]\d{1,2})?"
-)
 _OBJECT_REFERENCE_RE = re.compile(
     r"(?:该对象|上述对象|其中对象|它|其(?!他|余|中)|这个(?!月|周|季度|年度|年份|星期|礼拜|天|时段))"
 )
@@ -375,6 +371,16 @@ def _requested_chart(text: str) -> str | None:
 
 
 def _time_constraint(text: str) -> dict[str, Any] | None:
+    month_parts = extract_year_month(text)
+    if month_parts:
+        year, month = month_parts
+        return {
+            "kind": "calendar_month",
+            "label": f"{year} 年 {month} 月",
+            "year": year,
+            "month": month,
+            "timeGrain": "day",
+        }
     current_month = re.search(r"(?:这个月|本月(?:至今)?)", text)
     previous_month = re.search(r"(?:上个月|上月)", text)
     if current_month and previous_month:
@@ -476,7 +482,7 @@ def _clarification_fields(
                 "allowCustom": True,
             }
         )
-    vague_time = any(term in question for term in VAGUE_TIME_TERMS) and not _EXPLICIT_TIME_RE.search(question)
+    vague_time = any(term in question for term in VAGUE_TIME_TERMS) and not has_time_reference(question)
     if vague_time:
         fields.append(
             {
