@@ -43,6 +43,15 @@ export function isConversationRun(run) {
   return run?.result?.kind === "conversation";
 }
 
+export function getPendingClarification(items) {
+  const message = [...(items ?? [])].reverse().find(
+    (item) => item?.role === "assistant"
+      && item.run?.status === "clarifying"
+      && item.run?.clarification?.interactionId,
+  );
+  return message ? { message, clarification: message.run.clarification } : null;
+}
+
 export default function AnalysisPage() {
   const { evidenceOpen, setEvidenceOpen, navigatePage, refreshSessions } = useOutletContext();
   const [messages, setMessages] = useState(null);
@@ -74,6 +83,7 @@ export default function AnalysisPage() {
 
   const evidenceMaxWidth = Math.max(EVIDENCE_PANEL_MIN_WIDTH, viewportWidth - 252 - 480);
   const effectiveEvidenceWidth = Math.min(evidenceWidth, evidenceMaxWidth);
+  const pendingClarification = getPendingClarification(messages);
 
   const beginEvidenceResize = (event) => {
     if (event.button !== 0) return;
@@ -287,7 +297,22 @@ export default function AnalysisPage() {
 
   const submit = async (prompt = query) => {
     const text = prompt.trim();
-    if (!text || pending || busy || messages == null || !activeSession) return;
+    if (!text || pending || messages == null || !activeSession || (busy && !pendingClarification)) return;
+    if (pendingClarification) {
+      setQuery("");
+      setPending(true);
+      try {
+        await clarify(
+          pendingClarification.message.id,
+          text,
+          pendingClarification.clarification.interactionId,
+          text,
+        );
+      } finally {
+        setPending(false);
+      }
+      return;
+    }
     const idempotencyKey = crypto.randomUUID();
     const time = new Date().toTimeString().slice(0, 5);
     setMessages((current) => [...current, { id: `user-${Date.now()}`, role: "user", text, time }]);
@@ -321,7 +346,7 @@ export default function AnalysisPage() {
     }
   };
 
-  const clarify = async (_messageId, option, interactionId) => {
+  const clarify = async (_messageId, option, interactionId, displayText = null) => {
     setClarifySubmitting(true);
     setClarifyError(null);
     setBusy(true);
@@ -329,6 +354,12 @@ export default function AnalysisPage() {
       const value = typeof option === "string"
         ? option
         : option?.value ?? JSON.stringify(option);
+      const answerText = displayText
+        ?? (typeof option === "string" ? option : option?.label ?? value);
+      setMessages((current) => [
+        ...(current ?? []),
+        { id: `user-clarification-${Date.now()}`, role: "user", text: answerText, time: new Date().toTimeString().slice(0, 5) },
+      ]);
       const resumed = await respondToClarification(interactionId, value);
       if (TERMINAL_STATUSES.has(resumed.status)) {
         await waitForAgentThinking();
@@ -492,7 +523,7 @@ export default function AnalysisPage() {
                           animate={message.animate}
                           onComplete={handleComplete}
                           onOpenEvidence={(run) => { setEvidenceRun(run); setEvidenceOpen(true); }}
-                          onClarify={(option, interactionId) => clarify(message.id, option, interactionId)}
+                          onClarify={(option, interactionId, displayText) => clarify(message.id, option, interactionId, displayText)}
                           onFollowUp={(text) => submit(text)}
                           onOpenModeling={() => navigatePage("modeling")}
                           clarifySubmitting={clarifySubmitting}
@@ -540,7 +571,7 @@ export default function AnalysisPage() {
                     type="button"
                     key={example}
                     onClick={() => submit(example)}
-                    disabled={pending || busy || messages == null}
+                    disabled={pending || (busy && !pendingClarification) || messages == null}
                     className="shrink-0 cursor-pointer rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 shadow-[0_4px_12px_rgb(24_34_45/6%)] transition-colors hover:border-line-strong hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-55"
                   >
                     {example}
@@ -555,7 +586,7 @@ export default function AnalysisPage() {
               <textarea
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="用业务语言描述你想分析的问题…"
+                placeholder={pendingClarification ? "直接回复 Agent 的追问（用业务语言描述即可）…" : "用业务语言描述你想分析的问题…"}
                 rows={2}
                 className="w-full resize-none border-0 bg-transparent text-body text-ink outline-none placeholder:text-faint"
               />
@@ -606,11 +637,11 @@ export default function AnalysisPage() {
                 </div>
                 <button
                   type="submit"
-                  disabled={pending || busy || messages == null || !query.trim()}
+                  disabled={pending || (busy && !pendingClarification) || messages == null || !query.trim()}
                   aria-label="开始分析"
                   className="grid h-8 w-8 cursor-pointer place-items-center rounded-control bg-ink text-white transition-colors hover:bg-ink-2 disabled:cursor-not-allowed disabled:opacity-55"
                 >
-                  <Icon name={pending || busy ? "refresh" : "send"} size={17} />
+                  <Icon name={pending || (busy && !pendingClarification) ? "refresh" : "send"} size={17} />
                 </button>
               </div>
             </form>
@@ -951,16 +982,13 @@ function BlockedCard({ error, onOpenEvidence }) {
 
 function ClarifyCard({ clarification, onSelect, submitting = false, error = null }) {
   const [chosen, setChosen] = useState(null);
-  const [freeText, setFreeText] = useState("");
   const [answers, setAnswers] = useState({});
-  const [customFields, setCustomFields] = useState({});
   const fields = clarification.fields ?? [];
+  const options = clarification.options ?? [];
 
   useEffect(() => {
     setChosen(null);
-    setFreeText("");
     setAnswers({});
-    setCustomFields({});
   }, [clarification.interactionId]);
 
   const choose = (option) => {
@@ -968,124 +996,89 @@ function ClarifyCard({ clarification, onSelect, submitting = false, error = null
     setChosen(option);
     onSelect(option, clarification.interactionId);
   };
-  const setField = (fieldId, value) => setAnswers((current) => ({ ...current, [fieldId]: value }));
-  const chooseFieldOption = (fieldId, value) => {
-    setCustomFields((current) => ({ ...current, [fieldId]: false }));
-    setField(fieldId, value);
-  };
-  const enableCustomField = (fieldId) => {
-    setCustomFields((current) => ({ ...current, [fieldId]: true }));
-    setField(fieldId, "");
+  const chooseFieldOption = (fieldId, option) => {
+    if (submitting) return;
+    setAnswers((current) => ({ ...current, [fieldId]: option.value }));
   };
   const canSubmitFields = fields.length > 0 && fields.every((field) => String(answers[field.id] ?? "").trim());
   const submitFields = () => {
     if (!canSubmitFields || submitting) return;
-    setChosen({ label: "已确认", value: answers });
-    onSelect(answers, clarification.interactionId);
+    const answer = { ...answers };
+    setChosen({ label: "已确认", value: answer });
+    onSelect(answer, clarification.interactionId, "已确认澄清条件");
   };
-  const submitFreeText = () => {
-    const answer = freeText.trim();
-    if (!answer || submitting) return;
-    setChosen({ label: answer, value: answer });
-    onSelect(answer, clarification.interactionId);
-  };
+
   return (
-    <div className="motion-soft-rise mt-5 max-w-[420px]">
-      <p className="text-body leading-relaxed text-ink">{clarification.question}</p>
-      {fields.length > 0 ? (
-        <div className="mt-3">
-          {fields.map((field, index) => (
-            <section key={field.id} className={cn(index > 0 && "mt-4 border-t border-line pt-4")}>
-              <div className="flex items-baseline gap-2">
-                <strong className="text-xs font-semibold text-ink">{field.label}</strong>
-                <span className="text-[11px] text-muted">{field.question}</span>
-              </div>
-              <div className="mt-2.5 w-full max-w-[330px] overflow-hidden rounded-control border border-line bg-surface p-1">
-                {field.options.map((option) => {
-                  const selected = !customFields[field.id] && answers[field.id] === option.value;
-                  return (
-                    <button
-                      type="button"
-                      key={option.value}
-                      onClick={() => chooseFieldOption(field.id, option.value)}
-                      disabled={submitting}
-                      className={cn("flex w-full cursor-pointer items-center gap-2.5 rounded-tag px-2.5 py-2 text-left text-xs transition-colors disabled:cursor-not-allowed", selected ? "bg-primary-soft text-primary" : "text-ink-2 hover:bg-surface-2 disabled:opacity-55")}
-                    >
-                      <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-[3px] border", selected ? "border-primary bg-primary text-white" : "border-line-strong bg-surface text-transparent")}><Icon name="check" size={11} strokeWidth={2.4} /></span>
-                      <span className={cn(selected && "font-semibold")}>{option.label}</span>
-                    </button>
-                  );
-                })}
-                {field.allowCustom && (
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => enableCustomField(field.id)}
-                      disabled={submitting}
-                      className={cn("flex w-full cursor-pointer items-center gap-2.5 rounded-tag px-2.5 py-2 text-left text-xs transition-colors disabled:cursor-not-allowed", customFields[field.id] ? "bg-primary-soft text-primary" : "text-ink-2 hover:bg-surface-2 disabled:opacity-55")}
-                    >
-                      <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-[3px] border", customFields[field.id] ? "border-primary bg-primary text-white" : "border-line-strong bg-surface text-transparent")}><Icon name="check" size={11} strokeWidth={2.4} /></span>
-                      <span className={cn(customFields[field.id] && "font-semibold")}>自定义{field.label}</span>
-                    </button>
-                    {customFields[field.id] && (
-                      <div className="px-2.5 pb-2 pt-1">
-                        <input
-                          autoFocus
-                          value={answers[field.id] ?? ""}
-                          onChange={(event) => setField(field.id, event.target.value)}
+    <div className="motion-soft-rise mt-5 max-w-[620px]">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary-soft text-primary">
+          <Icon name="message" size={14} />
+        </span>
+        <div className="min-w-0">
+          <p aria-live="polite" className="max-w-[560px] rounded-[18px] rounded-tl-[6px] bg-surface-2 px-4 py-3 text-body leading-6 text-ink">
+            {clarification.question}
+          </p>
+          {fields.length > 0 && (
+            <div className="mt-3 space-y-3">
+              {fields.map((field) => (
+                <div key={field.id}>
+                  <p className="text-xs font-semibold text-ink">{field.label}<span className="ml-2 font-normal text-muted">{field.question}</span></p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(field.options ?? []).map((option) => {
+                      const selected = answers[field.id] === option.value;
+                      return (
+                        <button
+                          type="button"
+                          key={option.value}
+                          onClick={() => chooseFieldOption(field.id, option)}
                           disabled={submitting}
-                          placeholder={`输入${field.label}`}
-                          className="h-8 w-full rounded-tag border border-line bg-surface px-2.5 text-xs text-ink outline-none transition placeholder:text-faint focus:border-primary/40 focus:ring-2 focus:ring-primary/10 disabled:opacity-55"
-                        />
-                      </div>
-                    )}
+                          className={cn(
+                            "cursor-pointer rounded-full border px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-55",
+                            selected ? "border-primary/25 bg-primary-soft font-semibold text-primary" : "border-line bg-surface text-ink-2 hover:border-line-strong hover:bg-surface-2",
+                          )}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
                   </div>
-                )}
-              </div>
-            </section>
-          ))}
-          <div className="mt-3 flex justify-end">
-            <Button size="sm" onClick={submitFields} disabled={!canSubmitFields || submitting}>确认继续 <Icon name="arrow" size={14} /></Button>
-          </div>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={submitFields}
+                disabled={!canSubmitFields || submitting}
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-control px-2 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                确认这些条件 <Icon name="arrow" size={13} />
+              </button>
+            </div>
+          )}
+          {fields.length === 0 && options.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {options.map((option) => (
+                <button
+                  type="button"
+                  key={option.value}
+                  onClick={() => choose(option)}
+                  disabled={submitting}
+                  className={cn(
+                    "cursor-pointer rounded-full border px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-55",
+                    chosen?.value === option.value ? "border-primary/25 bg-primary-soft font-semibold text-primary" : "border-line bg-surface text-ink-2 hover:border-line-strong hover:bg-surface-2",
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <p className="mt-2 text-[11px] leading-5 text-faint">
+            你也可以直接在下方输入框用自然语言补充，我会继续理解。
+          </p>
+          {error && <p className="mt-2 text-[11px] leading-relaxed text-red">{error}</p>}
+          {chosen && !error && <p className="mt-2 text-[11px] text-faint">已选择「{chosen.label}」，正在按该口径继续分析…</p>}
         </div>
-      ) : clarification.options.length ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {clarification.options.map((option) => (
-          <button
-            type="button"
-            key={option.value}
-            onClick={() => choose(option)}
-            disabled={submitting}
-            className={cn(
-              "cursor-pointer rounded-full border px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed",
-              chosen?.value === option.value
-                ? "border-primary/25 bg-primary-soft font-semibold text-primary"
-                : "border-line bg-surface text-ink-2 hover:border-line-strong hover:bg-surface-2 disabled:opacity-55",
-            )}
-          >
-            {option.label}
-          </button>
-          ))}
-        </div>
-      ) : (
-        <div className="mt-3 max-w-[420px]">
-          <label className="sr-only" htmlFor={`clarification-${clarification.interactionId}`}>补充报告要求</label>
-          <textarea
-            id={`clarification-${clarification.interactionId}`}
-            value={freeText}
-            onChange={(event) => setFreeText(event.target.value)}
-            disabled={submitting}
-            rows={3}
-            placeholder={clarification.inputPlaceholder || "用一句话补充你的要求"}
-            className="w-full resize-y rounded-control border border-line bg-surface px-3 py-2.5 text-sm leading-6 text-ink outline-none transition placeholder:text-faint focus:border-primary/40 focus:ring-2 focus:ring-primary/10 disabled:opacity-55"
-          />
-          <div className="mt-3 flex justify-end">
-            <Button size="sm" onClick={submitFreeText} disabled={!freeText.trim() || submitting}>继续生成 <Icon name="arrow" size={14} /></Button>
-          </div>
-        </div>
-      )}
-      {error && <p className="mt-2.5 text-[11px] leading-relaxed text-red">{error}</p>}
-      {chosen && !error && <p className="mt-2.5 text-[11px] text-faint">已选择「{chosen.label}」，正在按该口径继续分析…</p>}
+      </div>
     </div>
   );
 }
