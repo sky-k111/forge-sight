@@ -353,6 +353,51 @@ def test_chat_weekly_report_uses_latest_available_data_date(monkeypatch):
     assert end.date() == date(2026, 7, 15)
 
 
+def test_chat_report_understands_the_last_data_available_week(monkeypatch):
+    monkeypatch.setattr(runner, "_latest_report_data_date", lambda _source_id: date(2026, 7, 15))
+
+    for question in (
+        "帮我生成最后一周有数据的周报",
+        "帮我生成最后一个有数据的星期的周报",
+    ):
+        assert runner.report_brief_missing_details(question) == []
+        start, end = runner._chat_report_period(question, 1)
+
+        assert start.date() == date(2026, 7, 9)
+        assert end.date() == date(2026, 7, 15)
+
+
+def test_chat_report_uses_the_default_operations_template_when_focus_is_implicit(analysis_session, monkeypatch):
+    from app.reports import service as report_service
+
+    captured = {}
+
+    def fake_create_report(payload):
+        captured["payload"] = payload
+        return {
+            "id": "rpt-latest-data-week",
+            "title": "制造运营综合周报",
+            "status": "queued",
+        }
+
+    monkeypatch.setattr(report_service, "create_report", fake_create_report)
+    monkeypatch.setattr(runner, "_latest_report_data_date", lambda _source_id: date(2026, 7, 15))
+    session = service.create_session("最新数据周报测试", 1, "u-latest-data-week")
+
+    accepted = service.create_run(
+        session["id"],
+        "帮我生成最后一周有数据的周报",
+        "latest-data-week",
+    )
+    snapshot = service.get_run(accepted["runId"])
+
+    assert accepted["status"] == "succeeded"
+    assert snapshot["status"] == "succeeded"
+    assert captured["payload"].templateId == "tpl-operations-weekly"
+    assert captured["payload"].periodStart.date() == date(2026, 7, 9)
+    assert captured["payload"].periodEnd.date() == date(2026, 7, 15)
+
+
 def test_chat_report_period_understands_a_natural_language_month(monkeypatch):
     monkeypatch.setattr(runner, "_latest_report_data_date", lambda _source_id: date(2026, 8, 16))
 
@@ -495,6 +540,9 @@ def test_unknown_business_request_is_preclassified_once_then_queued(analysis_ses
 
 def test_router_understands_natural_report_request_without_report_keyword(analysis_session, monkeypatch):
     from app.llm.provider import LLMResponse, LLMUsage
+    from app.reports import service as report_service
+
+    captured = {}
 
     def fake_completion(system, user, *, temperature, max_tokens):
         assert "report" in system.lower()
@@ -505,7 +553,13 @@ def test_router_understands_natural_report_request_without_report_keyword(analys
             usage=LLMUsage(input_tokens=18, output_tokens=8, total_tokens=26),
         )
 
+    def fake_create_report(payload):
+        captured["payload"] = payload
+        return {"id": "rpt-natural-report", "title": "经营情况总结", "status": "queued"}
+
     monkeypatch.setattr(runner.provider, "chat_completion", fake_completion)
+    monkeypatch.setattr(report_service, "create_report", fake_create_report)
+    monkeypatch.setattr(runner, "_latest_report_data_date", lambda _source_id: date(2026, 7, 15))
     created = service.create_session("自然报告问法", 1, "u-natural-report")
 
     accepted = service.create_run(
@@ -515,10 +569,50 @@ def test_router_understands_natural_report_request_without_report_keyword(analys
     )
     snapshot = service.get_run(accepted["runId"])
 
-    assert accepted["status"] == "waiting_user"
-    assert snapshot["status"] == "waiting_user"
-    assert snapshot["interaction"]["prompt"]["allowCustom"] is True
-    assert snapshot["interaction"]["prompt"]["options"] == []
+    assert accepted["status"] == "succeeded"
+    assert snapshot["status"] == "succeeded"
+    assert snapshot["interaction"] is None
+    assert captured["payload"].templateId == "tpl-operations-weekly"
+    assert captured["payload"].periodStart.date() == date(2026, 7, 9)
+    assert captured["payload"].periodEnd.date() == date(2026, 7, 15)
+
+
+def test_router_creates_a_natural_report_when_time_and_focus_are_already_clear(analysis_session, monkeypatch):
+    from app.llm.provider import LLMResponse, LLMUsage
+    from app.reports import service as report_service
+
+    captured = {}
+
+    def fake_completion(system, user, *, temperature, max_tokens):
+        return LLMResponse(
+            content='{"segments":[{"index":0,"kind":"report","response":""}]}',
+            model="test-router",
+            provider_request_id="req-report-ready",
+            usage=LLMUsage(input_tokens=18, output_tokens=8, total_tokens=26),
+        )
+
+    def fake_create_report(payload):
+        captured["payload"] = payload
+        return {"id": "rpt-natural-ready", "title": "经营情况总结", "status": "queued"}
+
+    monkeypatch.setattr(runner.provider, "chat_completion", fake_completion)
+    monkeypatch.setattr(report_service, "create_report", fake_create_report)
+    monkeypatch.setattr(runner, "_latest_report_data_date", lambda _source_id: date(2026, 7, 15))
+    created = service.create_session("自然报告直达测试", 1, "u-natural-ready")
+
+    accepted = service.create_run(
+        created["id"],
+        "把最近一周的经营情况整理成一份总结",
+        "natural-report-ready",
+    )
+    snapshot = service.get_run(accepted["runId"])
+
+    assert accepted["status"] == "succeeded"
+    assert snapshot["status"] == "succeeded"
+    assert snapshot["interaction"] is None
+    assert captured["payload"].templateId == "tpl-operations-weekly"
+    assert captured["payload"].periodStart.date() == date(2026, 7, 9)
+    assert captured["payload"].periodEnd.date() == date(2026, 7, 15)
 
 
 def test_inline_conversation_cannot_complete_twice(analysis_session):

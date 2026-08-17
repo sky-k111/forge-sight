@@ -673,11 +673,13 @@ def execute_inline_conversation(run_id: str, direct_response: str | None = None)
 
 
 _CHAT_REPORT_PERIOD_RE = re.compile(
-    r"(?:最近|近)\s*(?:\d+|一|两|三|四|五|六|七|八|九|十|半|一个)\s*(?:天|日|周|个月|月)"
-    r"|(?:本周|这周|这个月|本月|这个季度|本季度|今年|今天|昨天|上周|上月)"
+    r"(?:最近|近)\s*(?:\d+|一|两|三|四|五|六|七|八|九|十|半|一个)\s*(?:天|日|周|星期|礼拜|个月|月)"
+    r"|(?:最后|最新|过去|上一|上个)\s*(?:一|1)?\s*(?:个)?\s*(?:有数据的)?\s*(?:周|星期|礼拜)"
+    r"|(?:本周|这周|这个星期|这个礼拜|这个月|本月|这个季度|本季度|今年|今天|昨天|上周|上月)"
     r"|20\d{2}\s*(?:[-年/])\s*\d{1,2}(?:\s*(?:[-月/])\s*\d{1,2})?"
 )
 _CHAT_REPORT_FOCUS_TERMS = ("生产", "产量", "产线", "质量", "良率", "缺陷", "不良", "设备", "停机", "库存", "物料", "经营", "运营", "综合")
+_CHAT_REPORT_DEFAULT_SCOPE_TERMS = ("周报", "月报", "综合", "经营", "运营", "业务总结", "工作总结")
 
 
 def report_brief_missing_details(brief: str) -> list[str]:
@@ -685,9 +687,17 @@ def report_brief_missing_details(brief: str) -> list[str]:
 
     normalized = str(brief or "")
     missing = []
-    if not _CHAT_REPORT_PERIOD_RE.search(normalized):
+    has_period = bool(_CHAT_REPORT_PERIOD_RE.search(normalized))
+    if not has_period:
         missing.append("统计时间")
-    if not any(term in normalized for term in _CHAT_REPORT_FOCUS_TERMS):
+    has_focus = any(term in normalized for term in _CHAT_REPORT_FOCUS_TERMS)
+    # A generic weekly/monthly report with an explicit period has a safe,
+    # auditable default: the operations summary template. Do not apply that
+    # default to a bare “给我一份周报”, which still needs a time range.
+    has_default_scope = has_period and any(
+        term in normalized for term in _CHAT_REPORT_DEFAULT_SCOPE_TERMS
+    )
+    if not has_focus and not has_default_scope:
         missing.append("关注内容")
     return missing
 
@@ -788,12 +798,12 @@ def _chat_report_period(question: str, source_id: int | None = None) -> tuple[da
             start = date(year, month, 1)
             end = date(year, month, monthrange(year, month)[1])
             return datetime.combine(start, datetime.min.time()), datetime.combine(end, datetime.max.time())
-    if "上周" in question:
+    if re.search(r"(?:上周|上一周|上个星期|上个礼拜)", question):
         current_monday = today - timedelta(days=today.weekday())
         start = current_monday - timedelta(days=7)
         end = current_monday - timedelta(days=1)
         return datetime.combine(start, datetime.min.time()), datetime.combine(end, datetime.max.time())
-    if "本周" in question:
+    if re.search(r"(?:本周|这周|这个星期|这个礼拜)", question):
         start = today - timedelta(days=today.weekday())
         return datetime.combine(start, datetime.min.time()), latest_day_end
     if "本月" in question:
@@ -926,10 +936,14 @@ def execute_inline_route(run_id: str) -> dict:
     )
     # The router may recognize a report request from its meaning rather than
     # from fixed report keywords (for example, “把最近一周的经营情况整理成
-    # 一份总结”).  Keep this on the same clarification path as explicit report
-    # requests and do not send it through SQL retrieval first.
+    # 一份总结”).  Reuse the same semantic completeness check as explicit
+    # report requests: create directly when time/focus are clear, and ask only
+    # for the missing detail when an assumption would be unsafe.
     if routed.get("reportSegments") and not routed.get("analysisQuestion"):
-        return execute_inline_report_clarification(run_id)
+        report_brief = "；".join(item["text"] for item in routed["reportSegments"])
+        if report_brief_missing_details(report_brief):
+            return execute_inline_report_clarification(run_id, report_brief=report_brief)
+        return execute_inline_report_request(run_id, report_brief=report_brief)
     if not labels or routed["kind"] in {"analysis", "mixed"}:
         with PlatformSession() as session:
             run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
@@ -1141,7 +1155,10 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
         # inline path and ask for a template instead of completing an empty
         # “分析完成” run.
         if state.get("intent_kind") == "report" and not state.get("analysis_question"):
-            return execute_inline_report_clarification(run_id)
+            report_brief = state.get("user_question") or ""
+            if report_brief_missing_details(report_brief):
+                return execute_inline_report_clarification(run_id, report_brief=report_brief)
+            return execute_inline_report_request(run_id, report_brief=report_brief)
         _finish_run(run_id, state)
     except Exception as exc:
         _mark_unexpected_failure(run_id, exc)
