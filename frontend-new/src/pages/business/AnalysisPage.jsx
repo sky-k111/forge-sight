@@ -52,6 +52,29 @@ export function getPendingClarification(items) {
   return message ? { message, clarification: message.run.clarification } : null;
 }
 
+export function upsertAnalysisRunMessage(items, run) {
+  if (items == null) return items;
+  let existingIndex = -1;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index].role === "assistant" && items[index].run?.id === run.id) {
+      existingIndex = index;
+      break;
+    }
+  }
+  if (existingIndex < 0) return [...items, { id: run.id, role: "assistant", run, animate: false }];
+
+  const existing = items[existingIndex];
+  const previousInteractionId = existing.run?.clarification?.interactionId;
+  const nextInteractionId = run.clarification?.interactionId;
+  if (previousInteractionId && nextInteractionId && previousInteractionId !== nextInteractionId) {
+    return [...items, { id: `${run.id}-clarification-${nextInteractionId}`, role: "assistant", run, animate: false }];
+  }
+
+  const next = [...items];
+  next[existingIndex] = { ...existing, run, animate: false };
+  return next;
+}
+
 export default function AnalysisPage() {
   const { evidenceOpen, setEvidenceOpen, navigatePage, refreshSessions } = useOutletContext();
   const [messages, setMessages] = useState(null);
@@ -127,12 +150,7 @@ export default function AnalysisPage() {
   const upsertRun = (snapshot) => {
     const run = adaptAnalysisRun(snapshot);
     setMessages((current) => {
-      if (current == null) return current;
-      const existingIndex = current.findIndex((item) => item.role === "assistant" && item.run?.id === run.id);
-      if (existingIndex < 0) return [...current, { id: run.id, role: "assistant", run, animate: false }];
-      const next = [...current];
-      next[existingIndex] = { ...next[existingIndex], run, animate: false };
-      return next;
+      return upsertAnalysisRunMessage(current, run);
     });
     if (isConversationRun(run)) {
       setEvidenceRun(null);
@@ -1072,9 +1090,6 @@ function ClarifyCard({ clarification, onSelect, submitting = false, error = null
               ))}
             </div>
           )}
-          <p className="mt-2 text-[11px] leading-5 text-faint">
-            你也可以直接在下方输入框用自然语言补充，我会继续理解。
-          </p>
           {error && <p className="mt-2 text-[11px] leading-relaxed text-red">{error}</p>}
           {chosen && !error && <p className="mt-2 text-[11px] text-faint">已选择「{chosen.label}」，正在按该口径继续分析…</p>}
         </div>

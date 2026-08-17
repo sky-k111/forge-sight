@@ -1176,6 +1176,7 @@ describe("ForgeSight application routes", () => {
 
     expect(await screen.findByText("请选择本次良率统计口径。", {}, { timeout: 3000 })).toBeTruthy();
     expect(screen.queryByPlaceholderText("用一句话补充你的要求")).toBeNull();
+    expect(screen.queryByText("你也可以直接在下方输入框用自然语言补充，我会继续理解。")).toBeNull();
 
     fireEvent.change(screen.getByPlaceholderText(/用业务语言/), {
       target: { value: "按最近 30 天、各工序统计" },
