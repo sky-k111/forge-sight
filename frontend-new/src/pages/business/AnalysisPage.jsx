@@ -75,6 +75,72 @@ export function upsertAnalysisRunMessage(items, run) {
   return next;
 }
 
+const INTERNAL_REPORT_PROMPT_PATTERN = /完成以下相互独立|所有数值只能来自当前数据源|统计范围固定为|请给出适合该数据形态/;
+
+function messageTime(value) {
+  const created = new Date(value);
+  return Number.isNaN(created.getTime()) ? "" : created.toTimeString().slice(0, 5);
+}
+
+function safeRunQuestion(snapshot) {
+  const question = String(snapshot?.question ?? "").trim();
+  if (!INTERNAL_REPORT_PROMPT_PATTERN.test(question)) return question;
+  const title = snapshot?.assistantMessage?.metadata?.report?.title;
+  return title ? `生成《${title}》` : "生成报告";
+}
+
+export function buildAnalysisConversationItems(sessionView, snapshots = []) {
+  const entries = snapshots
+    .map((snapshot) => ({ snapshot, run: adaptAnalysisRun(snapshot) }))
+    .filter((entry) => entry.run);
+  const runs = new Map(entries.map((entry) => [entry.run.id, entry]));
+  const renderedRuns = new Set();
+  const items = [];
+  const appendRun = (entry) => {
+    if (!entry || renderedRuns.has(entry.run.id)) return;
+    renderedRuns.add(entry.run.id);
+    items.push({ id: entry.run.id, role: "assistant", run: entry.run, animate: false });
+  };
+  const messages = [...(sessionView?.messages ?? [])].sort(
+    (left, right) => Number(left.sequenceNo ?? 0) - Number(right.sequenceNo ?? 0),
+  );
+
+  for (const message of messages) {
+    const time = messageTime(message.createdAt);
+    const entry = runs.get(message.runId);
+    if (message.role === "user") {
+      const content = String(message.content ?? "");
+      const text = INTERNAL_REPORT_PROMPT_PATTERN.test(content)
+        ? safeRunQuestion(entry?.snapshot ?? { question: content })
+        : content;
+      items.push({ id: message.id, role: "user", text, time });
+      // A running report has a user message but no assistant message yet. Place the
+      // live card after the original request so a reload never falls back to the
+      // generated orchestration prompt.
+      appendRun(entry);
+    } else if (message.role === "assistant") {
+      if (entry) appendRun(entry);
+      else if (String(message.content ?? "").trim()) {
+        items.push({ id: message.id, role: "assistant", plainText: message.content, inherited: true, time });
+      }
+    }
+  }
+
+  // Keep older sessions recoverable when a message row was pruned or a run was
+  // created before its trigger message became visible to the session endpoint.
+  for (const entry of entries) {
+    if (renderedRuns.has(entry.run.id)) continue;
+    items.push({
+      id: `${entry.run.id}-q`,
+      role: "user",
+      text: safeRunQuestion(entry.snapshot),
+      time: messageTime(entry.snapshot.createdAt),
+    });
+    appendRun(entry);
+  }
+  return items;
+}
+
 export default function AnalysisPage() {
   const { evidenceOpen, setEvidenceOpen, navigatePage, refreshSessions } = useOutletContext();
   const [messages, setMessages] = useState(null);
@@ -220,24 +286,9 @@ export default function AnalysisPage() {
       const sessionView = await getAnalysisSession(selected.id);
       setBranchContext(sessionView.branchContext ?? null);
       const snapshots = await Promise.all((sessionView.runs ?? []).map((run) => getAnalysisRun(run.id)));
-      let items = snapshots.flatMap((snapshot) => {
-        const run = adaptAnalysisRun(snapshot);
-        const created = new Date(snapshot.createdAt);
-        const time = Number.isNaN(created.getTime()) ? "" : created.toTimeString().slice(0, 5);
-        return [
-          { id: `${run.id}-q`, role: "user", text: snapshot.question, time },
-          { id: run.id, role: "assistant", run, animate: false },
-        ];
-      });
-      if (!sessionView.branchContext && snapshots.length === 0 && (sessionView.messages ?? []).length > 0) {
-        items = sessionView.messages.map((message) => {
-          const created = new Date(message.createdAt);
-          const time = Number.isNaN(created.getTime()) ? "" : created.toTimeString().slice(0, 5);
-          return message.role === "user"
-            ? { id: message.id, role: "user", text: message.content, time }
-            : { id: message.id, role: "assistant", plainText: message.content, inherited: true };
-        });
-      }
+      const items = sessionView.branchContext && snapshots.length === 0
+        ? []
+        : buildAnalysisConversationItems(sessionView, snapshots);
       if (sessionView.branchContext?.sourceRunId) {
         try {
           const sourceSnapshot = await getAnalysisRun(sessionView.branchContext.sourceRunId);
@@ -544,6 +595,7 @@ export default function AnalysisPage() {
                           onClarify={(option, interactionId, displayText) => clarify(message.id, option, interactionId, displayText)}
                           onFollowUp={(text) => submit(text)}
                           onOpenModeling={() => navigatePage("modeling")}
+                          onOpenMessages={() => navigatePage("messages")}
                           clarifySubmitting={clarifySubmitting}
                           clarifyError={clarifyError}
                         />
@@ -878,14 +930,14 @@ function UserMessage({ text }) {
   );
 }
 
-function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClarify, onFollowUp, onOpenModeling, clarifySubmitting = false, clarifyError = null }) {
+function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClarify, onFollowUp, onOpenModeling, onOpenMessages, clarifySubmitting = false, clarifyError = null }) {
   const hasEvidence = Boolean(run.plan?.length || run.artifacts?.length || run.checkpoints?.length);
   const openEvidence = hasEvidence ? () => onOpenEvidence(run) : null;
   if (run.status === "blocked") return <BlockedCard error={run.error} onOpenEvidence={openEvidence} />;
   if (run.status === "clarifying" && run.clarification) return <ClarifyCard clarification={run.clarification} onSelect={onClarify} submitting={clarifySubmitting} error={clarifyError} />;
   if (run.status === "failed" || run.status === "cancelled") return <FailedRunCard run={run} onOpenEvidence={openEvidence} />;
   if (run.status === "modeling-proposal" && run.proposal) return <ModelingProposalCard proposal={run.proposal} runId={run.id} onOpenModeling={onOpenModeling} />;
-  if (run.report?.id) return <ReportGenerationMessage report={run.report} />;
+  if (run.report?.id) return <ReportGenerationMessage report={run.report} onOpenMessages={onOpenMessages} />;
   if (run.conversationPending) return <ConversationThinking />;
   // 澄清/建模提案在缺少 interaction/proposal 数据（如占位快照或异常快照）时按“运行中”兜底，避免空数据卡片抛错。
   if (["queued", "running", "retrying", "clarifying", "modeling-proposal"].includes(run.status)) {
@@ -897,7 +949,7 @@ function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClari
   return <RunFlow run={run} animate={animate} onComplete={onComplete} onOpenEvidence={onOpenEvidence} onFollowUp={onFollowUp} />;
 }
 
-function ReportGenerationMessage({ report }) {
+export function ReportGenerationMessage({ report, onOpenMessages }) {
   const [liveReport, setLiveReport] = useState(report);
   const pending = !["published", "partial", "failed", "validation_failed"].includes(liveReport.status);
 
@@ -912,23 +964,30 @@ function ReportGenerationMessage({ report }) {
   const steps = ["汇集周期指标", "编排图表与结论", "校验并投递邮箱"];
   const finished = liveReport.status === "published";
   return (
-    <Card className="report-generation-card motion-soft-rise mt-2 max-w-[520px] overflow-hidden p-0">
-      <div className="report-generation-card__bar" />
-      <div className="p-4">
-        <div className="flex items-start gap-3">
-          <span className="report-generation-card__orb grid h-9 w-9 shrink-0 place-items-center rounded-full text-primary"><Icon name="report" size={17} /></span>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2"><strong className="text-body font-semibold text-ink">{finished ? "周报已生成" : "正在生成周报"}</strong>{pending && <span className="report-generation-card__dots" aria-label="正在生成"><i /><i /><i /></span>}</div>
-            <p className="mt-1 text-xs leading-5 text-muted">{liveReport.title || "本期经营周报"}</p>
+    <button
+      type="button"
+      aria-label="打开消息中心"
+      onClick={() => onOpenMessages?.()}
+      className="block w-full max-w-[520px] cursor-pointer appearance-none border-0 bg-transparent p-0 text-left"
+    >
+      <Card className="report-generation-card motion-soft-rise mt-2 overflow-hidden p-0 transition-[border-color,box-shadow,transform] hover:-translate-y-px hover:border-primary/35 hover:shadow-card-hover">
+        <div className="report-generation-card__bar" />
+        <div className="p-4">
+          <div className="flex items-start gap-3">
+            <span className="report-generation-card__orb grid h-9 w-9 shrink-0 place-items-center rounded-full text-primary"><Icon name="report" size={17} /></span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2"><strong className="text-body font-semibold text-ink">{finished ? "周报已生成" : "正在生成周报"}</strong>{pending && <span className="report-generation-card__dots" aria-label="正在生成"><i /><i /><i /></span>}</div>
+              <p className="mt-1 text-xs leading-5 text-muted">{liveReport.title || "本期经营周报"}</p>
+            </div>
+            <StatusPill tone={finished ? "green" : "blue"}>{finished ? "已投递" : "生成中"}</StatusPill>
           </div>
-          <StatusPill tone={finished ? "green" : "blue"}>{finished ? "已投递" : "生成中"}</StatusPill>
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            {steps.map((step, index) => <div key={step} className={cn("rounded-control border px-2 py-2 text-center text-[11px] leading-4", pending && index === 1 ? "border-primary/30 bg-primary-soft text-primary" : "border-line bg-surface-2 text-muted")}>{step}</div>)}
+          </div>
+          <p className="mt-3 text-[11px] leading-5 text-muted">{finished ? "报告中心与绑定邮箱均已收到本期周报。点击查看消息中心。" : "正在生成中。完成后会自动投递到绑定邮箱。点击查看消息中心。"}</p>
         </div>
-        <div className="mt-4 grid grid-cols-3 gap-2">
-          {steps.map((step, index) => <div key={step} className={cn("rounded-control border px-2 py-2 text-center text-[11px] leading-4", pending && index === 1 ? "border-primary/30 bg-primary-soft text-primary" : "border-line bg-surface-2 text-muted")}>{step}</div>)}
-        </div>
-        <p className="mt-3 text-[11px] leading-5 text-muted">{finished ? "报告中心与绑定邮箱均已收到本期周报。" : "生成期间已在消息中心创建不可打开的周报条目；完成后会自动投递至绑定邮箱。"}</p>
-      </div>
-    </Card>
+      </Card>
+    </button>
   );
 }
 
