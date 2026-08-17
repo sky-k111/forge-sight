@@ -34,8 +34,27 @@ SMALLTALK_PATTERNS = (
     re.compile(r"(?:想.*聊|压力|心情|难过|焦虑|烦恼|陪我|表现不好)"),
 )
 _CLOCK_QUERY_PATTERN = re.compile(
-    r"(?:现在|当前|今天).{0,8}(?:几点|几时|时间)|(?:几点|几时).{0,8}(?:现在|当前|今天)"
+    r"(?:现在|当前|今天|北京时间).{0,10}(?:几点(?:钟)?|几时|时间|时刻|几号|日期)"
+    r"|(?:几点(?:钟)?|几时)(?:了|吗|呢)?"
+    r"|(?:时间|时刻|日期).{0,8}(?:是多少|是几点|为多少|呢|吗)"
+    r"|(?:请问|麻烦(?:问一下)?|告诉我|问一下).{0,5}(?:几点(?:钟)?|几时|时间|时刻|日期)"
 )
+_CLOCK_BUSINESS_CONTEXT = (
+    "报告", "报表", "统计", "周期", "范围", "数据", "指标", "字段", "查询", "分析",
+    "生产", "产量", "质量", "设备", "库存", "工序", "产线", "业务", "时长", "耗时",
+)
+
+
+def _is_clock_query(text: str) -> bool:
+    """Recognize current-clock questions without stealing metric time scopes."""
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not _CLOCK_QUERY_PATTERN.search(normalized):
+        return False
+    if any(term in normalized for term in _CLOCK_BUSINESS_CONTEXT):
+        return bool(re.search(r"(?:现在|当前|今天|北京时间|几点|几时)", normalized))
+    return True
+
+
 _REPORT_TERMS = ("周报", "月报", "专题报告", "报告", "报表")
 _REPORT_REQUEST_PATTERNS = (
     # Creation verbs may be separated from the report noun by a template or
@@ -115,7 +134,7 @@ def is_report_request(text: str) -> bool:
 
 
 def _is_known_conversation(text: str) -> bool:
-    return _is_report_request(text) or bool(_CLOCK_QUERY_PATTERN.search(text)) or any(
+    return _is_report_request(text) or _is_clock_query(text) or any(
         pattern.search(text) for pattern in (*SMALLTALK_PATTERNS, *OUT_OF_SCOPE_PATTERNS)
     )
 
@@ -250,7 +269,7 @@ def build_conversation_response(parts: list[str], *, mixed: bool = False) -> str
 
 def build_smalltalk_response(text: str) -> str:
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
-    if _CLOCK_QUERY_PATTERN.search(normalized):
+    if _is_clock_query(normalized):
         now = datetime.now(ZoneInfo("Asia/Shanghai"))
         return f"现在是北京时间 {now:%Y 年 %m 月 %d 日 %H:%M}。"
     if _is_report_request(normalized):

@@ -290,6 +290,18 @@ def test_known_role_question_is_completed_before_the_worker_poll(analysis_sessio
     assert "只读" in snapshot["assistantMessage"]["content"]
 
 
+def test_current_time_question_completes_inline_without_the_model(analysis_session):
+    created = service.create_session("时间问答测试", 1, "u-clock")
+
+    accepted = service.create_run(created["id"], "几点钟了？", "clock-idem")
+    snapshot = service.get_run(accepted["runId"])
+
+    assert accepted["status"] == "succeeded"
+    assert snapshot["status"] == "succeeded"
+    assert snapshot["usage"]["callCount"] == 0
+    assert "北京时间" in snapshot["assistantMessage"]["content"]
+
+
 def test_chat_report_request_creates_report_with_session_scope(analysis_session, monkeypatch):
     from app.reports import service as report_service
 
