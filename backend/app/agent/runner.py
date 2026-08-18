@@ -6,7 +6,8 @@ import hashlib
 import json
 import re
 import time
-from datetime import datetime, timedelta
+from calendar import monthrange
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -24,6 +25,7 @@ from app.agent.graph import (
 )
 from app.agent.ids import new_id
 from app.agent.intent import build_request_route
+from app.agent.time_range import chinese_number_to_int, extract_year_month, has_time_reference
 from app.config import settings
 from app.db.models import (
     AnalysisArtifact,
@@ -36,6 +38,7 @@ from app.db.models import (
     AnalysisTask,
     AuditLog,
     DataSource,
+    DataTable,
     LlmCallAttempt,
 )
 from app.db.platform import PlatformSession
@@ -101,6 +104,7 @@ def _tracked_generate(state: dict, step_key: str, system: str, user: str) -> str
         max_tokens = {
             "intent.route": 500,
             "conversation.reply": 600,
+            "report.understand": 500,
             "result.explain": 1200,
         }.get(step_key, 2400)
         response = provider.chat_completion(
@@ -549,6 +553,7 @@ def _finish_run(run_id: str, state: dict) -> None:
                     role="assistant",
                     content=content,
                     sequence_no=sequence_no,
+                    metadata_json={"report": state["report_reference"]} if state.get("report_reference") else {},
                 )
             )
         if run.status != "succeeded":
@@ -669,19 +674,149 @@ def execute_inline_conversation(run_id: str, direct_response: str | None = None)
     return {"runId": run_id, "status": "succeeded"}
 
 
-def execute_inline_report_clarification(run_id: str) -> dict:
-    """Pause a chat report request until the user chooses a report template."""
+_CHAT_REPORT_FOCUS_TERMS = (
+    "生产", "产量", "产能", "产线", "工单", "交付", "订单",
+    "质量", "良率", "合格", "缺陷", "不良", "返工", "报废", "检验",
+    "设备", "停机", "故障", "维护", "稼动", "库存", "物料", "仓储", "缺料",
+    "经营", "运营", "业务", "制造", "供应", "采购", "成本", "进度", "管理层", "整体", "综合",
+)
+_CHAT_REPORT_DEFAULT_SCOPE_TERMS = ("周报", "月报", "综合", "经营", "运营", "业务总结", "工作总结", "总结", "汇报")
 
-    prompt = {
-        "kind": "clarification",
-        "question": "你想生成哪一种周报？请选择报告类型；选择后我会在报告中心创建并开始生成。",
-        "options": list(CHAT_REPORT_TYPE_OPTIONS),
-        "allowCustom": False,
-    }
+
+def report_brief_missing_details(brief: str) -> list[str]:
+    """Return the report inputs that cannot safely be assumed from a chat turn."""
+
+    normalized = str(brief or "")
+    missing = []
+    has_period = has_time_reference(normalized)
+    if not has_period:
+        missing.append("统计时间")
+    has_focus = any(term in normalized for term in _CHAT_REPORT_FOCUS_TERMS)
+    # A generic weekly/monthly report with an explicit period has a safe,
+    # auditable default: the operations summary template. Do not apply that
+    # default to a bare “给我一份周报”, which still needs a time range.
+    has_default_scope = has_period and any(
+        term in normalized for term in _CHAT_REPORT_DEFAULT_SCOPE_TERMS
+    )
+    if not has_focus and not has_default_scope:
+        missing.append("关注内容")
+    return missing
+
+
+_REPORT_SEMANTIC_TOPIC_LABELS = {
+    "production": "生产",
+    "quality": "质量",
+    "equipment": "设备",
+    "inventory": "库存",
+    "operations": "运营",
+}
+
+
+def _report_semantic_payload(raw: str) -> dict[str, Any] | None:
+    candidate = str(raw or "").strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", candidate, flags=re.IGNORECASE | re.DOTALL)
+    candidate = (fenced.group(1) if fenced else candidate).strip()
+    try:
+        decoded = json.loads(candidate)
+    except json.JSONDecodeError:
+        start, end = candidate.find("{"), candidate.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            decoded = json.loads(candidate[start:end + 1])
+        except json.JSONDecodeError:
+            return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def _resolve_report_brief_semantics(brief: str, run_id: str) -> str:
+    """Use one bounded model turn to fill semantic gaps the local parser cannot name.
+
+    The model only extracts user-stated period/topic hints.  Its output is
+    normalized through the same deterministic time/topic allow-lists before it
+    can influence report creation; it never selects a table, SQL, permission or
+    publication status.
+    """
+
+    normalized = str(brief or "").strip()
+    missing = report_brief_missing_details(normalized)
+    # A bare report with a known topic still needs an explicit period; asking
+    # that question is safer and faster than spending a model turn trying to
+    # invent one.  Model assistance is useful when a rich turn contains an
+    # unlisted topic (or several unresolved slots).
+    if not settings.llm_api_key or len(normalized) < 12 or not missing or missing == ["统计时间"]:
+        return normalized
+    system = (
+        "你是 ForgeSight 的报告需求理解器，不生成报告，也不查询数据库。"
+        "请结合用户这段话，只提取用户明确表达或自然语言中可以可靠判断的报告时间和关注主题。"
+        "不要猜测缺失信息；不要输出 SQL、字段、表名或结论。"
+        "仅输出 JSON：{\"periodText\":\"原话中的时间表达或 null\","
+        "\"focusTopics\":[\"production|quality|equipment|inventory|operations\"],"
+        "\"focusEvidence\":\"原话中支持主题判断的连续短语或 null\","
+        "\"confidence\":0到1之间的数字}。"
+    )
+    user = json.dumps({"reportBrief": normalized}, ensure_ascii=False)
+    try:
+        raw = _tracked_generate(
+            {"run_id": run_id, "retry_count": 0, "task": {}},
+            "report.understand",
+            system,
+            user,
+        )
+        payload = _report_semantic_payload(raw) or {}
+    except Exception:  # noqa: BLE001 - semantic assistance must never block clarification
+        return normalized
+
+    try:
+        confidence = float(payload.get("confidence", 0))
+    except (TypeError, ValueError):
+        confidence = 0
+    if confidence < 0.65:
+        return normalized
+
+    additions: list[str] = []
+    period_text = str(payload.get("periodText") or "").strip()
+    if period_text and period_text in normalized and has_time_reference(period_text):
+        additions.append(period_text)
+    topics = payload.get("focusTopics") or []
+    if isinstance(topics, str):
+        topics = [topics]
+    focus_evidence = str(payload.get("focusEvidence") or "").strip()
+    if not focus_evidence or focus_evidence not in normalized:
+        topics = []
+    for topic in topics:
+        label = _REPORT_SEMANTIC_TOPIC_LABELS.get(str(topic).strip().lower())
+        if label and label not in normalized and label not in additions:
+            additions.append(label)
+    return normalized if not additions else normalized + "；" + "；".join(additions)
+
+
+def _report_brief_question(brief: str) -> str:
+    missing = report_brief_missing_details(brief)
+    if len(missing) == 2:
+        return "可以。为了生成准确的报告，请告诉我统计时间和关注内容（生产、质量、设备、库存或经营）。例如：‘生成最近 30 天的质量与设备专题报告’。"
+    if missing == ["统计时间"]:
+        return "已了解报告关注内容。请再告诉我统计时间，例如‘最近 30 天’、‘上周’或‘2026 年 7 月’。"
+    return "已了解统计时间。请再告诉我希望关注的内容，例如生产、质量、设备、库存或经营。"
+
+
+def execute_inline_report_clarification(run_id: str, report_brief: str | None = None) -> dict:
+    """Pause a chat report request until its missing business details are supplied."""
+
     with PlatformSession() as session:
         run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
         if run.status in TERMINAL_STATUSES:
             return {"runId": run.id, "status": run.status}
+        message = session.query(AnalysisMessage).filter_by(id=run.trigger_message_id).one()
+        brief = (report_brief or message.content).strip()
+        prompt = {
+            "kind": "clarification",
+            "question": _report_brief_question(brief),
+            "options": [],
+            "allowCustom": True,
+            "inputPlaceholder": "例如：最近 30 天的质量与设备专题报告",
+            "reportBrief": brief,
+        }
         existing = session.query(AnalysisInteraction).filter_by(
             run_id=run.id, status="pending"
         ).first()
@@ -723,33 +858,84 @@ def _chat_report_template(question: str) -> str:
     return "tpl-operations-weekly"
 
 
-def _chat_report_period(question: str) -> tuple[datetime, datetime]:
+def _latest_report_data_date(source_id: int) -> date | None:
+    """Use catalogued freshness so a local/demo data source never yields an empty 'current week' report."""
+
+    with PlatformSession() as session:
+        values = [
+            row.data_updated for row in session.query(DataTable)
+            .filter_by(source_id=source_id).all() if row.data_updated
+        ]
+    parsed = []
+    for value in values:
+        try:
+            parsed.append(datetime.fromisoformat(str(value)[:10]).date())
+        except ValueError:
+            continue
+    return max(parsed) if parsed else None
+
+
+def _chat_report_period(question: str, source_id: int | None = None) -> tuple[datetime, datetime]:
     now = datetime.now(CHAT_REPORT_TIMEZONE).replace(tzinfo=None)
-    today = now.date()
-    if "上周" in question:
+    today = _latest_report_data_date(source_id) if source_id else None
+    today = today or now.date()
+    latest_day_end = datetime.combine(today, datetime.max.time())
+    month_parts = extract_year_month(question)
+    if month_parts:
+        year, month = month_parts
+        start = date(year, month, 1)
+        end = date(year, month, monthrange(year, month)[1])
+        return datetime.combine(start, datetime.min.time()), datetime.combine(end, datetime.max.time())
+    if re.search(r"(?:上周|上一周|上个星期|上个礼拜)", question):
         current_monday = today - timedelta(days=today.weekday())
         start = current_monday - timedelta(days=7)
         end = current_monday - timedelta(days=1)
         return datetime.combine(start, datetime.min.time()), datetime.combine(end, datetime.max.time())
-    if "本周" in question:
+    if re.search(r"(?:本周|这周|这个星期|这个礼拜)", question):
         start = today - timedelta(days=today.weekday())
-        return datetime.combine(start, datetime.min.time()), now.replace(
-            hour=23, minute=59, second=59, microsecond=999999
-        )
-    if "本月" in question:
+        return datetime.combine(start, datetime.min.time()), latest_day_end
+    if re.search(r"(?:上个月|上月|上个自然月|上一个月)", question):
+        current_start = today.replace(day=1)
+        previous_end = current_start - timedelta(days=1)
+        previous_start = previous_end.replace(day=1)
+        return datetime.combine(previous_start, datetime.min.time()), datetime.combine(previous_end, datetime.max.time())
+    if re.search(r"(?:去年|上一个自然年)", question):
+        start = date(today.year - 1, 1, 1)
+        end = date(today.year - 1, 12, 31)
+        return datetime.combine(start, datetime.min.time()), datetime.combine(end, datetime.max.time())
+    if re.search(r"(?:今年|本年|本年至今)", question):
+        start = date(today.year, 1, 1)
+        return datetime.combine(start, datetime.min.time()), latest_day_end
+    if "上半年" in question:
+        year = today.year - 1 if "去年" in question else today.year
+        return datetime.combine(date(year, 1, 1), datetime.min.time()), datetime.combine(date(year, 6, 30), datetime.max.time())
+    if "下半年" in question:
+        year = today.year - 1 if "去年" in question else today.year
+        return datetime.combine(date(year, 7, 1), datetime.min.time()), datetime.combine(date(year, 12, 31), datetime.max.time())
+    if "本月" in question or "这个月" in question:
         start = today.replace(day=1)
-        return datetime.combine(start, datetime.min.time()), now.replace(
-            hour=23, minute=59, second=59, microsecond=999999
-        )
-    match = re.search(r"最近\s*(\d+)\s*(?:天|日)", question)
-    days = int(match.group(1)) if match else 7
+        return datetime.combine(start, datetime.min.time()), latest_day_end
+    match = re.search(
+        r"(?:最近|近)\s*(\d+|[零〇○一二两三四五六七八九十百千]+)\s*(天|日|周|星期|礼拜|个月|月)",
+        question,
+    )
+    amount = chinese_number_to_int(match.group(1)) if match else None
+    unit = match.group(2) if match else "天"
+    if amount is None:
+        amount = 7
+    if unit in {"周", "星期", "礼拜"}:
+        days = amount * 7
+    elif unit in {"个月", "月"}:
+        days = amount * 30
+    else:
+        days = amount
     days = min(max(days, 1), 366)
-    start = today - timedelta(days=days)
-    end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    start = today - timedelta(days=days - 1)
+    end = latest_day_end
     return datetime.combine(start, datetime.min.time()), end
 
 
-def execute_inline_report_request(run_id: str, template_id: str | None = None) -> dict:
+def execute_inline_report_request(run_id: str, template_id: str | None = None, report_brief: str | None = None) -> dict:
     """Create a real report from a direct chat request and keep the chat run inline."""
 
     with PlatformSession() as session:
@@ -769,13 +955,14 @@ def execute_inline_report_request(run_id: str, template_id: str | None = None) -
             "expected_lease_owner": "inline-conversation",
         }
         user_id = business_session.user_id
+        report_question = report_brief or message.content
         session.commit()
 
     from app.reports import service as report_service
     from app.reports.contracts import ReportCreate
 
-    period_start, period_end = _chat_report_period(state["user_question"])
-    template_id = template_id or _chat_report_template(state["user_question"])
+    period_start, period_end = _chat_report_period(report_question, state["source_id"])
+    template_id = template_id or _chat_report_template(report_question)
     try:
         report = report_service.create_report(
             ReportCreate(
@@ -784,6 +971,8 @@ def execute_inline_report_request(run_id: str, template_id: str | None = None) -
                 periodStart=period_start,
                 periodEnd=period_end,
                 ownerId=user_id,
+                # 对话发起的周报默认在生成完成后投递到用户已绑定邮箱。
+                emailEnabled=True,
             )
         )
         report_id = report.get("id", "")
@@ -801,6 +990,12 @@ def execute_inline_report_request(run_id: str, template_id: str | None = None) -
         "intent_kind": "report",
         "analysis_question": "",
         "direct_response": response,
+        "report_reference": ({
+            "id": report_id,
+            "title": title,
+            "status": report.get("status", "queued"),
+            "emailEnabled": True,
+        } if "report_id" in locals() and report_id else None),
         "tasks": [],
         "blocked": False,
         "error": None,
@@ -859,10 +1054,15 @@ def execute_inline_route(run_id: str) -> dict:
     )
     # The router may recognize a report request from its meaning rather than
     # from fixed report keywords (for example, “把最近一周的经营情况整理成
-    # 一份总结”).  Keep this on the same clarification path as explicit report
-    # requests and do not send it through SQL retrieval first.
+    # 一份总结”).  Reuse the same semantic completeness check as explicit
+    # report requests: create directly when time/focus are clear, and ask only
+    # for the missing detail when an assumption would be unsafe.
     if routed.get("reportSegments") and not routed.get("analysisQuestion"):
-        return execute_inline_report_clarification(run_id)
+        report_brief = "；".join(item["text"] for item in routed["reportSegments"])
+        report_brief = _resolve_report_brief_semantics(report_brief, run_id)
+        if report_brief_missing_details(report_brief):
+            return execute_inline_report_clarification(run_id, report_brief=report_brief)
+        return execute_inline_report_request(run_id, report_brief=report_brief)
     if not labels or routed["kind"] in {"analysis", "mixed"}:
         with PlatformSession() as session:
             run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
@@ -1074,7 +1274,11 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
         # inline path and ask for a template instead of completing an empty
         # “分析完成” run.
         if state.get("intent_kind") == "report" and not state.get("analysis_question"):
-            return execute_inline_report_clarification(run_id)
+            report_brief = state.get("user_question") or ""
+            report_brief = _resolve_report_brief_semantics(report_brief, run_id)
+            if report_brief_missing_details(report_brief):
+                return execute_inline_report_clarification(run_id, report_brief=report_brief)
+            return execute_inline_report_request(run_id, report_brief=report_brief)
         _finish_run(run_id, state)
     except Exception as exc:
         _mark_unexpected_failure(run_id, exc)

@@ -225,13 +225,20 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
         # Known turns are model-free; open conversation gets one small model call.
         # Neither path enters schema retrieval, SQL generation or worker polling.
         from app.agent.runner import (
+            _resolve_report_brief_semantics,
             execute_inline_conversation,
             execute_inline_report_clarification,
+            execute_inline_report_request,
             execute_inline_route,
+            report_brief_missing_details,
         )
 
         if report_request:
-            execute_inline_report_clarification(run_id)
+            report_brief = _resolve_report_brief_semantics(normalized_question, run_id)
+            if report_brief_missing_details(report_brief):
+                execute_inline_report_clarification(run_id, report_brief=report_brief)
+            else:
+                execute_inline_report_request(run_id, report_brief=report_brief)
         elif request_kind == "unknown":
             execute_inline_route(run_id)
         else:
@@ -335,17 +342,38 @@ def respond_to_interaction(interaction_id: str, answer: str) -> dict:
         run = session.query(AnalysisRun).filter_by(id=interaction.run_id).with_for_update().one()
         if run.status != "waiting_user":
             raise AnalysisConflict("当前运行不在等待用户状态")
+        normalized_answer = answer.strip()
+        answer_sequence = (
+            session.query(func.coalesce(func.max(AnalysisMessage.sequence_no), 0))
+            .filter_by(session_id=run.session_id)
+            .scalar()
+            + 1
+        )
+        session.add(
+            AnalysisMessage(
+                id=new_id("msg"),
+                session_id=run.session_id,
+                run_id=run.id,
+                role="user",
+                content=normalized_answer,
+                sequence_no=answer_sequence,
+                metadata_json={"clarificationInteractionId": interaction.id},
+            )
+        )
         if interaction.resume_node == "report.create":
-            allowed_values = {
-                item.get("value")
-                for item in (interaction.prompt_json or {}).get("options", [])
-                if item.get("value")
-            }
-            selected = answer.strip()
-            if selected not in allowed_values:
-                raise AnalysisConflict("请选择一个有效的周报类型")
+            selected = normalized_answer
+            report_brief = " ".join(filter(None, [(interaction.prompt_json or {}).get("reportBrief"), selected]))
+            from app.agent.runner import (
+                CHAT_REPORT_TYPE_OPTIONS,
+                report_brief_missing_details,
+            )
+
+            legacy_template_id = next(
+                (item.get("value") for item in CHAT_REPORT_TYPE_OPTIONS if item.get("value") == selected),
+                None,
+            )
             interaction.status = "resolved"
-            interaction.response_json = {"answer": selected}
+            interaction.response_json = {"answer": selected, "reportBrief": report_brief}
             interaction.resolved_at = datetime.now()
             now = datetime.now()
             run.status = "running"
@@ -366,14 +394,27 @@ def respond_to_interaction(interaction_id: str, answer: str) -> dict:
                 step_key="report.create",
             )
             session.commit()
-            from app.agent.runner import execute_inline_report_request
+            from app.agent.runner import (
+                _resolve_report_brief_semantics,
+                execute_inline_report_clarification,
+                execute_inline_report_request,
+            )
 
-            execute_inline_report_request(run.id, template_id=selected)
+            report_brief = _resolve_report_brief_semantics(report_brief, run.id)
+            missing = [] if legacy_template_id else report_brief_missing_details(report_brief)
+            if missing:
+                execute_inline_report_clarification(run.id, report_brief=report_brief)
+            else:
+                execute_inline_report_request(
+                    run.id,
+                    template_id=legacy_template_id,
+                    report_brief=report_brief,
+                )
             with PlatformSession() as completed_session:
                 completed = completed_session.query(AnalysisRun).filter_by(id=run.id).one()
                 return {**_run_acceptance(completed), "interactionId": interaction.id, "resumed": True}
         interaction.status = "resolved"
-        interaction.response_json = {"answer": answer.strip()}
+        interaction.response_json = {"answer": normalized_answer}
         interaction.resolved_at = datetime.now()
         run.status = "queued"
         run.finished_at = None
@@ -389,7 +430,7 @@ def respond_to_interaction(interaction_id: str, answer: str) -> dict:
             session,
             run,
             "clarification.resolved",
-            {"interactionId": interaction.id, "answer": answer.strip(), "status": "queued"},
+            {"interactionId": interaction.id, "answer": normalized_answer, "status": "queued"},
             task_id=interaction.task_id,
             step_key=interaction.resume_node,
         )

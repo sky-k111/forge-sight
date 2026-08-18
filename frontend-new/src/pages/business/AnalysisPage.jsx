@@ -6,6 +6,7 @@ import { Button, Card, ErrorNotice, StatusPill } from "../../components/ui";
 import { ChartLegend, ComboMetricChart, CorrelationScatterChart, MatrixHeatmapChart, RankBarChart, ShareDonutChart, TrendLineChart } from "../../components/charts";
 import { listSources } from "../../api/datasources";
 import { createModelingTask } from "../../api/modeling";
+import { getReport } from "../../api/reports";
 import {
   createAnalysisBranch,
   createAnalysisSession,
@@ -19,11 +20,11 @@ import {
 import { adaptAnalysisRun } from "../../features/analysis/runViewAdapter";
 import AnalysisAdjustmentPanel from "../../features/analysis/AnalysisAdjustmentPanel";
 import { buildTracePath, getTraceFitTransform } from "./traceGraphLayout";
-import { waitForAgentThinking } from "./analysisThinking";
 import { currentUserId } from "../../lib/auth";
 
 const USER_ID = currentUserId;
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "blocked", "cancelled"]);
+export const AGENT_THINKING_DELAY_MS = 1500;
 const EVIDENCE_PANEL_MIN_WIDTH = 320;
 const EVIDENCE_PANEL_DEFAULT_WIDTH = 400;
 const EVIDENCE_PANEL_COLLAPSED_WIDTH = 56;
@@ -33,6 +34,136 @@ const ANALYSIS_DRAFT_KEY = "forgesight:analysis-draft";
 const MODELING_DRAFT_KEY = "forgesight:modeling-draft";
 const ANALYSIS_SESSION_KEY = "forgesight:analysis-session-id";
 const ANALYSIS_SESSION_SELECTED_EVENT = "forgesight:analysis-session-selected";
+
+export function waitForAgentThinking() {
+  return new Promise((resolve) => window.setTimeout(resolve, AGENT_THINKING_DELAY_MS));
+}
+
+export function isConversationRun(run) {
+  return run?.result?.kind === "conversation";
+}
+
+export function getPendingClarification(items) {
+  const message = [...(items ?? [])].reverse().find(
+    (item) => item?.role === "assistant"
+      && item.run?.status === "clarifying"
+      && item.run?.clarification?.interactionId,
+  );
+  return message ? { message, clarification: message.run.clarification } : null;
+}
+
+export function upsertAnalysisRunMessage(items, run) {
+  if (items == null) return items;
+  let existingIndex = -1;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index].role === "assistant" && items[index].run?.id === run.id) {
+      existingIndex = index;
+      break;
+    }
+  }
+  if (existingIndex < 0) return [...items, { id: run.id, role: "assistant", run, animate: false }];
+
+  const existing = items[existingIndex];
+  const previousInteractionId = existing.run?.clarification?.interactionId;
+  const nextInteractionId = run.status === "clarifying" ? run.clarification?.interactionId : null;
+  if (previousInteractionId && nextInteractionId && previousInteractionId !== nextInteractionId) {
+    return [...items, { id: `${run.id}-clarification-${nextInteractionId}`, role: "assistant", run, animate: false }];
+  }
+
+  const next = [...items];
+  const updated = { ...existing, run, animate: false };
+  next[existingIndex] = updated;
+  // A clarification answer is appended as a user message while the run keeps
+  // the same id. Once the run resumes, move its updated response below that
+  // answer instead of leaving the result above the user's latest message.
+  if (!nextInteractionId) {
+    const latestUserIndex = next.reduce(
+      (latest, item, index) => item.role === "user" ? index : latest,
+      -1,
+    );
+    if (latestUserIndex > existingIndex) {
+      next.splice(existingIndex, 1);
+      const targetIndex = next.reduce(
+        (latest, item, index) => item.role === "user" ? index : latest,
+        -1,
+      );
+      next.splice(targetIndex + 1, 0, updated);
+    }
+  }
+  return next;
+}
+
+const INTERNAL_REPORT_PROMPT_PATTERN = /完成以下相互独立|所有数值只能来自当前数据源|统计范围固定为|请给出适合该数据形态/;
+
+function messageTime(value) {
+  const created = new Date(value);
+  return Number.isNaN(created.getTime()) ? "" : created.toTimeString().slice(0, 5);
+}
+
+function safeRunQuestion(snapshot) {
+  const question = String(snapshot?.question ?? "").trim();
+  if (!INTERNAL_REPORT_PROMPT_PATTERN.test(question)) return question;
+  const title = snapshot?.assistantMessage?.metadata?.report?.title;
+  return title ? `生成《${title}》` : "生成报告";
+}
+
+export function buildAnalysisConversationItems(sessionView, snapshots = []) {
+  const entries = snapshots
+    .map((snapshot) => ({ snapshot, run: adaptAnalysisRun(snapshot) }))
+    .filter((entry) => entry.run);
+  const runs = new Map(entries.map((entry) => [entry.run.id, entry]));
+  const renderedRuns = new Set();
+  const items = [];
+  const appendRun = (entry) => {
+    if (!entry || renderedRuns.has(entry.run.id)) return;
+    renderedRuns.add(entry.run.id);
+    items.push({ id: entry.run.id, role: "assistant", run: entry.run, animate: false });
+  };
+  const messages = [...(sessionView?.messages ?? [])].sort(
+    (left, right) => Number(left.sequenceNo ?? 0) - Number(right.sequenceNo ?? 0),
+  );
+
+  for (const message of messages) {
+    const time = messageTime(message.createdAt);
+    const entry = runs.get(message.runId);
+    if (message.role === "user") {
+      const content = String(message.content ?? "");
+      const text = INTERNAL_REPORT_PROMPT_PATTERN.test(content)
+        ? safeRunQuestion(entry?.snapshot ?? { question: content })
+        : content;
+      items.push({ id: message.id, role: "user", text, time });
+    } else if (message.role === "assistant") {
+      if (entry) appendRun(entry);
+      else if (String(message.content ?? "").trim()) {
+        items.push({ id: message.id, role: "assistant", plainText: message.content, inherited: true, time });
+      }
+    }
+  }
+
+  const lastUserIndexByRun = new Map();
+  messages.forEach((message) => {
+    if (message.role !== "user" || !runs.has(message.runId)) return;
+    const itemIndex = items.findIndex((item) => item.id === message.id);
+    if (itemIndex >= 0) lastUserIndexByRun.set(message.runId, itemIndex);
+  });
+
+  // Keep older sessions recoverable when a message row was pruned or a run was
+  // created before its trigger message became visible to the session endpoint.
+  for (const entry of entries.slice().sort(
+    (left, right) => (lastUserIndexByRun.get(right.run.id) ?? -1) - (lastUserIndexByRun.get(left.run.id) ?? -1),
+  )) {
+    if (renderedRuns.has(entry.run.id)) continue;
+    const lastUserIndex = lastUserIndexByRun.get(entry.run.id);
+    if (lastUserIndex != null) {
+      items.splice(lastUserIndex + 1, 0, { id: entry.run.id, role: "assistant", run: entry.run, animate: false });
+      renderedRuns.add(entry.run.id);
+      continue;
+    }
+    items.push({ id: `${entry.run.id}-q`, role: "user", text: safeRunQuestion(entry.snapshot), time: messageTime(entry.snapshot.createdAt) });
+    appendRun(entry);
+  }
+  return items;
+}
 
 export default function AnalysisPage() {
   const { evidenceOpen, setEvidenceOpen, navigatePage, refreshSessions } = useOutletContext();
@@ -65,6 +196,7 @@ export default function AnalysisPage() {
 
   const evidenceMaxWidth = Math.max(EVIDENCE_PANEL_MIN_WIDTH, viewportWidth - 252 - 480);
   const effectiveEvidenceWidth = Math.min(evidenceWidth, evidenceMaxWidth);
+  const pendingClarification = getPendingClarification(messages);
 
   const beginEvidenceResize = (event) => {
     if (event.button !== 0) return;
@@ -108,15 +240,15 @@ export default function AnalysisPage() {
   const upsertRun = (snapshot) => {
     const run = adaptAnalysisRun(snapshot);
     setMessages((current) => {
-      if (current == null) return current;
-      const existingIndex = current.findIndex((item) => item.role === "assistant" && item.run?.id === run.id);
-      if (existingIndex < 0) return [...current, { id: run.id, role: "assistant", run, animate: false }];
-      const next = [...current];
-      next[existingIndex] = { ...next[existingIndex], run, animate: false };
-      return next;
+      return upsertAnalysisRunMessage(current, run);
     });
-    // 仅当面板正在展示该 run（或尚无面板）时更新，避免后台 run 到达终态抢占当前证据链。
-    setEvidenceRun((current) => (current == null || current.id === run.id) ? run : current);
+    if (isConversationRun(run)) {
+      setEvidenceRun(null);
+      setEvidenceOpen(false);
+    } else {
+      // 仅当面板正在展示该 run（或尚无面板）时更新，避免后台 run 到达终态抢占当前证据链。
+      setEvidenceRun((current) => (current == null || current.id === run.id) ? run : current);
+    }
     if (TERMINAL_STATUSES.has(run.status)) setBusy(false);
     else if (["queued", "running", "retrying", "clarifying"].includes(run.status)) setBusy(true);
     return run;
@@ -178,24 +310,9 @@ export default function AnalysisPage() {
       const sessionView = await getAnalysisSession(selected.id);
       setBranchContext(sessionView.branchContext ?? null);
       const snapshots = await Promise.all((sessionView.runs ?? []).map((run) => getAnalysisRun(run.id)));
-      let items = snapshots.flatMap((snapshot) => {
-        const run = adaptAnalysisRun(snapshot);
-        const created = new Date(snapshot.createdAt);
-        const time = Number.isNaN(created.getTime()) ? "" : created.toTimeString().slice(0, 5);
-        return [
-          { id: `${run.id}-q`, role: "user", text: snapshot.question, time },
-          { id: run.id, role: "assistant", run, animate: false },
-        ];
-      });
-      if (!sessionView.branchContext && snapshots.length === 0 && (sessionView.messages ?? []).length > 0) {
-        items = sessionView.messages.map((message) => {
-          const created = new Date(message.createdAt);
-          const time = Number.isNaN(created.getTime()) ? "" : created.toTimeString().slice(0, 5);
-          return message.role === "user"
-            ? { id: message.id, role: "user", text: message.content, time }
-            : { id: message.id, role: "assistant", plainText: message.content, inherited: true };
-        });
-      }
+      const items = sessionView.branchContext && snapshots.length === 0
+        ? []
+        : buildAnalysisConversationItems(sessionView, snapshots);
       if (sessionView.branchContext?.sourceRunId) {
         try {
           const sourceSnapshot = await getAnalysisRun(sessionView.branchContext.sourceRunId);
@@ -233,15 +350,13 @@ export default function AnalysisPage() {
   useEffect(() => {
     load();
     const handleSessionSelected = () => load();
-    const subscriptions = subscriptionsRef.current;
-    const refreshTimers = refreshTimersRef.current;
     window.addEventListener(ANALYSIS_SESSION_SELECTED_EVENT, handleSessionSelected);
     return () => {
       window.removeEventListener(ANALYSIS_SESSION_SELECTED_EVENT, handleSessionSelected);
-      subscriptions.forEach((unsubscribe) => unsubscribe());
-      subscriptions.clear();
-      refreshTimers.forEach((timer) => window.clearTimeout(timer));
-      refreshTimers.clear();
+      subscriptionsRef.current.forEach((unsubscribe) => unsubscribe());
+      subscriptionsRef.current.clear();
+      refreshTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      refreshTimersRef.current.clear();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(scrollToBottom, [messages, pending]);
@@ -260,6 +375,7 @@ export default function AnalysisPage() {
       question: text,
       status: immediateTerminal || needsCardData ? "running" : accepted.status,
       tasks: [], steps: [], artifacts: [], checkpoints: [], usage: {},
+      conversationPending: immediateTerminal,
     });
     setBusy(true);
     setMessages((current) => [...current, { id: accepted.runId, role: "assistant", run: placeholder, animate: false }]);
@@ -274,7 +390,22 @@ export default function AnalysisPage() {
 
   const submit = async (prompt = query) => {
     const text = prompt.trim();
-    if (!text || pending || busy || messages == null || !activeSession) return;
+    if (!text || pending || messages == null || !activeSession || (busy && !pendingClarification)) return;
+    if (pendingClarification) {
+      setQuery("");
+      setPending(true);
+      try {
+        await clarify(
+          pendingClarification.message.id,
+          text,
+          pendingClarification.clarification.interactionId,
+          text,
+        );
+      } finally {
+        setPending(false);
+      }
+      return;
+    }
     const idempotencyKey = crypto.randomUUID();
     const time = new Date().toTimeString().slice(0, 5);
     setMessages((current) => [...current, { id: `user-${Date.now()}`, role: "user", text, time }]);
@@ -308,7 +439,7 @@ export default function AnalysisPage() {
     }
   };
 
-  const clarify = async (_messageId, option, interactionId) => {
+  const clarify = async (_messageId, option, interactionId, displayText = null) => {
     setClarifySubmitting(true);
     setClarifyError(null);
     setBusy(true);
@@ -316,6 +447,12 @@ export default function AnalysisPage() {
       const value = typeof option === "string"
         ? option
         : option?.value ?? JSON.stringify(option);
+      const answerText = displayText
+        ?? (typeof option === "string" ? option : option?.label ?? value);
+      setMessages((current) => [
+        ...(current ?? []),
+        { id: `user-clarification-${Date.now()}`, role: "user", text: answerText, time: new Date().toTimeString().slice(0, 5) },
+      ]);
       const resumed = await respondToClarification(interactionId, value);
       if (TERMINAL_STATUSES.has(resumed.status)) {
         await waitForAgentThinking();
@@ -479,9 +616,10 @@ export default function AnalysisPage() {
                           animate={message.animate}
                           onComplete={handleComplete}
                           onOpenEvidence={(run) => { setEvidenceRun(run); setEvidenceOpen(true); }}
-                          onClarify={(option, interactionId) => clarify(message.id, option, interactionId)}
+                          onClarify={(option, interactionId, displayText) => clarify(message.id, option, interactionId, displayText)}
                           onFollowUp={(text) => submit(text)}
                           onOpenModeling={() => navigatePage("modeling")}
+                          onOpenMessages={() => navigatePage("messages")}
                           clarifySubmitting={clarifySubmitting}
                           clarifyError={clarifyError}
                         />
@@ -527,7 +665,7 @@ export default function AnalysisPage() {
                     type="button"
                     key={example}
                     onClick={() => submit(example)}
-                    disabled={pending || busy || messages == null}
+                    disabled={pending || (busy && !pendingClarification) || messages == null}
                     className="shrink-0 cursor-pointer rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 shadow-[0_4px_12px_rgb(24_34_45/6%)] transition-colors hover:border-line-strong hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-55"
                   >
                     {example}
@@ -542,7 +680,7 @@ export default function AnalysisPage() {
               <textarea
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="用业务语言描述你想分析的问题…"
+                placeholder={pendingClarification ? "直接回复 Agent 的追问（用业务语言描述即可）…" : "用业务语言描述你想分析的问题…"}
                 rows={2}
                 className="w-full resize-none border-0 bg-transparent text-body text-ink outline-none placeholder:text-faint"
               />
@@ -593,11 +731,11 @@ export default function AnalysisPage() {
                 </div>
                 <button
                   type="submit"
-                  disabled={pending || busy || messages == null || !query.trim()}
+                  disabled={pending || (busy && !pendingClarification) || messages == null || !query.trim()}
                   aria-label="开始分析"
                   className="grid h-8 w-8 cursor-pointer place-items-center rounded-control bg-ink text-white transition-colors hover:bg-ink-2 disabled:cursor-not-allowed disabled:opacity-55"
                 >
-                  <Icon name={pending || busy ? "refresh" : "send"} size={17} />
+                  <Icon name={pending || (busy && !pendingClarification) ? "refresh" : "send"} size={17} />
                 </button>
               </div>
             </form>
@@ -816,13 +954,15 @@ function UserMessage({ text }) {
   );
 }
 
-function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClarify, onFollowUp, onOpenModeling, clarifySubmitting = false, clarifyError = null }) {
+function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClarify, onFollowUp, onOpenModeling, onOpenMessages, clarifySubmitting = false, clarifyError = null }) {
   const hasEvidence = Boolean(run.plan?.length || run.artifacts?.length || run.checkpoints?.length);
   const openEvidence = hasEvidence ? () => onOpenEvidence(run) : null;
   if (run.status === "blocked") return <BlockedCard error={run.error} onOpenEvidence={openEvidence} />;
   if (run.status === "clarifying" && run.clarification) return <ClarifyCard clarification={run.clarification} onSelect={onClarify} submitting={clarifySubmitting} error={clarifyError} />;
   if (run.status === "failed" || run.status === "cancelled") return <FailedRunCard run={run} onOpenEvidence={openEvidence} />;
   if (run.status === "modeling-proposal" && run.proposal) return <ModelingProposalCard proposal={run.proposal} runId={run.id} onOpenModeling={onOpenModeling} />;
+  if (run.report?.id) return <ReportGenerationMessage report={run.report} onOpenMessages={onOpenMessages} />;
+  if (run.conversationPending) return <ConversationThinking />;
   // 澄清/建模提案在缺少 interaction/proposal 数据（如占位快照或异常快照）时按“运行中”兜底，避免空数据卡片抛错。
   if (["queued", "running", "retrying", "clarifying", "modeling-proposal"].includes(run.status)) {
     const livePlan = run.plan?.length ? run.plan : [{ id: "accepted", label: "正在理解业务问题", caption: "任务已进入可靠执行队列" }];
@@ -831,6 +971,48 @@ function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClari
   }
   if (run.result?.kind === "conversation") return <AssistantConversationMessage text={run.conclusion.text} />;
   return <RunFlow run={run} animate={animate} onComplete={onComplete} onOpenEvidence={onOpenEvidence} onFollowUp={onFollowUp} />;
+}
+
+export function ReportGenerationMessage({ report, onOpenMessages }) {
+  const [liveReport, setLiveReport] = useState(report);
+  const pending = !["published", "partial", "failed", "validation_failed"].includes(liveReport.status);
+
+  useEffect(() => {
+    if (!pending) return undefined;
+    const refresh = () => getReport(report.id).then((next) => setLiveReport((current) => ({ ...current, ...next }))).catch(() => {});
+    refresh();
+    const timer = window.setInterval(refresh, 1800);
+    return () => window.clearInterval(timer);
+  }, [report.id, pending]);
+
+  const steps = ["汇集周期指标", "编排图表与结论", "校验并投递邮箱"];
+  const finished = liveReport.status === "published";
+  return (
+    <button
+      type="button"
+      aria-label="打开消息中心"
+      onClick={() => onOpenMessages?.()}
+      className="block w-full max-w-[520px] cursor-pointer appearance-none border-0 bg-transparent p-0 text-left"
+    >
+      <Card className="report-generation-card motion-soft-rise mt-2 overflow-hidden p-0 transition-[border-color,box-shadow,transform] hover:-translate-y-px hover:border-primary/35 hover:shadow-card-hover">
+        <div className="report-generation-card__bar" />
+        <div className="p-4">
+          <div className="flex items-start gap-3">
+            <span className="report-generation-card__orb grid h-9 w-9 shrink-0 place-items-center rounded-full text-primary"><Icon name="report" size={17} /></span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2"><strong className="text-body font-semibold text-ink">{finished ? "周报已生成" : "正在生成周报"}</strong>{pending && <span className="report-generation-card__dots" aria-label="正在生成"><i /><i /><i /></span>}</div>
+              <p className="mt-1 text-xs leading-5 text-muted">{liveReport.title || "本期经营周报"}</p>
+            </div>
+            <StatusPill tone={finished ? "green" : "blue"}>{finished ? "已投递" : "生成中"}</StatusPill>
+          </div>
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            {steps.map((step, index) => <div key={step} className={cn("rounded-control border px-2 py-2 text-center text-[11px] leading-4", pending && index === 1 ? "border-primary/30 bg-primary-soft text-primary" : "border-line bg-surface-2 text-muted")}>{step}</div>)}
+          </div>
+          <p className="mt-3 text-[11px] leading-5 text-muted">{finished ? "报告中心与绑定邮箱均已收到本期周报。点击查看消息中心。" : "正在生成中。完成后会自动投递到绑定邮箱。点击查看消息中心。"}</p>
+        </div>
+      </Card>
+    </button>
+  );
 }
 
 function AssistantConversationMessage({ text }) {
@@ -902,13 +1084,12 @@ function BlockedCard({ error, onOpenEvidence }) {
 function ClarifyCard({ clarification, onSelect, submitting = false, error = null }) {
   const [chosen, setChosen] = useState(null);
   const [answers, setAnswers] = useState({});
-  const [customFields, setCustomFields] = useState({});
   const fields = clarification.fields ?? [];
+  const options = clarification.options ?? [];
 
   useEffect(() => {
     setChosen(null);
     setAnswers({});
-    setCustomFields({});
   }, [clarification.interactionId]);
 
   const choose = (option) => {
@@ -916,102 +1097,86 @@ function ClarifyCard({ clarification, onSelect, submitting = false, error = null
     setChosen(option);
     onSelect(option, clarification.interactionId);
   };
-  const setField = (fieldId, value) => setAnswers((current) => ({ ...current, [fieldId]: value }));
-  const chooseFieldOption = (fieldId, value) => {
-    setCustomFields((current) => ({ ...current, [fieldId]: false }));
-    setField(fieldId, value);
-  };
-  const enableCustomField = (fieldId) => {
-    setCustomFields((current) => ({ ...current, [fieldId]: true }));
-    setField(fieldId, "");
+  const chooseFieldOption = (fieldId, option) => {
+    if (submitting) return;
+    setAnswers((current) => ({ ...current, [fieldId]: option.value }));
   };
   const canSubmitFields = fields.length > 0 && fields.every((field) => String(answers[field.id] ?? "").trim());
   const submitFields = () => {
     if (!canSubmitFields || submitting) return;
-    setChosen({ label: "已确认", value: answers });
-    onSelect(answers, clarification.interactionId);
+    const answer = { ...answers };
+    setChosen({ label: "已确认", value: answer });
+    onSelect(answer, clarification.interactionId, "已确认澄清条件");
   };
+
   return (
-    <div className="motion-soft-rise mt-5 max-w-[420px]">
-      <p className="text-body leading-relaxed text-ink">{clarification.question}</p>
-      {fields.length > 0 ? (
-        <div className="mt-3">
-          {fields.map((field, index) => (
-            <section key={field.id} className={cn(index > 0 && "mt-4 border-t border-line pt-4")}>
-              <div className="flex items-baseline gap-2">
-                <strong className="text-xs font-semibold text-ink">{field.label}</strong>
-                <span className="text-[11px] text-muted">{field.question}</span>
-              </div>
-              <div className="mt-2.5 w-full max-w-[330px] overflow-hidden rounded-control border border-line bg-surface p-1">
-                {field.options.map((option) => {
-                  const selected = !customFields[field.id] && answers[field.id] === option.value;
-                  return (
-                    <button
-                      type="button"
-                      key={option.value}
-                      onClick={() => chooseFieldOption(field.id, option.value)}
-                      disabled={submitting}
-                      className={cn("flex w-full cursor-pointer items-center gap-2.5 rounded-tag px-2.5 py-2 text-left text-xs transition-colors disabled:cursor-not-allowed", selected ? "bg-primary-soft text-primary" : "text-ink-2 hover:bg-surface-2 disabled:opacity-55")}
-                    >
-                      <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-[3px] border", selected ? "border-primary bg-primary text-white" : "border-line-strong bg-surface text-transparent")}><Icon name="check" size={11} strokeWidth={2.4} /></span>
-                      <span className={cn(selected && "font-semibold")}>{option.label}</span>
-                    </button>
-                  );
-                })}
-                {field.allowCustom && (
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => enableCustomField(field.id)}
-                      disabled={submitting}
-                      className={cn("flex w-full cursor-pointer items-center gap-2.5 rounded-tag px-2.5 py-2 text-left text-xs transition-colors disabled:cursor-not-allowed", customFields[field.id] ? "bg-primary-soft text-primary" : "text-ink-2 hover:bg-surface-2 disabled:opacity-55")}
-                    >
-                      <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-[3px] border", customFields[field.id] ? "border-primary bg-primary text-white" : "border-line-strong bg-surface text-transparent")}><Icon name="check" size={11} strokeWidth={2.4} /></span>
-                      <span className={cn(customFields[field.id] && "font-semibold")}>自定义{field.label}</span>
-                    </button>
-                    {customFields[field.id] && (
-                      <div className="px-2.5 pb-2 pt-1">
-                        <input
-                          autoFocus
-                          value={answers[field.id] ?? ""}
-                          onChange={(event) => setField(field.id, event.target.value)}
+    <div className="motion-soft-rise mt-5 max-w-[620px]">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary-soft text-primary">
+          <Icon name="message" size={14} />
+        </span>
+        <div className="min-w-0">
+          <p aria-live="polite" className="max-w-[560px] rounded-[18px] rounded-tl-[6px] bg-surface-2 px-4 py-3 text-body leading-6 text-ink">
+            {clarification.question}
+          </p>
+          {fields.length > 0 && (
+            <div className="mt-3 space-y-3">
+              {fields.map((field) => (
+                <div key={field.id}>
+                  <p className="text-xs font-semibold text-ink">{field.label}<span className="ml-2 font-normal text-muted">{field.question}</span></p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(field.options ?? []).map((option) => {
+                      const selected = answers[field.id] === option.value;
+                      return (
+                        <button
+                          type="button"
+                          key={option.value}
+                          onClick={() => chooseFieldOption(field.id, option)}
                           disabled={submitting}
-                          placeholder={`输入${field.label}`}
-                          className="h-8 w-full rounded-tag border border-line bg-surface px-2.5 text-xs text-ink outline-none transition placeholder:text-faint focus:border-primary/40 focus:ring-2 focus:ring-primary/10 disabled:opacity-55"
-                        />
-                      </div>
-                    )}
+                          className={cn(
+                            "cursor-pointer rounded-full border px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-55",
+                            selected ? "border-primary/25 bg-primary-soft font-semibold text-primary" : "border-line bg-surface text-ink-2 hover:border-line-strong hover:bg-surface-2",
+                          )}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
                   </div>
-                )}
-              </div>
-            </section>
-          ))}
-          <div className="mt-3 flex justify-end">
-            <Button size="sm" onClick={submitFields} disabled={!canSubmitFields || submitting}>确认继续 <Icon name="arrow" size={14} /></Button>
-          </div>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={submitFields}
+                disabled={!canSubmitFields || submitting}
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-control px-2 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                确认这些条件 <Icon name="arrow" size={13} />
+              </button>
+            </div>
+          )}
+          {fields.length === 0 && options.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {options.map((option) => (
+                <button
+                  type="button"
+                  key={option.value}
+                  onClick={() => choose(option)}
+                  disabled={submitting}
+                  className={cn(
+                    "cursor-pointer rounded-full border px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-55",
+                    chosen?.value === option.value ? "border-primary/25 bg-primary-soft font-semibold text-primary" : "border-line bg-surface text-ink-2 hover:border-line-strong hover:bg-surface-2",
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {error && <p className="mt-2 text-[11px] leading-relaxed text-red">{error}</p>}
+          {chosen && !error && <p className="mt-2 text-[11px] text-faint">已选择「{chosen.label}」，正在按该口径继续分析…</p>}
         </div>
-      ) : (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {clarification.options.map((option) => (
-          <button
-            type="button"
-            key={option.value}
-            onClick={() => choose(option)}
-            disabled={submitting}
-            className={cn(
-              "cursor-pointer rounded-full border px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed",
-              chosen?.value === option.value
-                ? "border-primary/25 bg-primary-soft font-semibold text-primary"
-                : "border-line bg-surface text-ink-2 hover:border-line-strong hover:bg-surface-2 disabled:opacity-55",
-            )}
-          >
-            {option.label}
-          </button>
-          ))}
-        </div>
-      )}
-      {error && <p className="mt-2.5 text-[11px] leading-relaxed text-red">{error}</p>}
-      {chosen && !error && <p className="mt-2.5 text-[11px] text-faint">已选择「{chosen.label}」，正在按该口径继续分析…</p>}
+      </div>
     </div>
   );
 }
@@ -1168,6 +1333,16 @@ function RunningAnalysis({ completed, plan }) {
         ))}
       </div>
     </Card>
+  );
+}
+
+function ConversationThinking() {
+  return (
+    <div className="mt-2 flex items-center gap-1.5 px-2 py-2 text-muted" role="status" aria-label="Agent 正在思考">
+      {[0, 1, 2].map((dot) => (
+        <span key={dot} className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" style={{ animationDelay: `${dot * 160}ms` }} />
+      ))}
+    </div>
   );
 }
 
