@@ -32,38 +32,19 @@ flowchart LR
 5. 只有 Critical 和 Important 问题都为 0 时，负责人才能手动合并。
 6. 不启用自动合并，不在 CI 中部署，不允许 AI 自行修改仓库保护规则。
 
-## 3. 自动检查标准
+## 3. 自动检查内容
 
 | 检查名称 | 执行内容 | 阻断条件 |
 | --- | --- | --- |
-| PR Guard | 校验 PR 标题和变更文件 | 标题不符合 `A: 任务名称`；提交 `.env`、私钥或证书 |
-| Backend Lint | Ruff 检查 Python 错误、未定义变量、导入顺序等高价值规则 | 任一后端静态检查失败 |
-| Backend Tests | Python 3.14 运行 pytest，并要求后端覆盖率不低于 75% | 任一后端测试或覆盖率门槛失败 |
-| Frontend Lint | ESLint 检查 React、Hooks 和未使用变量 | 任一前端静态检查失败 |
+| Backend Tests | Python 3.14 安装依赖并运行 pytest | 任一后端测试失败 |
 | Frontend Tests | Node.js 24 执行 Vitest | 任一前端测试失败 |
 | Frontend Build | 使用锁文件安装依赖并构建 Vite 生产包 | 安装或构建失败 |
 | Docs Check | 检查协作类 Markdown 文档 | 文档格式不合规 |
-| CI Gate | 汇总后端、前端、构建和文档检查 | 任一质量检查未成功 |
+| CI Gate | 汇总以上四项结果 | 任一检查未成功 |
 
 后端测试只使用 CI Runner 内的 SQLite 临时数据库地址，不读取生产密钥，
 也不会连接本地 MySQL 或 PostgreSQL。工作流使用 `pull_request` 事件和只读仓库权限，
-不使用 `pull_request_target`，避免 PR 代码获得高权限令牌。PR Guard 只读取 Git 历史，
-不读取或输出任何 Secret 内容。
-
-提交前请在本地执行与改动相关的命令：
-
-```powershell
-# 后端
-cd backend
-.venv\Scripts\python -m ruff check .
-.venv\Scripts\python -m pytest -q
-
-# 前端
-cd ..\frontend-new
-npm run lint
-npm test
-npm run build
-```
+不使用 `pull_request_target`，避免 PR 代码获得高权限令牌。
 
 首版暂不包含以下内容：
 
@@ -87,14 +68,13 @@ npm run build
 5. 启用 `Require a pull request before merging`。
 6. Required approvals 保持 `0`，不要启用 Code Owner approval。
 7. 启用 `Require conversation resolution before merging`。
-8. 启用 `Require status checks to pass`，添加必需检查 `CI Gate` 与 `PR Guard`。
+8. 启用 `Require status checks to pass`，添加唯一必需检查 `CI Gate`。
 9. 保持分支删除和强制推送为禁止状态。
 10. 保存 Ruleset，并用一个 Draft PR 验证保护是否生效。
 
-如果 `CI Gate` 或 `PR Guard` 暂时不出现在可选列表，先让包含该工作流的 PR 完整运行一次，
-再返回 Ruleset 页面选择检查。不要把所有子检查同时设成必需项；
-质量检查只要求稳定的汇总检查 `CI Gate`，文件与标题规范由独立的 `PR Guard` 负责，
-以后调整内部任务不会频繁修改规则。
+如果 `CI Gate` 暂时不出现在可选列表，先让包含该工作流的 PR 完整运行一次，
+再返回 Ruleset 页面选择该检查。不要把四个子检查同时设成必需项；
+只要求稳定的汇总检查 `CI Gate`，以后调整内部任务不会频繁修改规则。
 
 在 CI 稳定运行一段时间后，可以再开启“合并前分支必须保持最新”。
 首版不建议立即开启，避免并行 PR 频繁重跑全部任务。
@@ -125,8 +105,7 @@ Critical: 0
 Important: 0
 Minor: 0
 
-验证：PR Guard / Backend Lint / Backend Tests / Frontend Lint /
-Frontend Tests / Frontend Build / Docs Check
+验证：Backend Tests / Frontend Tests / Frontend Build / Docs Check
 结论：可以合并 / 修改后复审
 ```
 

@@ -246,62 +246,6 @@
   }
 }
 
-/* 周报阅读：像运营简报一样密实、克制，先给结论再给证据。 */
-.report-editorial {
-  --report-accent: #167a76;
-  --report-ink: #17242b;
-}
-
-.report-editorial article {
-  border-color: color-mix(in srgb, var(--color-line) 82%, var(--report-accent));
-  box-shadow: 0 28px 80px rgb(24 42 45 / 9%);
-}
-
-.report-editorial .report-cover {
-  position: relative;
-  background: var(--color-paper);
-}
-
-.report-editorial .report-cover::before {
-  content: "";
-  display: block;
-  width: 72px;
-  border-top: 3px solid var(--report-accent);
-  margin-bottom: 1.5rem;
-}
-
-.report-editorial .chart-frame {
-  border-radius: 18px;
-  border-color: color-mix(in srgb, var(--color-line) 74%, var(--report-accent));
-  box-shadow: 0 10px 24px rgb(24 42 45 / 5%);
-}
-
-.report-generation-card {
-  border-color: color-mix(in srgb, var(--color-primary) 24%, var(--color-line));
-  box-shadow: 0 12px 30px rgb(24 42 45 / 7%);
-}
-
-.report-generation-card__bar {
-  height: 3px;
-  background: linear-gradient(90deg, transparent, var(--color-primary), #79c7bd, transparent);
-  background-size: 200% 100%;
-  animation: report-progress-sweep 1.45s linear infinite;
-}
-
-.report-generation-card__orb {
-  background: radial-gradient(circle at 35% 30%, #fff, var(--color-primary-soft));
-  box-shadow: inset 0 0 0 1px rgb(22 122 118 / 12%);
-}
-
-.report-generation-card__dots { display: inline-flex; gap: 3px; align-items: center; }
-.report-generation-card__dots i { width: 4px; height: 4px; border-radius: 99px; background: var(--color-primary); animation: report-dot-pulse .9s ease-in-out infinite; }
-.report-generation-card__dots i:nth-child(2) { animation-delay: .15s; }
-.report-generation-card__dots i:nth-child(3) { animation-delay: .3s; }
-.message-row-generating { background: linear-gradient(90deg, var(--color-primary-soft), transparent); border-left: 2px solid var(--color-primary); }
-
-@keyframes report-progress-sweep { to { background-position: -200% 0; } }
-@keyframes report-dot-pulse { 0%, 100% { opacity: .25; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

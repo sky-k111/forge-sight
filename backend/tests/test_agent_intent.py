@@ -3,13 +3,7 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.agent.intent import (
-    build_intent_plan,
-    build_request_route,
-    build_smalltalk_response,
-    classify_analysis_type,
-    classify_request_kind,
-)
+from app.agent.intent import build_intent_plan, build_request_route, classify_analysis_type, classify_request_kind
 
 
 def test_obvious_smalltalk_is_routed_away_from_analysis():
@@ -20,28 +14,6 @@ def test_obvious_smalltalk_is_routed_away_from_analysis():
     assert classify_request_kind("明年下雨吗") == "conversation"
     assert classify_request_kind("分析最近 7 天的工序良率") == "analysis"
     assert classify_request_kind("什么是工序良率") == "analysis"
-
-
-def test_current_time_question_is_answered_without_the_chat_model():
-    for question in (
-        "现在几点了？",
-        "你知道现在几点吗？",
-        "当前时间是多少？",
-        "几点钟了？",
-        "请问时间是多少？",
-        "告诉我时间",
-        "北京时间几点？",
-        "当前时刻是多少？",
-    ):
-        assert classify_request_kind(question) == "conversation"
-        response = build_smalltalk_response(question)
-        assert "北京时间" in response
-        assert "无法直接获取" not in response
-
-
-def test_business_time_scope_is_not_treated_as_the_current_clock():
-    assert classify_request_kind("统计周期时间是多少？") == "analysis"
-    assert classify_request_kind("报告里的时间是多少？") != "conversation"
 
 
 def test_bare_report_request_asks_for_report_scope_instead_of_entering_data_analysis():
@@ -174,19 +146,6 @@ def test_current_month_is_time_not_an_object_reference():
         "timeGrain": "day",
     }
     assert task["groupBy"] == []
-
-
-def test_chinese_calendar_month_is_not_requested_as_a_vague_time_clarification():
-    plan = build_intent_plan("查看 2026年七月的产量")
-
-    assert plan["clarification"] is None
-    assert plan["tasks"][0]["timeConstraint"] == {
-        "kind": "calendar_month",
-        "label": "2026 年 7 月",
-        "year": 2026,
-        "month": 7,
-        "timeGrain": "day",
-    }
 
 
 def test_current_and_previous_month_resolve_to_two_explicit_periods():

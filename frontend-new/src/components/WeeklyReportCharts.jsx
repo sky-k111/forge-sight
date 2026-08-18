@@ -49,15 +49,10 @@ function ChartArticle({ chart, sourceName }) {
           {chart.unit}
         </span>
       </div>
-      <figure className="mt-4">
-        <div className="chart-frame overflow-hidden rounded-card border border-line bg-surface-2/45 px-2 py-3 sm:px-3" aria-label={`${chart.title}图表`}>
-          <ChartVisual chart={chart} />
-        </div>
-        <figcaption className="mt-3 border-l-2 border-primary pl-3 text-sm leading-6 text-ink-2">
-          <span className="mr-2 font-semibold text-primary">读图结论</span>
-          {chart.description}
-        </figcaption>
-      </figure>
+      <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">{chart.description}</p>
+      <div className="chart-frame mt-4 overflow-hidden rounded-card border border-line bg-surface-2/45 px-2 py-3 sm:px-3" aria-label={`${chart.title}图表`}>
+        <ChartVisual chart={chart} />
+      </div>
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3 text-xs text-faint">
         <span>来源：{sourceName}</span>
         <span className="inline-flex items-center gap-1.5">

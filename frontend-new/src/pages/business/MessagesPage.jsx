@@ -2,8 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { getMessage, listMessages } from "../../api/messages";
-import { getReport, listReports } from "../../api/reports";
-import { WeeklyReportCharts } from "../../components/WeeklyReportCharts";
 import {
   Button,
   Card,
@@ -15,7 +13,6 @@ import {
 } from "../../components/ui";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
-import { buildReportView, reportText } from "../../lib/weeklyReportView";
 
 const TYPE_LABEL = {
   weekly_report: "Agent 周报",
@@ -35,37 +32,6 @@ function formatTime(value) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
-}
-
-const REPORT_TERMINAL = new Set(["published", "partial", "failed", "validation_failed"]);
-
-export function mergeInboxWithGeneratingReports(messages = [], reports = [], type = "") {
-  if (type && type !== "weekly_report") return messages;
-  const generating = reports
-    .filter((report) => !REPORT_TERMINAL.has(report.status))
-    .map((report) => ({
-      id: `generating-report-${report.id}`,
-      reportId: report.id,
-      type: "weekly_report",
-      priority: "normal",
-      sourceLabel: "Agent 周报",
-      title: report.title || "本期周报",
-      summaryLines: ["正在生成中，暂不可打开；完成后将自动投递到绑定邮箱。"],
-      publishedAt: report.createdAt || report.updatedAt,
-      isRead: true,
-      isGenerating: true,
-    }));
-  return [...generating, ...messages].sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0));
-}
-
-export function splitMessageParagraphs(content = "") {
-  const normalized = reportText(content)
-    .replace(/\r\n/g, "\n")
-    .replace(/\s+(?=(?:\d+|[一二三四五六七八九十]+)[.、]\s*)/g, "\n");
-  return normalized
-    .split(/\n+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
 }
 
 export default function MessagesPage() {
@@ -89,7 +55,7 @@ export default function MessagesPage() {
     setError(null);
     if (append) setLoadingMore(true);
     try {
-      const [result, reports] = await Promise.all([listMessages({
+      const result = await listMessages({
         type,
         read: read === "" ? undefined : read === "read",
         priority,
@@ -97,10 +63,9 @@ export default function MessagesPage() {
         publishedFrom: publishedFrom ? `${publishedFrom}T00:00:00` : undefined,
         publishedTo: publishedTo ? `${publishedTo}T23:59:59` : undefined,
         cursor: append ? nextCursor : undefined,
-      }), append ? Promise.resolve([]) : listReports()]);
-      const nextItems = append ? result.items : mergeInboxWithGeneratingReports(result.items, reports, type);
+      });
       setItems((current) =>
-        append ? [...(current ?? []), ...nextItems] : nextItems,
+        append ? [...(current ?? []), ...result.items] : result.items,
       );
       setNextCursor(result.nextCursor ?? null);
     } catch (nextError) {
@@ -113,11 +78,6 @@ export default function MessagesPage() {
   useEffect(() => {
     load();
   }, [type, read, priority, publishedFrom, publishedTo]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!items?.some((item) => item.isGenerating)) return undefined;
-    const timer = window.setInterval(() => load(), 1800);
-    return () => window.clearInterval(timer);
-  }, [items]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!messageId) {
       setSelected(null);
@@ -331,12 +291,6 @@ function Filter({ value, onChange, options, label }) {
 
 function MessageRow({ item, active, onOpen }) {
   const [priorityLabel, tone] = PRIORITY[item.priority] ?? PRIORITY.normal;
-  if (item.isGenerating) return (
-    <div className="message-row-generating relative grid w-full grid-cols-[12px_minmax(0,1fr)] gap-3 px-4 py-4 text-left" aria-label={`${item.title}，正在生成，暂不可打开`}>
-      <span className="mt-2 h-2 w-2 animate-pulse rounded-full bg-primary" />
-      <span className="min-w-0"><span className="flex flex-wrap items-center gap-2"><strong className="text-[13px] text-primary">Agent 周报</strong><StatusPill tone="blue">生成中</StatusPill><time className="ml-auto text-[12px] text-muted">{formatTime(item.publishedAt)}</time></span><span className="mt-2 block truncate text-base font-semibold text-ink">{item.title}</span><span className="mt-1 flex items-center gap-1.5 text-sm leading-6 text-muted"><span className="report-generation-card__dots" aria-hidden="true"><i /><i /><i /></span>正在生成中，暂不可打开</span></span>
-    </div>
-  );
   return (
     <button
       type="button"
@@ -365,10 +319,10 @@ function MessageRow({ item, active, onOpen }) {
           </time>
         </span>
         <span className="mt-2 block truncate text-base font-semibold text-ink">
-          {reportText(item.title) || "未命名消息"}
+          {item.title}
         </span>
         <span className="mt-1 line-clamp-2 text-sm leading-6 text-muted">
-          {reportText(item.summaryLines?.join(" ")) || "没有摘要"}
+          {item.summaryLines?.join(" ") || "没有摘要"}
         </span>
       </span>
     </button>
@@ -376,11 +330,7 @@ function MessageRow({ item, active, onOpen }) {
 }
 
 function MessageDetail({ message, onOpenReport }) {
-  if (message.type === "weekly_report" && message.primaryAction?.resourceId) {
-    return <WeeklyReportMessagePreview message={message} onOpenReport={onOpenReport} />;
-  }
   const [priorityLabel, tone] = PRIORITY[message.priority] ?? PRIORITY.normal;
-  const paragraphs = splitMessageParagraphs(message.content || message.summaryLines?.join("\n"));
   return (
     <article className="mx-auto max-w-3xl p-5 sm:p-8">
       <header className="border-b border-line pb-6">
@@ -392,18 +342,14 @@ function MessageDetail({ message, onOpenReport }) {
           {message.isPinned && <StatusPill tone="blue">置顶</StatusPill>}
         </div>
         <h2 className="mt-4 font-report text-[25px] font-semibold leading-tight text-ink">
-          {reportText(message.title) || "未命名消息"}
+          {message.title}
         </h2>
         <p className="mt-2 text-sm text-muted">
           发布于 {formatTime(message.publishedAt)}
         </p>
       </header>
-      <div className="grid gap-4 py-7 text-base leading-8 text-ink-2">
-        {paragraphs.length ? paragraphs.map((paragraph, index) => (
-          <p key={`${paragraph}-${index}`} className="border-l-2 border-transparent pl-0 first:text-ink">
-            {paragraph}
-          </p>
-        )) : <p>暂无正文</p>}
+      <div className="whitespace-pre-wrap py-7 text-base leading-8 text-ink-2">
+        {message.content || message.summaryLines?.join("\n") || "暂无正文"}
       </div>
       {message.status === "withdrawn" && (
         <p className="rounded-control border border-warning/25 bg-warning-soft p-3 text-sm text-warning">
@@ -421,44 +367,6 @@ function MessageDetail({ message, onOpenReport }) {
           </Button>
         </div>
       )}
-    </article>
-  );
-}
-
-function WeeklyReportMessagePreview({ message, onOpenReport }) {
-  const [report, setReport] = useState(null);
-  useEffect(() => {
-    getReport(message.primaryAction.resourceId).then(setReport).catch(() => setReport(false));
-  }, [message.primaryAction.resourceId]);
-  const view = buildReportView(report || {});
-  const summary = reportText(report?.summary || message.content || message.summaryLines?.join(" "));
-  const conclusionItems = (view.findings ?? [])
-    .flatMap((finding) => splitMessageParagraphs(finding.text))
-    .filter(Boolean);
-  const previewItems = conclusionItems.length
-    ? conclusionItems.slice(0, 4)
-    : splitMessageParagraphs(summary).slice(0, 4);
-  return (
-    <article className="mx-auto max-w-3xl p-5 sm:p-8">
-      <header className="border-b border-line pb-6">
-        <div className="flex items-center gap-2"><span className="section-kicker">AGENT WEEKLY BRIEF</span><StatusPill tone="blue">已发布</StatusPill></div>
-        <h2 className="mt-4 font-report text-[25px] font-semibold leading-tight text-ink">{reportText(message.title)}</h2>
-        <p className="mt-2 text-sm text-muted">发布于 {formatTime(message.publishedAt)} · 已投递绑定邮箱</p>
-      </header>
-      <section className="mt-6 rounded-section border border-primary/15 bg-primary-soft/45 p-5">
-        <span className="section-kicker">本期结论</span>
-        <div className="mt-3 grid gap-3" aria-label="本期结论列表">
-          {(previewItems.length ? previewItems : ["本期周报已发布，请查看完整报告了解详情。"]).map((item, index) => (
-            <div key={`${item}-${index}`} className="grid grid-cols-[24px_minmax(0,1fr)] gap-3 border-t border-primary/10 pt-3 first:border-t-0 first:pt-0">
-              <span className="pt-0.5 text-xs font-semibold text-primary">{String(index + 1).padStart(2, "0")}</span>
-              <p className="text-base leading-7 text-ink">{item}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-      {view.metrics.length ? <div className="mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-section border border-line bg-line">{view.metrics.slice(0, 4).map((metric) => <div key={metric.key} className="bg-paper p-4"><span className="text-xs text-muted">{reportText(metric.name || metric.key)}</span><strong className="mt-1 block text-xl text-ink">{metric.valueLabel}</strong><span className="mt-1 block text-xs text-muted">{metric.changeLabel} · {metric.previousLabel}</span></div>)}</div> : <div className="mt-5 rounded-section border border-amber/25 bg-amber-soft p-4"><strong className="text-sm text-ink">本期数据尚未覆盖</strong><p className="mt-1 text-sm leading-6 text-muted">当前统计周期没有可用业务记录，因此未生成虚假图表或指标。请在完整报告中查看数据范围说明。</p></div>}
-      {view.charts.length > 0 && <div className="mt-5"><WeeklyReportCharts charts={view.charts.slice(0, 1)} sourceName={report?.sourceName || "当前数据源"} /></div>}
-      <div className="mt-6 border-t border-line pt-5"><Button variant="primary" onClick={() => onOpenReport(message.primaryAction.resourceId)}>查看完整周报 <Icon name="arrow" size={15} /></Button></div>
     </article>
   );
 }

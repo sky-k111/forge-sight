@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { buildReportView, mergeTrendSeries, reportText } from "./weeklyReportView";
+import { buildReportView, mergeTrendSeries } from "./weeklyReportView";
 
 describe("structured weekly report view", () => {
   test("returns a safe loading view before report data arrives", () => {
@@ -28,26 +28,6 @@ describe("structured weekly report view", () => {
     expect(view.topAnomaly.title).toBe("焊接波动");
     expect(view.metrics[0].changeLabel).toBe("-1.84%");
     expect(view.quality.coverage).toBe(96);
-  });
-
-  test("removes markdown decoration from report copy before it reaches the reading view", () => {
-    const view = buildReportView({
-      summary: "**本周重点**：良率改善",
-      content: {
-        schemaVersion: "weekly-report/v1",
-        managementSummary: { findings: [{ level: "confirmed", text: "**良率**改善", evidenceStatus: "verified" }] },
-        metrics: [], anomalies: [], progress: [], recommendations: [], dataQuality: {}, appendix: {},
-      },
-    });
-
-    expect(view.headline).toBe("良率改善");
-    expect(view.findings[0].text).toBe("良率改善");
-  });
-
-  test("hides physical data identifiers from user-facing report copy", () => {
-    const text = reportText("请检查 `mes_process_output` 的 stat_date 字段");
-    expect(text).not.toContain("mes_process_output");
-    expect(text).not.toContain("stat_date");
   });
 
   test("merges trend series by label without losing sparse points", () => {

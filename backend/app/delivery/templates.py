@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html
-import re
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -19,20 +18,12 @@ def _date(value: datetime | None) -> str:
     return value.strftime("%Y-%m-%d %H:%M") if value else "无"
 
 
-def _business_text(value: str) -> str:
-    """Keep emails managerial: no Markdown, physical tables, or field identifiers."""
-
-    return re.sub(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", "相关数据项", re.sub(
-        r"\s+", " ", re.sub(r"[`*_~#]", "", re.sub(r"`[^`]+`", "业务数据", str(value or "")))
-    )).strip()
-
-
 def _summary_lines(content: dict, fallback: str) -> list[str]:
     findings = (content.get("managementSummary") or {}).get("findings") or []
-    lines = [_business_text(str(item.get("text") or "")) for item in findings if isinstance(item, dict)]
+    lines = [str(item.get("text") or "").strip() for item in findings if isinstance(item, dict)]
     lines = [line for line in lines if line]
     if len(lines) < 3:
-        lines.extend(_business_text(line) for line in fallback.splitlines() if line.strip())
+        lines.extend(line.strip() for line in fallback.splitlines() if line.strip())
     unique = list(dict.fromkeys(lines))
     return unique[:5] or ["本期周报已发布，请进入系统查看完整内容。"]
 
@@ -57,7 +48,7 @@ def build_weekly_report_mail(
         default=None,
     )
     serious = (
-        _business_text(str(most_serious.get("title") or ""))
+        str(most_serious.get("title") or "").strip()
         if most_serious
         else "未发现需重点关注的异常"
     ) or "未发现需重点关注的异常"

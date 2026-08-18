@@ -20,7 +20,7 @@ import {
 } from "../../components/ui";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
-import { buildReportView, reportText } from "../../lib/weeklyReportView";
+import { buildReportView } from "../../lib/weeklyReportView";
 
 const TERMINAL = new Set([
   "awaiting_review",
@@ -73,7 +73,6 @@ export default function ReportDetailPage() {
     return () => window.clearInterval(timer);
   }, [report?.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const view = useMemo(() => buildReportView(report), [report]);
-  const reportTitle = reportText(report?.title) || "本期经营周报";
   if (error)
     return (
       <PageFrame>
@@ -164,7 +163,7 @@ export default function ReportDetailPage() {
               {notice}
             </p>
           )}
-          <div className="mt-7 grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="mt-7 grid gap-6 xl:grid-cols-[minmax(0,1fr)_300px]">
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <StatusPill
@@ -183,20 +182,23 @@ export default function ReportDetailPage() {
                 </span>
               </div>
               <h1 className="mt-4 max-w-4xl font-report text-[31px] font-semibold leading-[1.2] tracking-tight text-ink">
-                {reportTitle}
+                {report.title}
               </h1>
               <p className="mt-3 text-sm text-muted">
                 报告周期 {date(report.periodStart)} — {date(report.periodEnd)} ·
                 生成于 {date(report.version?.generatedAt)}
               </p>
               <div className="mt-7 max-w-4xl border-l-[3px] border-primary pl-5">
-                <span className="section-kicker">管理摘要</span>
-                <h2 className="mt-2 font-report text-xl font-semibold text-ink">管理摘要</h2>
-                <p className="mt-2 font-report text-[25px] font-semibold leading-[1.5] text-ink">{view.headline}</p>
+                <span className="text-[13px] font-semibold text-primary">
+                  本周一句话结论
+                </span>
+                <p className="mt-2 font-report text-[25px] font-semibold leading-[1.5] text-ink">
+                  {view.headline}
+                </p>
               </div>
               <KeyFindings findings={view.findings} />
             </div>
-            <ExecutivePanel report={report} view={view} />
+            <TopAnomaly anomaly={view.topAnomaly} />
           </div>
         </header>
 
@@ -213,13 +215,13 @@ export default function ReportDetailPage() {
         >
           <SectionTitle
             id="key-metrics"
-            eyebrow="经营脉搏"
+            eyebrow="关键指标"
             title="一眼看清本周变化"
             description="本期数值、上期基准与变化方向保持在同一阅读单元。"
           />
           {view.metrics.length ? (
-            <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {view.metrics.slice(0, 4).map((metric) => (
+            <div className="mt-5 grid gap-px overflow-hidden rounded-section border border-line bg-line sm:grid-cols-2 xl:grid-cols-6">
+              {view.metrics.slice(0, 6).map((metric) => (
                 <MetricCell key={metric.key} metric={metric} />
               ))}
             </div>
@@ -381,7 +383,7 @@ function LegacyReportDetail({
               </span>
             </div>
             <h1 className="mt-2 font-report text-[25px] font-semibold text-ink">
-              {reportText(report.title) || "报告"}
+              {report.title}
             </h1>
             <p className="mt-1 text-sm text-muted">
               {report.sourceName} · {date(report.periodStart)} —{" "}
@@ -391,7 +393,7 @@ function LegacyReportDetail({
         </div>
         <div className="flex flex-wrap gap-2">
           {files.pdf && (
-              <DownloadButton
+            <DownloadButton
               format="pdf"
               file={files.pdf}
               busy={downloading}
@@ -462,7 +464,7 @@ function LegacyReportDetail({
           <span className="section-kicker">MANAGEMENT SUMMARY</span>
           <h2 className="mt-1 font-report text-xl font-semibold">管理摘要</h2>
           <p className="mt-3 whitespace-pre-wrap text-base leading-8 text-ink-2">
-            {reportText(report.summary) || "Agent 完成分析后会在这里形成摘要。"}
+            {report.summary || "Agent 完成分析后会在这里形成摘要。"}
           </p>
         </section>
         <div className="divide-y divide-line">
@@ -491,7 +493,7 @@ function LegacySection({ section }) {
           <span className="font-mono text-[11px] text-muted">
             SECTION {String(section.order ?? 0).padStart(2, "0")}
           </span>
-          <h2 className="mt-1 text-lg font-semibold">{reportText(section.title) || "未命名章节"}</h2>
+          <h2 className="mt-1 text-lg font-semibold">{section.title}</h2>
         </div>
         {section.confidence > 0 && (
           <StatusPill tone={section.confidence >= 80 ? "green" : "amber"}>
@@ -500,7 +502,7 @@ function LegacySection({ section }) {
         )}
       </div>
       <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-ink-2">
-        {reportText(section.summary) || reportText(section.statusLabel) || "正在生成"}
+        {section.summary || section.statusLabel || "正在生成"}
       </p>
       {result?.columns?.length > 0 && (
         <div className="mt-4 overflow-x-auto rounded-control border border-line">
@@ -574,30 +576,17 @@ function SectionTitle({ id, eyebrow, title, description }) {
     </header>
   );
 }
-function ExecutivePanel({ report, view }) {
-  const anomaly = view.topAnomaly;
-  const action = view.recommendations?.[0] ?? view.actions?.[0];
-  const actionTitle = action?.title ?? action?.text ?? "本周无需新增专项行动";
-  const actionDetail = action?.rationale ?? (action?.owner ? `责任人：${action.owner}` : "待分配责任人");
+function TopAnomaly({ anomaly }) {
   if (!anomaly)
     return (
       <aside className="rounded-section border border-success/25 border-l-4 bg-success-soft p-5">
-        <span className="section-kicker">最高风险</span>
+        <span className="text-[13px] font-semibold text-success">最高风险</span>
         <h2 className="mt-2 text-xl font-semibold text-ink">
           本周未识别到结构化异常
         </h2>
         <p className="mt-2 text-sm leading-6 text-muted">
           仍建议结合数据质量和完整证据阅读。
         </p>
-        <div className="mt-4 border-t border-success/20 pt-4">
-          <span className="section-kicker">首要行动</span>
-          <p className="mt-2 text-sm font-semibold leading-6 text-ink">{actionTitle}</p>
-          <p className="mt-1 text-sm leading-6 text-muted">{actionDetail}</p>
-        </div>
-        <div className="mt-4 border-t border-success/20 pt-4">
-          <span className="section-kicker">数据新鲜度</span>
-          <p className="mt-2 text-sm leading-6 text-muted">覆盖率 {view.quality.coverage ?? 0}% · 更新至 {date(report.version?.generatedAt)}</p>
-        </div>
       </aside>
     );
   const [label] = SEVERITY[anomaly.severity] ?? [anomaly.severity];
@@ -616,15 +605,6 @@ function ExecutivePanel({ report, view }) {
           ? "证据已验证"
           : "需结合证据核查"}
       </p>
-      <div className="mt-4 border-t border-critical/20 pt-4">
-        <span className="section-kicker">首要行动</span>
-        <p className="mt-2 text-sm font-semibold leading-6 text-ink">{actionTitle}</p>
-        <p className="mt-1 text-sm leading-6 text-muted">{actionDetail}</p>
-      </div>
-      <div className="mt-4 border-t border-critical/20 pt-4">
-        <span className="section-kicker">数据新鲜度</span>
-        <p className="mt-2 text-sm leading-6 text-muted">覆盖率 {view.quality.coverage ?? 0}% · 更新至 {date(report.version?.generatedAt)}</p>
-      </div>
     </aside>
   );
 }

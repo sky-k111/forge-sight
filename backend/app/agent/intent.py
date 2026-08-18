@@ -12,7 +12,6 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.agent.ids import new_id
-from app.agent.time_range import extract_year_month, has_time_reference
 
 ANALYSIS_VERBS = (
     "分析", "统计", "比较", "对比", "查找", "查询", "找出", "查看", "计算", "汇总", "排名",
@@ -33,28 +32,6 @@ SMALLTALK_PATTERNS = (
     re.compile(r"(?:讲个笑话|聊聊天|今天天气|心情怎么样|你好吗)"),
     re.compile(r"(?:想.*聊|压力|心情|难过|焦虑|烦恼|陪我|表现不好)"),
 )
-_CLOCK_QUERY_PATTERN = re.compile(
-    r"(?:现在|当前|今天|北京时间).{0,10}(?:几点(?:钟)?|几时|时间|时刻|几号|日期)"
-    r"|(?:几点(?:钟)?|几时)(?:了|吗|呢)?"
-    r"|(?:时间|时刻|日期).{0,8}(?:是多少|是几点|为多少|呢|吗)"
-    r"|(?:请问|麻烦(?:问一下)?|告诉我|问一下).{0,5}(?:几点(?:钟)?|几时|时间|时刻|日期)"
-)
-_CLOCK_BUSINESS_CONTEXT = (
-    "报告", "报表", "统计", "周期", "范围", "数据", "指标", "字段", "查询", "分析",
-    "生产", "产量", "质量", "设备", "库存", "工序", "产线", "业务", "时长", "耗时",
-)
-
-
-def _is_clock_query(text: str) -> bool:
-    """Recognize current-clock questions without stealing metric time scopes."""
-    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
-    if not _CLOCK_QUERY_PATTERN.search(normalized):
-        return False
-    if any(term in normalized for term in _CLOCK_BUSINESS_CONTEXT):
-        return bool(re.search(r"(?:现在|当前|今天|北京时间|几点|几时)", normalized))
-    return True
-
-
 _REPORT_TERMS = ("周报", "月报", "专题报告", "报告", "报表")
 _REPORT_REQUEST_PATTERNS = (
     # Creation verbs may be separated from the report noun by a template or
@@ -94,6 +71,11 @@ TIME_OPTIONS = (
     {"label": "本月至今", "value": "本月至今"},
 )
 
+_EXPLICIT_TIME_RE = re.compile(
+    r"(?:最近|近)\s*(?:\d+|一|两|三|四|五|六|七|八|九|十|半|一个)\s*(?:天|日|周|个月|月)"
+    r"|(?:本周|这周|这个月|本月|这个季度|本季度|今年|今天|昨天|上周|上月)"
+    r"|20\d{2}[-年/]\d{1,2}(?:[-月/]\d{1,2})?"
+)
 _OBJECT_REFERENCE_RE = re.compile(
     r"(?:该对象|上述对象|其中对象|它|其(?!他|余|中)|这个(?!月|周|季度|年度|年份|星期|礼拜|天|时段))"
 )
@@ -129,7 +111,7 @@ def is_report_request(text: str) -> bool:
 
 
 def _is_known_conversation(text: str) -> bool:
-    return _is_report_request(text) or _is_clock_query(text) or any(
+    return _is_report_request(text) or any(
         pattern.search(text) for pattern in (*SMALLTALK_PATTERNS, *OUT_OF_SCOPE_PATTERNS)
     )
 
@@ -155,10 +137,10 @@ def classify_request_kind(
     # a misleading no-data error.
     if _is_report_request(normalized):
         return "conversation"
-    if _is_known_conversation(normalized):
-        return "conversation"
     if _has_analysis_verb(normalized) or any(term in normalized for term in BUSINESS_TERMS):
         return "analysis"
+    if _is_known_conversation(normalized):
+        return "conversation"
     history = conversation_context or []
     previous_user_text = next(
         (
@@ -264,9 +246,6 @@ def build_conversation_response(parts: list[str], *, mixed: bool = False) -> str
 
 def build_smalltalk_response(text: str) -> str:
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
-    if _is_clock_query(normalized):
-        now = datetime.now(ZoneInfo("Asia/Shanghai"))
-        return f"现在是北京时间 {now:%Y 年 %m 月 %d 日 %H:%M}。"
     if _is_report_request(normalized):
         return (
             "可以生成，但还需要报告类型、统计周期和数据范围。"
@@ -370,16 +349,6 @@ def _requested_chart(text: str) -> str | None:
 
 
 def _time_constraint(text: str) -> dict[str, Any] | None:
-    month_parts = extract_year_month(text)
-    if month_parts:
-        year, month = month_parts
-        return {
-            "kind": "calendar_month",
-            "label": f"{year} 年 {month} 月",
-            "year": year,
-            "month": month,
-            "timeGrain": "day",
-        }
     current_month = re.search(r"(?:这个月|本月(?:至今)?)", text)
     previous_month = re.search(r"(?:上个月|上月)", text)
     if current_month and previous_month:
@@ -481,7 +450,7 @@ def _clarification_fields(
                 "allowCustom": True,
             }
         )
-    vague_time = any(term in question for term in VAGUE_TIME_TERMS) and not has_time_reference(question)
+    vague_time = any(term in question for term in VAGUE_TIME_TERMS) and not _EXPLICIT_TIME_RE.search(question)
     if vague_time:
         fields.append(
             {
