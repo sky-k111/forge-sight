@@ -63,6 +63,31 @@ class DataSource(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class SemanticIndexJob(Base):
+    """Durable semantic-index synchronization task for one isolated data source."""
+
+    __tablename__ = "semantic_index_job"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_id: Mapped[int] = mapped_column(Integer, index=True)
+    mode: Mapped[str] = mapped_column(String(20), default="incremental", comment="incremental / full")
+    reason: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    error: Mapped[str] = mapped_column(Text, default="")
+    result_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    embedding_model: Mapped[str] = mapped_column(String(160), default="")
+    embedding_dimensions: Mapped[int] = mapped_column(Integer, default=0)
+    requested_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+    lease_owner: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+
 class DataTable(Base):
     """已登记的数据表（资源目录）。业务库真实结构来自扫描，中文语义可人工修正。"""
 

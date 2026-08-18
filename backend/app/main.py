@@ -55,6 +55,13 @@ def create_platform_tables():
 
     seed_admin()
     seed_default_report_scopes()
+    if settings.retrieval_semantic_enabled and settings.semantic_index_worker_enabled:
+        try:
+            from app.retrieval.worker import start_worker as start_semantic_index_worker
+
+            start_semantic_index_worker()
+        except Exception:  # the core API remains available and exposes queued jobs for later recovery
+            log.exception("Semantic index worker initialization failed")
     if settings.agent_worker_enabled:
         try:
             from app.agent.checkpointer import initialize_checkpointer
@@ -67,6 +74,10 @@ def create_platform_tables():
 
 
 def stop_agent_runtime():
+    if settings.retrieval_semantic_enabled and settings.semantic_index_worker_enabled:
+        from app.retrieval.worker import stop_worker as stop_semantic_index_worker
+
+        stop_semantic_index_worker()
     if settings.agent_worker_enabled:
         from app.agent.checkpointer import close_checkpointer
         from app.agent.worker import stop_worker

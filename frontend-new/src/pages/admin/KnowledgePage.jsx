@@ -3,7 +3,7 @@ import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
 import { Button, Card, EmptyState, ErrorNotice, Modal, PageFrame, RouteSkeleton, StatusPill } from "../../components/ui";
 import { deleteMetric, listMetrics, listObjects, listRules, listTopics, publishMetric, saveMetric } from "../../api/knowledge";
-import { listSources } from "../../api/datasources";
+import { getSemanticIndexStatus, listSources } from "../../api/datasources";
 import SourceTypeMark from "../../components/ui/SourceTypeMark";
 
 const topicTones = {
@@ -111,6 +111,7 @@ export default function KnowledgePage() {
   const [metricFilterOpen, setMetricFilterOpen] = useState(false);
   const [metricStatusFilter, setMetricStatusFilter] = useState("all");
   const [metricTopicFilter, setMetricTopicFilter] = useState("all");
+  const [semanticIndex, setSemanticIndex] = useState(null);
 
   const load = async () => {
     setError(null);
@@ -131,6 +132,22 @@ export default function KnowledgePage() {
   useEffect(() => {
     load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!currentSourceId) return undefined;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const next = await getSemanticIndexStatus(currentSourceId);
+        if (active) setSemanticIndex(next);
+      } catch {
+        if (active) setSemanticIndex(null);
+      }
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 2500);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [currentSourceId]);
 
   const refreshMetrics = async (selectId) => {
     const metrics = await listMetrics({ sourceId: currentSourceId });
@@ -218,6 +235,13 @@ export default function KnowledgePage() {
           <span><b className="mr-1 font-mono text-base font-semibold text-amber">{pendingCount}</b>待审核或验证</span>
         </div>
         <div className="ml-auto">
+          <div className="mb-2 flex justify-end">
+            <span className="inline-flex items-center gap-1.5 rounded-tag border border-line bg-surface-2 px-2 py-1 text-[10px] font-semibold text-muted" title={semanticIndex?.latestJob?.reason ?? "当前数据源语义索引状态"}>
+              <span className={cn("h-1.5 w-1.5 rounded-full", semanticIndex?.status === "failed" ? "bg-red" : semanticIndex?.status === "succeeded" ? "bg-green" : "bg-amber")} />
+              {semanticIndex?.statusLabel ?? "读取索引状态"}
+              {semanticIndex?.status === "succeeded" && semanticIndex.documents > 0 ? ` · ${semanticIndex.documents} 项` : ""}
+            </span>
+          </div>
           <SourceBindingPicker
             sources={data.sources ?? []}
             value={currentSourceId}

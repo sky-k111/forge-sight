@@ -15,7 +15,7 @@ def test_retrieval_api_contract(knowledge_session):
     assert response.status_code == 200
     body = response.json()
     assert body["contextPackageId"].startswith("ctx-")
-    assert body["retrieval"]["strategy"] == "lexical-rule"
+    assert body["retrieval"]["strategy"] in {"lexical-rule", "hybrid-rrf"}
     assert body["retrieval"]["intents"] == ["trend"]
     assert body["metrics"][0]["id"] == "M-004"
     assert body["executionPolicy"]["instruction"]

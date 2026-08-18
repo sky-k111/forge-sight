@@ -822,6 +822,33 @@ CREATE TABLE IF NOT EXISTS report_version (
 );
 CREATE INDEX IF NOT EXISTS ix_report_version_report_id ON report_version (report_id);
 
+CREATE TABLE IF NOT EXISTS semantic_index_job (
+	id VARCHAR(36) NOT NULL,
+	source_id INTEGER NOT NULL,
+	mode VARCHAR(20) NOT NULL,
+	reason VARCHAR(255) NOT NULL,
+	status VARCHAR(20) NOT NULL,
+	attempt INTEGER NOT NULL,
+	max_attempts INTEGER NOT NULL,
+	error TEXT NOT NULL,
+	result_json JSONB NOT NULL,
+	embedding_model VARCHAR(160) NOT NULL,
+	embedding_dimensions INTEGER NOT NULL,
+	requested_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	next_attempt_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	started_at TIMESTAMP WITHOUT TIME ZONE,
+	finished_at TIMESTAMP WITHOUT TIME ZONE,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	lease_owner VARCHAR(160),
+	lease_expires_at TIMESTAMP WITHOUT TIME ZONE,
+	PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_semantic_index_job_lease_expires_at ON semantic_index_job (lease_expires_at);
+CREATE INDEX IF NOT EXISTS ix_semantic_index_job_next_attempt_at ON semantic_index_job (next_attempt_at);
+CREATE INDEX IF NOT EXISTS ix_semantic_index_job_requested_at ON semantic_index_job (requested_at);
+CREATE INDEX IF NOT EXISTS ix_semantic_index_job_source_id ON semantic_index_job (source_id);
+CREATE INDEX IF NOT EXISTS ix_semantic_index_job_status ON semantic_index_job (status);
+
 CREATE TABLE IF NOT EXISTS table_field (
 	id SERIAL NOT NULL,
 	source_id INTEGER NOT NULL,

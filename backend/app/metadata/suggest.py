@@ -78,6 +78,14 @@ def confirm_table_semantics(table_name: str, source_id: int, suggestion: dict) -
             for field in session.query(TableField).filter_by(source_id=source_id, table_name=table_name):
                 if field.name in cn_map:
                     field.cn_name = cn_map[field.name]
+        from app.retrieval.index_jobs import enqueue_index_job
+
+        enqueue_index_job(
+            session,
+            source_id,
+            mode="incremental",
+            reason=f"确认数据表语义：{table_name}",
+        )
         session.commit()
         return {
             "name": table.name,
