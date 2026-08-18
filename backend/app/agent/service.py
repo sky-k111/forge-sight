@@ -225,11 +225,12 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
         # Known turns are model-free; open conversation gets one small model call.
         # Neither path enters schema retrieval, SQL generation or worker polling.
         from app.agent.runner import (
+            _resolve_report_brief_semantics,
             execute_inline_conversation,
             execute_inline_report_clarification,
+            execute_inline_report_request,
             execute_inline_route,
             report_brief_missing_details,
-            _resolve_report_brief_semantics,
         )
 
         if report_request:
@@ -394,9 +395,9 @@ def respond_to_interaction(interaction_id: str, answer: str) -> dict:
             )
             session.commit()
             from app.agent.runner import (
+                _resolve_report_brief_semantics,
                 execute_inline_report_clarification,
                 execute_inline_report_request,
-                _resolve_report_brief_semantics,
             )
 
             report_brief = _resolve_report_brief_semantics(report_brief, run.id)

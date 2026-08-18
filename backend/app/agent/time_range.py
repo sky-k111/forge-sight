@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import re
 
-
 _CHINESE_DIGITS = {
     "零": 0,
     "〇": 0,
