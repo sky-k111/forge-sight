@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import Icon from "../../components/ui/Icon";
-import cn from "../../lib/cn";
 import { Card, EmptyState, ErrorNotice, PageFrame, RouteSkeleton, StatusPill } from "../../components/ui";
 import { listSessions } from "../../api/analysis";
 

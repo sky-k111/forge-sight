@@ -308,6 +308,32 @@ beforeEach(() => {
           },
         ]);
       }
+      if (u.includes("/api/overview/admin")) {
+        return okJson({
+          summary: {
+            categoryCount: 3,
+            detail: "3 个指标待审核 · 2 个字段待映射 · 1 条拦截记录待复核",
+            baseline: "治理基线正常",
+            lastCheck: "10:36",
+          },
+          health: [
+            { icon: "knowledge", label: "业务语义", value: "93%", note: "77 个指标 · 3 个待审核", tone: "blue", page: "knowledge" },
+            { icon: "database", label: "数据资源", value: "10", note: "10 张表 · 15 条关系", tone: "teal", page: "resources" },
+            { icon: "model", label: "模型治理", value: "4", note: "2 个已发布 · 1 个待复核", tone: "violet", page: "model-governance" },
+            { icon: "shield", label: "安全运行", value: "100%", note: "只读策略与审计已启用 · 拦截 1 次已记录", tone: "green", page: "security" },
+          ],
+          queue: [
+            { index: "01", title: "审核“设备可用率”指标口径", note: "数据治理组 提交 · 设备 主题", status: "待审核", tone: "amber", page: "knowledge" },
+            { index: "02", title: "确认数据字段映射", note: "2 个字段尚未补充业务中文名", status: "待映射", tone: "blue", page: "resources" },
+            { index: "03", title: "复核危险 SQL 拦截记录", note: "DELETE FROM dim_process", status: "已拦截", tone: "red", page: "security" },
+          ],
+          topics: [
+            { name: "生产", coverage: 92 },
+            { name: "质量", coverage: 96 },
+            { name: "设备", coverage: 84 },
+          ],
+        });
+      }
       if (u.includes("/api/overview")) {
         return okJson({
           source: {

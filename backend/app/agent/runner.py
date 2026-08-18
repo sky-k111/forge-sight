@@ -113,7 +113,7 @@ def _tracked_generate(state: dict, step_key: str, system: str, user: str) -> str
             temperature=0.1,
             max_tokens=max_tokens,
         )
-    except Exception as exc:
+    except Exception:
         usage.finish_call(
             call_id,
             status="failed",

@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, event, text
 
-
 ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP_PATH = ROOT / "database" / "bootstrap.py"
 SPEC = importlib.util.spec_from_file_location("forge_sight_database_bootstrap", BOOTSTRAP_PATH)

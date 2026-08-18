@@ -13,8 +13,8 @@ from app.db.models import (
     Announcement,
     Base,
     DataScopePolicy,
-    DomainEventOutbox,
     DeliveryAttempt,
+    DomainEventOutbox,
     Message,
     MessageRecipient,
     PlatformUser,
@@ -33,10 +33,10 @@ from app.delivery.service import (
     block_deliveries_for_configuration,
     consume_message_published_event,
     delivery_work_pending,
-    run_delivery_event_worker_once,
-    run_delivery_worker_once,
     resume_configuration_blocked_deliveries,
     retry_delivery,
+    run_delivery_event_worker_once,
+    run_delivery_worker_once,
 )
 from app.delivery.templates import build_announcement_mail, build_weekly_report_mail
 

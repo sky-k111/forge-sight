@@ -28,19 +28,13 @@ sys.path.insert(0, str(ROOT))
 from app.config import settings  # noqa: E402
 from app.db.models import (  # noqa: E402
     Base,
-    BusinessObject,
-    BusinessRule,
-    DataSource,
     KnowledgeMetric,
     KnowledgeReference,
-    KnowledgeTopic,
     MetricFieldBinding,
     MetricSourceBinding,
     MetricTableBinding,
-    TableField,
 )
 from app.knowledge.seed import METRICS  # noqa: E402
-
 
 OLD_KNOWLEDGE_TABLES = [
     "knowledge_reference",

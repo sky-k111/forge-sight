@@ -5,9 +5,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.agent import runner as runner_service
 from app.agent import service as analysis_service
 from app.agent import usage as usage_service
-from app.agent import runner as runner_service
 from app.config import settings
 from app.db.models import Base, DataSource, DataTable, TableField, TableRelation
 from app.knowledge import seed, service

@@ -141,7 +141,7 @@ def _inspect_postgresql(conn):
     ).all()
     pk_set = {(t, c) for t, c in primary_keys}
     fields = {}
-    for table_name, col_name, col_type, comment, ordinal, _ in columns:
+    for table_name, col_name, col_type, _comment, ordinal, _ in columns:
         fields.setdefault(table_name, []).append(
             {"name": col_name, "type": col_type, "comment": "", "ordinal": ordinal,
              "is_primary": (table_name, col_name) in pk_set}

@@ -1,12 +1,24 @@
 # Dependencies
 node_modules/
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+
 # Production and test output
 dist/
 build/
 coverage/
 .vite/
 .cache/
+output/
+report_artifacts/
+modeling_artifacts/
 
 # Local environment files
 .env
@@ -19,6 +31,14 @@ coverage/
 logs/
 *.pid
 *.pid.lock
+
+# Test / tooling artifacts
+.pytest-tmp-*/
+.playwright-cli/
+.playwright/
+.coverage
+coverage.xml
+htmlcov/
 
 # Local tool configuration
 .claude/
@@ -40,6 +60,3 @@ tmp/
 temp/
 *.tmp
 *.bak
-
-# Modeling artifacts (joblib model files)
-modeling_artifacts/

@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import Depends, Header, HTTPException
 from starlette.responses import JSONResponse
 
-from app.config import settings
 from app.auth.service import decode_token, get_user_by_username, user_payload
-
+from app.config import settings
 
 PUBLIC_AUTH_PATHS = {
     "/api/auth/register",
@@ -73,6 +70,30 @@ def validate_email_gate_configuration() -> None:
             "AUTH_EMAIL_GATE_ENABLED cannot be used with capture mail unless "
             "AUTH_EMAIL_GATE_ALLOW_CAPTURE=true"
         )
+
+
+_INSECURE_TOKEN_SECRETS = {"", "dev-insecure-secret-change-me", "change_me", "changeme", "change-me"}
+_INSECURE_ADMIN_PASSWORDS = {"", "admin123", "change_me", "changeme", "change-me"}
+_INSECURE_CODE_SECRETS = {"", "change_me", "changeme", "change-me"}
+
+
+def validate_security_configuration() -> None:
+    """非演示环境拒绝不安全占位默认值，保证安全边界 fail-closed。
+
+    演示模式（demo_mode_enabled=true）显式豁免，便于本地开箱即用；
+    生产/CI 一旦遗漏 .env 覆盖即拒绝启动，而非静默以可预测密钥运行。
+    """
+    if settings.demo_mode_enabled:
+        return
+    problems: list[str] = []
+    if settings.auth_token_secret.strip().lower() in _INSECURE_TOKEN_SECRETS:
+        problems.append("AUTH_TOKEN_SECRET 仍为默认占位值")
+    if settings.auth_admin_password.strip().lower() in _INSECURE_ADMIN_PASSWORDS:
+        problems.append("AUTH_ADMIN_PASSWORD 仍为默认占位值")
+    if settings.auth_email_gate_enabled and settings.email_code_secret.strip().lower() in _INSECURE_CODE_SECRETS:
+        problems.append("启用邮箱门禁但 EMAIL_CODE_SECRET 未配置")
+    if problems:
+        raise RuntimeError("安全配置未完成，拒绝启动：" + "；".join(problems))
 
 
 def optional_user(authorization: str | None = Header(default=None)) -> dict | None:

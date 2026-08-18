@@ -11,7 +11,6 @@ import pytest
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.exc import DBAPIError
 
-
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_DIR = ROOT / "database" / "postgresql"
 SPEC = importlib.util.spec_from_file_location(

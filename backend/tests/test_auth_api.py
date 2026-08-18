@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,8 +16,8 @@ from app.agent import service as analysis_service
 from app.api import auth as auth_api
 from app.auth import email_verification
 from app.auth import service as auth_service
-from app.auth.mail_provider import CaptureMailProvider
 from app.auth.deps import validate_email_gate_configuration
+from app.auth.mail_provider import CaptureMailProvider
 from app.config import settings
 from app.db.models import Base, DataScopePolicy, DataSource, PlatformUser
 from app.main import app
@@ -588,7 +589,7 @@ def test_email_gate_treats_legacy_token_without_scope_as_restricted(auth_session
                 enabled=True,
                 email="legacy@example.com",
                 email_canonical="legacy@example.com",
-                email_verified_at=auth_service.datetime.now(),
+                email_verified_at=datetime.now(),
             )
         )
         session.commit()

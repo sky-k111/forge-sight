@@ -19,7 +19,6 @@ from app.config import settings
 from app.db.models import EmailVerificationChallenge, EmailVerificationEvent, PlatformUser
 from app.db.platform import Base
 
-
 NOW = datetime(2026, 8, 13, 9, 0, 0)
 
 

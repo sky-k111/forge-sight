@@ -259,19 +259,6 @@ export const businessRules = [
   { id: "R-027", name: "跨表统计必须使用已登记关联路径", type: "查询规则", scope: "全局" },
 ];
 
-export const adminHealth = [
-  { icon: "knowledge", label: "业务语义", value: "93%", note: "77 个知识项 · 3 个待审核", tone: "blue", page: "knowledge", trend: [88, 90, 89, 91, 92, 92, 93], delta: "近 7 天 +5" },
-  { icon: "database", label: "数据资源", value: "100", note: "10 张表 · 15 条关系完整", tone: "teal", page: "resources", trend: [96, 97, 98, 98, 99, 100, 100], delta: "近 7 天 +4" },
-  { icon: "model", label: "模型治理", value: "4", note: "2 个已发布 · 1 个待复核", tone: "violet", page: "model-governance", trend: [2, 2, 3, 3, 3, 4, 4], delta: "近 7 天 +2" },
-  { icon: "shield", label: "安全运行", value: "100%", note: "只读策略与审计均已启用", tone: "green", page: "security", trend: [100, 100, 99, 100, 100, 100, 100], delta: "拦截 1 次已复核" },
-];
-
-export const governanceQueue = [
-  { index: "01", title: "审核“设备可用率”指标口径", note: "设备部提交 · 公式和默认时间字段已自动检查", status: "待审核", tone: "amber", page: "knowledge" },
-  { index: "02", title: "确认设备运行字段映射", note: "2 个新字段尚未关联业务对象", status: "待映射", tone: "blue", page: "resources" },
-  { index: "03", title: "复核危险 SQL 拦截记录", note: "请求包含 DELETE，已在执行前阻断", status: "已拦截", tone: "red", page: "security" },
-];
-
 export const pendingTableSuggestion = {
   name: "eqp_sensor_reading",
   cn: "设备传感器读数表",

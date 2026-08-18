@@ -5,18 +5,18 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Any, Callable
+from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from app.agent.budgets import BudgetExceeded
 from app.agent.intent import build_intent_plan, build_request_route
 from app.agent.state import AnalysisState
-from app.agent.budgets import BudgetExceeded
 from app.gateway.executor import ExecutionResult
 from app.gateway.sql_validator import SqlCheckResult, validate_dialect_compatibility
-
 
 WRITE_TERMS = (
     "删除", "修改", "更新", "写入", "插入", "新增记录", "建表", "删表", "清空",

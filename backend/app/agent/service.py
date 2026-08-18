@@ -10,8 +10,8 @@ from app.agent.ids import new_id
 from app.agent.intent import (
     build_smalltalk_response,
     classify_request_kind,
-    is_report_request,
     is_deterministic_conversation,
+    is_report_request,
 )
 from app.config import settings
 from app.db.models import (
@@ -227,7 +227,6 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
         from app.agent.runner import (
             execute_inline_conversation,
             execute_inline_report_clarification,
-            execute_inline_report_request,
             execute_inline_route,
             report_brief_missing_details,
             _resolve_report_brief_semantics,

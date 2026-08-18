@@ -14,11 +14,15 @@ from app.db.models import (
     AnalysisMessage,
     AnalysisRun,
     AnalysisSession,
+    AuditLog,
     DataSource,
     DataTable,
+    GovernedModel,
     KnowledgeMetric,
     KnowledgeTopic,
     MetricSourceBinding,
+    TableField,
+    TableRelation,
 )
 from app.db.platform import PlatformSession
 
@@ -215,3 +219,130 @@ def get_business_overview(
             "items": recent_tasks,
         },
     }
+
+
+@router.get("/admin")
+def get_admin_overview():
+    """管理员治理总览：以指标、资源、模型与审计拦截的真实状态为事实。"""
+    with PlatformSession() as session:
+        metrics = session.query(KnowledgeMetric).all()
+        pending_metrics = [item for item in metrics if item.status == "待审核"]
+        published_count = sum(1 for item in metrics if item.status == "已发布")
+        publish_rate = round(published_count * 100 / len(metrics)) if metrics else 0
+
+        table_count = session.query(DataTable).filter_by(registered=True).count()
+        relation_count = session.query(TableRelation).count()
+        unmapped_fields = session.query(TableField).filter(TableField.cn_name == "").count()
+
+        model_total = session.query(GovernedModel).count()
+        model_published = session.query(GovernedModel).filter_by(status="published").count()
+        model_pending = session.query(GovernedModel).filter(
+            GovernedModel.status.in_(["pending", "reviewing"])
+        ).count()
+
+        intercept_count = session.query(AuditLog).filter_by(result="已拦截").count()
+        intercept_records = (
+            session.query(AuditLog)
+            .filter_by(result="已拦截")
+            .order_by(AuditLog.created_at.desc())
+            .limit(3)
+            .all()
+        )
+        topic_rows = (
+            session.query(KnowledgeTopic)
+            .filter_by(enabled=True)
+            .order_by(KnowledgeTopic.code)
+            .all()
+        )
+        latest_scan = session.query(func.max(DataTable.scanned_at)).scalar()
+
+        health = [
+            {
+                "icon": "knowledge",
+                "label": "业务语义",
+                "value": f"{publish_rate}%",
+                "note": f"{len(metrics)} 个指标 · {len(pending_metrics)} 个待审核",
+                "tone": "blue",
+                "page": "knowledge",
+            },
+            {
+                "icon": "database",
+                "label": "数据资源",
+                "value": str(table_count),
+                "note": f"{table_count} 张表 · {relation_count} 条关系",
+                "tone": "teal",
+                "page": "resources",
+            },
+            {
+                "icon": "model",
+                "label": "模型治理",
+                "value": str(model_total),
+                "note": f"{model_published} 个已发布 · {model_pending} 个待复核",
+                "tone": "violet",
+                "page": "model-governance",
+            },
+            {
+                "icon": "shield",
+                "label": "安全运行",
+                "value": "100%",
+                "note": f"只读策略与审计已启用 · 拦截 {intercept_count} 次已记录",
+                "tone": "green",
+                "page": "security",
+            },
+        ]
+
+        queue: list[dict] = []
+        for metric in pending_metrics[:3]:
+            queue.append(
+                {
+                    "index": f"{len(queue) + 1:02d}",
+                    "title": f"审核“{metric.name}”指标口径",
+                    "note": f"{metric.owner} 提交 · {metric.topic} 主题",
+                    "status": "待审核",
+                    "tone": "amber",
+                    "page": "knowledge",
+                }
+            )
+        if unmapped_fields:
+            queue.append(
+                {
+                    "index": f"{len(queue) + 1:02d}",
+                    "title": "确认数据字段映射",
+                    "note": f"{unmapped_fields} 个字段尚未补充业务中文名",
+                    "status": "待映射",
+                    "tone": "blue",
+                    "page": "resources",
+                }
+            )
+        for record in intercept_records:
+            queue.append(
+                {
+                    "index": f"{len(queue) + 1:02d}",
+                    "title": "复核危险 SQL 拦截记录",
+                    "note": (record.action or "").strip()[:60],
+                    "status": "已拦截",
+                    "tone": "red",
+                    "page": "security",
+                }
+            )
+
+        pending_categories = sum(bool(n) for n in (len(pending_metrics), unmapped_fields, intercept_count))
+        detail = " · ".join(
+            [
+                f"{len(pending_metrics)} 个指标待审核",
+                f"{unmapped_fields} 个字段待映射",
+                f"{intercept_count} 条拦截记录待复核",
+            ]
+        )
+
+        return {
+            "summary": {
+                "categoryCount": pending_categories,
+                "detail": detail,
+                "baseline": "治理基线正常" if pending_categories == 0 else f"{pending_categories} 类事项待处理",
+                "lastCheck": latest_scan.strftime("%H:%M") if latest_scan else "",
+            },
+            "health": health,
+            "queue": queue,
+            "topics": [{"name": item.name, "coverage": item.coverage} for item in topic_rows],
+        }

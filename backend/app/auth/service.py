@@ -13,8 +13,9 @@ import json
 import re
 import secrets
 import time
-from datetime import datetime, timedelta
 from typing import Any
+
+from sqlalchemy.exc import IntegrityError
 
 from app.agent.ids import new_id
 from app.audit.service import write_audit
@@ -27,7 +28,6 @@ from app.auth.email_verification import (
 from app.config import settings
 from app.db.models import DataScopePolicy, DataSource, PlatformUser
 from app.db.platform import PlatformSession
-from sqlalchemy.exc import IntegrityError
 
 SCRYPT_N, SCRYPT_R, SCRYPT_P, SCRYPT_DKLEN = 2**14, 8, 1, 32
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,30}$")

@@ -1,6 +1,4 @@
-import { adminHealth, governanceQueue } from "../mocks/data";
 import { httpGet } from "./_http";
-import { respond } from "./_client";
 import { currentUserId } from "../lib/auth";
 
 export async function getBusinessOverview(sourceId, userId = currentUserId()) {
@@ -11,8 +9,5 @@ export async function getBusinessOverview(sourceId, userId = currentUserId()) {
 }
 
 export async function getAdminOverview() {
-  return respond({
-    health: adminHealth,
-    queue: governanceQueue,
-  });
+  return httpGet("/api/overview/admin");
 }

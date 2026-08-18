@@ -17,7 +17,6 @@ from app.db.models import (
 )
 from app.db.platform import Base
 
-
 NOW = datetime(2026, 8, 13, 8, 0, 0)
 
 
