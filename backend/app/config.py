@@ -57,6 +57,16 @@ class Settings(BaseSettings):
 
     feishu_webhook_url: str = ""
     feishu_webhook_secret: str = ""
+    # 飞书企业自建应用机器人（单聊双向问析），与上面的群 Webhook 推送是两套能力。
+    feishu_bot_enabled: bool = False
+    feishu_bot_app_id: str = ""
+    feishu_bot_app_secret: str = ""
+    # open_id -> {"userId": "业务账号", "sourceId": 1}。未绑定用户默认拒绝访问。
+    feishu_bot_bindings_json: str = "{}"
+    feishu_bot_poll_seconds: float = 0.75
+    feishu_bot_lease_seconds: int = 360
+    feishu_bot_max_attempts: int = 3
+    feishu_bot_max_concurrency: int = 4
     public_app_url: str = "http://127.0.0.1:3001"
 
     modeling_storage_dir: str = "modeling_artifacts"

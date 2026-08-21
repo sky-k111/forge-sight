@@ -304,6 +304,16 @@ cd backend
 - 后端地址：<http://127.0.0.1:8000>
 - 接口文档：<http://127.0.0.1:8000/docs>
 
+如需启用“飞书私聊提问、飞书原会话返回”的企业自建应用机器人，完成应用
+权限与 `backend/.env` 配置后，另开进程运行：
+
+```powershell
+.venv\Scripts\python.exe scripts\run_feishu_bot.py
+```
+
+它不是报告模块使用的群 Webhook 机器人。完整配置见
+[`docs/integrations/FEISHU_P2P_BOT.md`](docs/integrations/FEISHU_P2P_BOT.md)。
+
 ### 5. 启动前端
 
 另开一个 PowerShell 窗口：
@@ -345,6 +355,7 @@ forge-sight/
 │   │   ├── db/                    # SQLAlchemy 模型与数据库会话
 │   │   ├── delivery/              # 邮件模板、SMTP、投递队列与重试
 │   │   ├── gateway/               # SQL 安全执行网关
+│   │   ├── integrations/          # 飞书等外部协作渠道适配
 │   │   ├── knowledge/             # 业务知识与指标口径
 │   │   ├── metadata/              # 元数据扫描与语义理解
 │   │   ├── messages/              # 消息中心与管理员公告

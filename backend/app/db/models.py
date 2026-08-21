@@ -476,6 +476,72 @@ class AnalysisBranch(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class ExternalChatConversation(Base):
+    """外部会话与 ForgeSight 分析会话的稳定映射。
+
+    当前由飞书单聊机器人使用；保留 channel 字段，后续接钉钉/企微时不需要
+    再复制一套会话模型。外部渠道只能绑定到一个明确的用户与数据源，禁止
+    退化成无身份、可遍历全部数据源的公共入口。
+    """
+
+    __tablename__ = "external_chat_conversation"
+    __table_args__ = (
+        UniqueConstraint(
+            "channel", "tenant_key", "external_chat_id", name="uq_external_chat_conversation"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    channel: Mapped[str] = mapped_column(String(24), index=True)
+    tenant_key: Mapped[str] = mapped_column(String(80), default="", index=True)
+    external_chat_id: Mapped[str] = mapped_column(String(120), index=True)
+    external_user_id: Mapped[str] = mapped_column(String(120), index=True)
+    platform_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    source_id: Mapped[int] = mapped_column(Integer, index=True)
+    analysis_session_id: Mapped[str] = mapped_column(String(40), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ExternalChatJob(Base):
+    """外部消息的持久化收件箱与投递状态。
+
+    飞书要求事件处理快速返回，不能在事件回调内等待 Agent。消息先以
+    external_message_id 幂等落库，再由机器人进程异步执行和回复；进程重启后
+    未完成任务仍可重新认领。
+    """
+
+    __tablename__ = "external_chat_job"
+    __table_args__ = (
+        UniqueConstraint("channel", "external_message_id", name="uq_external_chat_message"),
+        CheckConstraint("attempt_count >= 0", name="ck_external_chat_attempt_count"),
+        Index("ix_external_chat_job_claim", "channel", "status", "lease_expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    channel: Mapped[str] = mapped_column(String(24), index=True)
+    tenant_key: Mapped[str] = mapped_column(String(80), default="", index=True)
+    external_message_id: Mapped[str] = mapped_column(String(120))
+    external_chat_id: Mapped[str] = mapped_column(String(120), index=True)
+    external_user_id: Mapped[str] = mapped_column(String(120), index=True)
+    question: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    analysis_session_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    run_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    ack_message_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    result_message_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    result_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    lease_owner: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class ReportTemplate(Base):
     """报告模板只描述业务问题，不绑定具体企业的物理表字段。"""
 

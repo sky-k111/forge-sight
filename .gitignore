@@ -60,3 +60,8 @@ tmp/
 temp/
 *.tmp
 *.bak
+
+# 未定稿的优化方向/调研文档（内部讨论，不提交）
+docs/phase-7-metric-engine/
+docs/phase-8-self-learning/
+docs/research/
