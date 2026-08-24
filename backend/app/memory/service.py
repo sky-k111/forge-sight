@@ -26,6 +26,7 @@ from app.db.models import (
     AnalysisRun,
     AnalysisSession,
     AnalysisSkill,
+    ExternalChatJob,
     PlatformFeatureFlag,
 )
 from app.db.platform import PlatformSession
@@ -489,6 +490,13 @@ def capture_run(run_id: str, *, db_session=None) -> list[dict]:
         trigger = session.query(AnalysisMessage).filter_by(id=run.trigger_message_id).first()
         if business_session is None or trigger is None:
             return []
+        external_job = (
+            session.query(ExternalChatJob)
+            .filter_by(run_id=run.id)
+            .order_by(ExternalChatJob.created_at.desc())
+            .first()
+        )
+        channel = external_job.channel if external_job is not None else "web"
         created: list[dict] = []
         config = dict(setting.config_json or {})
         if config.get("captureExplicitPreferences", True):
@@ -496,6 +504,7 @@ def capture_run(run_id: str, *, db_session=None) -> list[dict]:
                 created.append(remember(
                     candidate["content"], user_id=business_session.user_id, source_id=run.source_id,
                     memory_kind=candidate["kind"], title=candidate["title"], session_id=run.session_id,
+                    channel=channel,
                     explicit=True, confidence=candidate["confidence"], importance=candidate["importance"],
                     evidence_type="message", reference_id=trigger.id, db_session=session,
                 ))
@@ -511,8 +520,14 @@ def capture_run(run_id: str, *, db_session=None) -> list[dict]:
             created.append(remember(
                 content, user_id=business_session.user_id, source_id=run.source_id,
                 memory_kind="episodic", title=trigger.content[:100], session_id=run.session_id,
+                channel=channel,
                 explicit=False, confidence=0.76, importance=0.56, status="active",
-                metadata={"runId": run.id, "outcome": run.status, "workflowVersion": run.workflow_version},
+                metadata={
+                    "runId": run.id,
+                    "outcome": run.status,
+                    "workflowVersion": run.workflow_version,
+                    "externalTenantKey": external_job.tenant_key if external_job is not None else "",
+                },
                 evidence_type="run", reference_id=run.id, excerpt=trigger.content, db_session=session,
             ))
         if owns_session:
@@ -588,11 +603,41 @@ def claim_next_job(worker_id: str) -> str | None:
     """Atomically lease one job; PostgreSQL skip-locked permits safe horizontal workers."""
     with PlatformSession() as session:
         now = datetime.now()
+        exhausted = (
+            session.query(AgentMemoryJob)
+            .filter(
+                AgentMemoryJob.status == "running",
+                AgentMemoryJob.lease_expires_at.is_not(None),
+                AgentMemoryJob.lease_expires_at < now,
+                AgentMemoryJob.attempt_count >= AgentMemoryJob.max_attempts,
+            )
+            .all()
+        )
+        for item in exhausted:
+            item.status = "failed"
+            item.error = item.error or "memory worker lease expired after maximum attempts"
+            item.lease_owner = None
+            item.lease_expires_at = None
+        if exhausted:
+            session.flush()
         query = (
             session.query(AgentMemoryJob)
             .filter(
-                AgentMemoryJob.status == "queued",
-                or_(AgentMemoryJob.lease_expires_at.is_(None), AgentMemoryJob.lease_expires_at < now),
+                AgentMemoryJob.attempt_count < AgentMemoryJob.max_attempts,
+                or_(
+                    and_(
+                        AgentMemoryJob.status == "queued",
+                        or_(
+                            AgentMemoryJob.lease_expires_at.is_(None),
+                            AgentMemoryJob.lease_expires_at < now,
+                        ),
+                    ),
+                    and_(
+                        AgentMemoryJob.status == "running",
+                        AgentMemoryJob.lease_expires_at.is_not(None),
+                        AgentMemoryJob.lease_expires_at < now,
+                    ),
+                ),
             )
             .order_by(AgentMemoryJob.created_at)
         )

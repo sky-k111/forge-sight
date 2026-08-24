@@ -45,12 +45,11 @@ from app.db.models import (
     AnalysisInteraction,
     AnalysisRun,
     AnalysisSession,
-    DataSource,
     ExternalChatConversation,
     ExternalChatJob,
-    PlatformUser,
 )
 from app.db.platform import PlatformSession
+from app.integrations.access import allowed_source_ids, resolve_business_user, source_exists
 from app.integrations.feishu_charts import build_chart_specs, render_chart_png
 
 log = logging.getLogger(__name__)
@@ -197,17 +196,21 @@ def _question(message: Any) -> str:
     return text
 
 
-def _validate_binding(session, binding: Binding) -> None:
-    source = session.query(DataSource).filter_by(id=binding.source_id).first()
-    if source is None:
+def _validate_binding(session, binding: Binding) -> Binding:
+    if not source_exists(session, binding.source_id):
         raise FeishuBotConfigurationError(f"绑定的数据源 {binding.source_id} 不存在")
     if binding.user_id == "local-test-user":
-        return
-    user = session.query(PlatformUser).filter_by(username=binding.user_id).first()
+        return binding
+    user = resolve_business_user(session, binding.user_id)
     if user is None or not user.enabled or user.role != "business":
         raise FeishuBotConfigurationError(
             f"绑定账号 {binding.user_id} 不存在、已停用或不是业务人员"
         )
+    if binding.source_id not in allowed_source_ids(session, user.id):
+        raise FeishuBotConfigurationError(
+            f"绑定的数据源 {binding.source_id} 不在账号 {user.username} 的授权范围内"
+        )
+    return Binding(user_id=user.id, source_id=binding.source_id)
 
 
 def accept_message(
@@ -232,7 +235,7 @@ def accept_message(
     tenant_key = _tenant_key(message, config)
 
     with session_factory() as session:
-        _validate_binding(session, binding)
+        binding = _validate_binding(session, binding)
         existing_job = session.query(ExternalChatJob).filter_by(
             channel=CHANNEL,
             external_message_id=external_message_id,
@@ -406,6 +409,18 @@ def execute_job(
         row = session.query(ExternalChatJob).filter_by(id=job_id).first()
         if row is None:
             raise KeyError(f"外部消息任务 {job_id} 不存在")
+        conversation = session.get(ExternalChatConversation, row.conversation_id)
+        if conversation is None or conversation.status != "active":
+            raise FeishuBotConfigurationError("飞书会话已解绑或归档")
+        current_binding = parse_bindings(config.feishu_bot_bindings_json).get(row.external_user_id)
+        if current_binding is None:
+            raise FeishuBindingRequired(row.external_user_id)
+        current_binding = _validate_binding(session, current_binding)
+        if (
+            current_binding.user_id != conversation.platform_user_id
+            or current_binding.source_id != conversation.source_id
+        ):
+            raise FeishuBotConfigurationError("飞书账号或数据源绑定已变化，请重新发送问题")
         run_id = row.run_id
         analysis_session_id = row.analysis_session_id
         question = row.question

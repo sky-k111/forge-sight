@@ -6,7 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.db.models import AnalysisSession, ExternalChatConversation, ExternalChatJob
+from app.db.models import (
+    AnalysisSession,
+    DataScopePolicy,
+    ExternalChatConversation,
+    ExternalChatJob,
+    PlatformUser,
+)
 from app.integrations import feishu_p2p
 
 
@@ -79,6 +85,68 @@ def test_accept_message_rejects_unbound_user(analysis_session):
     assert error.value.external_user_id == "ou_unknown"
     with analysis_session() as session:
         assert session.query(ExternalChatJob).count() == 0
+
+
+def _seed_business_binding(session_factory, *, with_scope: bool = True) -> None:
+    with session_factory() as session:
+        user = PlatformUser(
+            id="usr-feishu",
+            username="feishu_user",
+            password_hash="test-only",
+            display_name="飞书用户",
+            role="business",
+            enabled=True,
+        )
+        session.add(user)
+        if with_scope:
+            session.add(
+                DataScopePolicy(
+                    id="scope-feishu",
+                    subject_type="user",
+                    subject_id=user.id,
+                    business_key="analysis",
+                    effect="allow",
+                    data_source_ids_json=[1],
+                )
+            )
+        session.commit()
+
+
+def test_business_binding_uses_canonical_user_and_requires_source_scope(analysis_session):
+    _seed_business_binding(analysis_session)
+    config = _config('{"ou_user":{"userId":"feishu_user","sourceId":1}}')
+
+    accepted = feishu_p2p.accept_message(
+        _message(),
+        config=config,
+        session_factory=analysis_session,
+    )
+
+    with analysis_session() as session:
+        conversation = session.get(ExternalChatConversation, session.get(ExternalChatJob, accepted.id).conversation_id)
+        assert conversation.platform_user_id == "usr-feishu"
+        analysis = session.get(AnalysisSession, conversation.analysis_session_id)
+        assert analysis.user_id == "usr-feishu"
+
+
+def test_queued_feishu_job_rechecks_revoked_scope(analysis_session):
+    _seed_business_binding(analysis_session)
+    config = _config('{"ou_user":{"userId":"feishu_user","sourceId":1}}')
+    accepted = feishu_p2p.accept_message(
+        _message(),
+        config=config,
+        session_factory=analysis_session,
+    )
+    with analysis_session() as session:
+        session.get(DataScopePolicy, "scope-feishu").effect = "deny"
+        session.commit()
+
+    with pytest.raises(feishu_p2p.FeishuBotConfigurationError, match="授权范围"):
+        feishu_p2p.execute_job(
+            accepted.id,
+            config=config,
+            session_factory=analysis_session,
+        )
 
 
 def test_claim_and_execute_job_reuses_agent_service(monkeypatch, analysis_session):

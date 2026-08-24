@@ -21,4 +21,5 @@ httpx==0.28.1
 pytest==9.1.1
 langgraph==1.2.10
 langgraph-checkpoint-postgres==3.1.2
+dingtalk-stream==0.24.3
 lark-channel-sdk==1.2.0

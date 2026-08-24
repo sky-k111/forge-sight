@@ -481,12 +481,7 @@ class AnalysisBranch(Base):
 
 
 class ExternalChatConversation(Base):
-    """外部会话与 ForgeSight 分析会话的稳定映射。
-
-    当前由飞书单聊机器人使用；保留 channel 字段，后续接钉钉/企微时不需要
-    再复制一套会话模型。外部渠道只能绑定到一个明确的用户与数据源，禁止
-    退化成无身份、可遍历全部数据源的公共入口。
-    """
+    """外部 IM 会话与 ForgeSight 分析会话的稳定映射。"""
 
     __tablename__ = "external_chat_conversation"
     __table_args__ = (
@@ -499,7 +494,7 @@ class ExternalChatConversation(Base):
     channel: Mapped[str] = mapped_column(String(24), index=True)
     tenant_key: Mapped[str] = mapped_column(String(80), default="", index=True)
     external_chat_id: Mapped[str] = mapped_column(String(120), index=True)
-    external_user_id: Mapped[str] = mapped_column(String(120), index=True)
+    external_user_id: Mapped[str] = mapped_column(String(160), index=True)
     platform_user_id: Mapped[str] = mapped_column(String(64), index=True)
     source_id: Mapped[int] = mapped_column(Integer, index=True)
     analysis_session_id: Mapped[str] = mapped_column(String(40), index=True)
@@ -730,18 +725,19 @@ class AnalysisSkillUsage(Base):
 
 
 class ExternalChatJob(Base):
-    """外部消息的持久化收件箱与投递状态。
-
-    飞书要求事件处理快速返回，不能在事件回调内等待 Agent。消息先以
-    external_message_id 幂等落库，再由机器人进程异步执行和回复；进程重启后
-    未完成任务仍可重新认领。
-    """
+    """外部消息的持久化收件箱与可恢复投递状态。"""
 
     __tablename__ = "external_chat_job"
     __table_args__ = (
         UniqueConstraint("channel", "external_message_id", name="uq_external_chat_message"),
         CheckConstraint("attempt_count >= 0", name="ck_external_chat_attempt_count"),
-        Index("ix_external_chat_job_claim", "channel", "status", "lease_expires_at"),
+        Index(
+            "ix_external_chat_job_claim",
+            "channel",
+            "status",
+            "next_attempt_at",
+            "lease_expires_at",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -749,8 +745,9 @@ class ExternalChatJob(Base):
     tenant_key: Mapped[str] = mapped_column(String(80), default="", index=True)
     external_message_id: Mapped[str] = mapped_column(String(120))
     external_chat_id: Mapped[str] = mapped_column(String(120), index=True)
-    external_user_id: Mapped[str] = mapped_column(String(120), index=True)
+    external_user_id: Mapped[str] = mapped_column(String(160), index=True)
     question: Mapped[str] = mapped_column(Text)
+    reply_target_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
     conversation_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     analysis_session_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
@@ -761,10 +758,98 @@ class ExternalChatJob(Base):
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     lease_owner: Mapped[str | None] = mapped_column(String(100), nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     error_summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class DingTalkBinding(Base):
+    """ForgeSight 用户与钉钉身份、默认数据源的受控绑定。"""
+
+    __tablename__ = "dingtalk_binding"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_dingtalk_binding_user"),
+        Index(
+            "uq_dingtalk_binding_corp_union",
+            "corp_id",
+            "union_id",
+            unique=True,
+            postgresql_where=text("union_id IS NOT NULL"),
+            sqlite_where=text("union_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_dingtalk_binding_corp_open",
+            "corp_id",
+            "open_id",
+            unique=True,
+            postgresql_where=text("open_id IS NOT NULL"),
+            sqlite_where=text("open_id IS NOT NULL"),
+        ),
+        Index("ix_dingtalk_binding_mobile", "mobile"),
+        Index("ix_dingtalk_binding_status", "bind_status"),
+        CheckConstraint(
+            "union_id IS NOT NULL OR open_id IS NOT NULL",
+            name="ck_dingtalk_binding_identity",
+        ),
+        CheckConstraint(
+            "bind_status IN ('bound', 'unbound', 'disabled')",
+            name="ck_dingtalk_binding_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("platform_user.id", ondelete="CASCADE"),
+        index=True,
+    )
+    corp_id: Mapped[str] = mapped_column(String(64), default="")
+    union_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    open_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("data_source.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    mobile: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    display_name: Mapped[str] = mapped_column(String(100), default="")
+    avatar: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bind_status: Mapped[str] = mapped_column(String(24), default="bound")
+    last_auth_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class DingTalkOAuthState(Base):
+    """钉钉 OAuth 绑定过程中的一次性 state。"""
+
+    __tablename__ = "dingtalk_oauth_state"
+    __table_args__ = (
+        UniqueConstraint("state_token", name="uq_dingtalk_oauth_state_token"),
+        Index("ix_dingtalk_oauth_state_user", "user_id"),
+        Index("ix_dingtalk_oauth_state_expires", "expires_at"),
+        CheckConstraint(
+            "purpose IN ('bind', 'login')",
+            name="ck_dingtalk_oauth_state_purpose",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        String(40),
+        ForeignKey("platform_user.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    state_token: Mapped[str] = mapped_column(String(128))
+    corp_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    redirect_path: Mapped[str] = mapped_column(String(255), default="")
+    purpose: Mapped[str] = mapped_column(String(24), default="bind")
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
 class ReportTemplate(Base):

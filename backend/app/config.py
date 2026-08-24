@@ -67,6 +67,20 @@ class Settings(BaseSettings):
     feishu_bot_lease_seconds: int = 360
     feishu_bot_max_attempts: int = 3
     feishu_bot_max_concurrency: int = 4
+
+    # 钉钉企业内部应用：OAuth 负责账号绑定，Stream 负责双向问析。
+    dingtalk_client_id: str = ""
+    dingtalk_client_secret: str = ""
+    dingtalk_agent_id: str = ""
+    dingtalk_redirect_uri: str = ""
+    dingtalk_authorize_url_template: str = ""
+    dingtalk_oauth_state_ttl_seconds: int = 600
+    dingtalk_robot_code: str = ""
+    dingtalk_bot_poll_seconds: float = 0.75
+    dingtalk_bot_lease_seconds: int = 360
+    dingtalk_bot_max_attempts: int = 3
+    dingtalk_bot_max_concurrency: int = 4
+    dingtalk_bot_result_wait_seconds: int = 30
     public_app_url: str = "http://127.0.0.1:3001"
 
     modeling_storage_dir: str = "modeling_artifacts"

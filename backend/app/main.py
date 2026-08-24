@@ -12,6 +12,7 @@ from app.api import (
     auth,
     datasources,
     deliveries,
+    dingtalk,
     gateway,
     knowledge,
     memory,
@@ -132,6 +133,7 @@ app.add_middleware(
 
 app.include_router(security.router)
 app.include_router(auth.router)
+app.include_router(dingtalk.router)
 app.include_router(gateway.router)
 app.include_router(resources.router)
 app.include_router(datasources.router)
