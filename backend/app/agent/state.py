@@ -25,6 +25,8 @@ class AnalysisState(TypedDict, total=False):
     task_results: list[dict[str, Any]]
     clarification_response: dict[str, Any] | None
     semantic_context: dict[str, Any]
+    skill_enhancement_enabled: bool
+    skill_context: dict[str, Any]
     metric_resolution: dict[str, Any]
     confidence: dict[str, Any]
     sql: str

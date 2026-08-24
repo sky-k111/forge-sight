@@ -71,6 +71,12 @@ def test_predict_endpoint(modeling_session):
         f"/api/v1/modeling/tasks/{task['id']}/train",
         json={"strategy": "auto", "candidateIds": ["logistic"], "userId": "zhangsan"},
     )
+    model = client.get("/api/v1/model-governance/models").json()["items"][0]
+    client.post(
+        f"/api/v1/model-governance/models/{model['id']}/review",
+        json={"userId": "admin", "decision": "pass", "comment": "指标达标"},
+    )
+    client.post(f"/api/v1/model-governance/models/{model['id']}/publish", json={"userId": "admin"})
     resp = client.post(
         f"/api/v1/modeling/tasks/{task['id']}/predict",
         json={
@@ -96,12 +102,16 @@ def test_governance_endpoints(modeling_session):
     model = client.get("/api/v1/model-governance/models").json()["items"][0]
     assert model["status"] == "pending"
 
-    # 复核通过
+    # 复核通过后显式发布
     reviewed = client.post(
         f"/api/v1/model-governance/models/{model['id']}/review",
         json={"userId": "admin", "decision": "pass", "comment": "指标达标"},
     ).json()
-    assert reviewed["status"] == "published"
+    assert reviewed["status"] == "reviewing"
+    published_model = client.post(
+        f"/api/v1/model-governance/models/{model['id']}/publish", json={"userId": "admin"}
+    ).json()
+    assert published_model["status"] == "published"
     # 按状态过滤
     published = client.get("/api/v1/model-governance/models?status=published").json()["items"]
     assert len(published) == 1
@@ -110,6 +120,55 @@ def test_governance_endpoints(modeling_session):
         f"/api/v1/model-governance/models/{model['id']}/retire", json={"userId": "admin"}
     ).json()
     assert retired["status"] == "retired"
+
+
+def test_automl_diagnostics_versions_reuse_and_threshold_governance(modeling_session):
+    task = _create_task()
+    diagnostics = client.post(f"/api/v1/modeling/tasks/{task['id']}/diagnostics", json={})
+    assert diagnostics.status_code == 200
+    assert diagnostics.json()["status"] in {"ready", "warning"}
+
+    trained = client.post(
+        f"/api/v1/modeling/tasks/{task['id']}/train",
+        json={
+            "strategy": "auto",
+            "candidateIds": ["logistic"],
+            "optimizationLevel": "balanced",
+            "userId": "zhangsan",
+        },
+    )
+    assert trained.status_code == 200
+    assert trained.json()["results"]["models"][0]["tuning"]["optimizationLevel"] == "balanced"
+
+    versions = client.get(f"/api/v1/modeling/tasks/{task['id']}/versions")
+    assert versions.status_code == 200
+    assert len(versions.json()["models"]) == 1
+
+    model = client.get(f"/api/v1/model-governance/models?taskId={task['id']}").json()["items"][0]
+    client.post(
+        f"/api/v1/model-governance/models/{model['id']}/review",
+        json={"userId": "admin", "decision": "pass", "comment": "受控搜索通过"},
+    )
+    client.post(f"/api/v1/model-governance/models/{model['id']}/publish", json={"userId": "admin"})
+
+    reusable = client.get(
+        "/api/v1/modeling/reusable-models",
+        params={"question": "识别高不良风险生产记录", "sourceId": 1, "taskType": "classification"},
+    )
+    assert reusable.status_code == 200
+    assert reusable.json()["items"][0]["modelId"] == model["id"]
+
+    variant = client.post(
+        f"/api/v1/model-governance/models/{model['id']}/threshold-variant",
+        json={"userId": "admin", "threshold": 0.35, "reason": "降低漏报"},
+    )
+    assert variant.status_code == 201
+    assert variant.json()["decisionThreshold"] == 0.35
+    client.post(f"/api/v1/model-governance/models/{variant.json()['id']}/publish", json={"userId": "admin"})
+
+    restored = client.post(f"/api/v1/model-governance/models/{model['id']}/rollback", json={"userId": "admin"})
+    assert restored.status_code == 200
+    assert restored.json()["status"] == "published"
 
 
 def test_error_mapping(modeling_session):

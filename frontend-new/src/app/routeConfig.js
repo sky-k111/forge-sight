@@ -10,6 +10,7 @@ export const routeByPage = {
   knowledge: "/admin/knowledge",
   resources: "/admin/resources",
   "model-governance": "/admin/models",
+  "skill-governance": "/admin/skills",
   settings: "/admin/settings",
   security: "/admin/security",
   announcements: "/admin/announcements",

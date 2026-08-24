@@ -188,6 +188,9 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
             content=normalized_question,
             sequence_no=sequence_no,
         )
+        from app.skills.service import snapshot_settings
+
+        skill_setting = snapshot_settings(session)
         run = AnalysisRun(
             id=new_id("run"),
             session_id=session_id,
@@ -195,6 +198,8 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
             idempotency_key=idempotency_key,
             source_id=parent.source_id,
             budget_snapshot_json=default_budget(),
+            skill_enhancement_enabled=skill_setting["enabled"],
+            skill_experiment_variant=skill_setting["variant"],
         )
         if inline_conversation:
             now = datetime.now()
@@ -447,6 +452,9 @@ def create_branch(
             if value not in (None, "", [], {})
         }
         if instruction and instruction.strip():
+            from app.skills.service import snapshot_settings
+
+            skill_setting = snapshot_settings(session)
             message = AnalysisMessage(
                 id=new_id("msg"),
                 session_id=child.id,
@@ -468,6 +476,8 @@ def create_branch(
                 trigger_message_id=message.id,
                 source_id=child.source_id,
                 budget_snapshot_json=default_budget(),
+                skill_enhancement_enabled=skill_setting["enabled"],
+                skill_experiment_variant=skill_setting["variant"],
             )
             message.run_id = run.id
             session.add_all([message, run])
@@ -687,6 +697,10 @@ def _run_summary(run: AnalysisRun) -> dict:
         "status": run.status,
         "currentStepKey": run.current_step_key,
         "workflowVersion": run.workflow_version,
+        "skillEnhancement": {
+            "enabled": bool(run.skill_enhancement_enabled),
+            "variant": run.skill_experiment_variant,
+        },
         "lastSeq": run.last_event_seq,
         "errorCode": run.error_code,
         "usage": {

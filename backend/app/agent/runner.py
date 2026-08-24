@@ -61,7 +61,8 @@ NODE_META = {
     "route_request": ("intent.route", 0, "判断问题类型"),
     "intent_guard": ("intent.guard", 1, "检查只读分析边界"),
     "plan_tasks": ("intent.parse", 2, "理解并拆解业务问题"),
-    "retrieve_context": ("context.retrieve", 3, "定位数据资源"),
+    "retrieve_skill": ("skill.retrieve", 3, "匹配分析技能"),
+    "retrieve_context": ("context.retrieve", 4, "定位数据资源"),
     "propose_modeling": ("modeling.propose", 4, "生成建模方案"),
     "generate_query": ("query.generate", 4, "生成只读 SQL"),
     "validate_query": ("query.validate", 5, "安全与语义校验"),
@@ -156,12 +157,17 @@ def _explain_for_source(sql: str, source_id: int) -> ExplainCheckResult:
 
 
 def default_dependencies() -> GraphDependencies:
+    from app.modeling.service import find_reusable_models
+    from app.skills.service import retrieve_skills
+
     return GraphDependencies(
         retrieve_context=lambda question, source_id: build_context_package(question, source_id),
         generate_text=_tracked_generate,
         validate_sql=validate_sql,
         execute_sql=_execute_for_source,
         explain_sql=_explain_for_source,
+        retrieve_skills=retrieve_skills,
+        find_reusable_models=find_reusable_models,
     )
 
 
@@ -321,6 +327,7 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
             )
 
         artifact_map = {
+            "retrieve_skill": ("analysis-skill", update.get("skill_context")),
             "retrieve_context": ("context", update.get("semantic_context")),
             "propose_modeling": ("modeling-proposal", update.get("modeling_proposal")),
             "generate_query": (
@@ -343,6 +350,10 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
         }
         if node in artifact_map and artifact_map[node][1] is not None:
             artifact_id = _artifact(session, run, task_id, *artifact_map[node])
+        if node == "retrieve_skill":
+            from app.skills.service import record_usage
+
+            record_usage(run.id, task_id, update.get("skill_context") or {}, db_session=session)
             step.output_refs_json = [artifact_id]
 
         event_type = {
@@ -508,11 +519,19 @@ def _finish_run(run_id: str, state: dict) -> None:
                 .scalar()
                 + 1
             )
-            content = (
-                f"已生成建模方案：{proposal.get('dataset')}·{proposal.get('taskTypeLabel')}模型，"
-                f"预测目标「{proposal.get('targetLabel') or proposal.get('target')}」。"
-                "确认后将在智能建模中创建任务，训练前可继续调整特征与候选算法。"
-            )
+            if proposal.get("recommendedAction") == "reuse":
+                reusable = proposal.get("reusableModel") or {}
+                content = (
+                    f"已找到可复用的已发布模型：{reusable.get('name')} v{reusable.get('version')}，"
+                    f"用于预测「{reusable.get('targetLabel') or reusable.get('targetField')}」。"
+                    "本次不会重复训练；需要批量推理时将继续沿用该生产版本，并保留调用记录。"
+                )
+            else:
+                content = (
+                    f"已生成建模方案：{proposal.get('dataset')}·{proposal.get('taskTypeLabel')}模型，"
+                    f"预测目标「{proposal.get('targetLabel') or proposal.get('target')}」。"
+                    "确认后将在智能建模中创建任务，训练前可继续调整特征与候选算法。"
+                )
             session.add(
                 AnalysisMessage(
                     id=new_id("msg"),
@@ -566,6 +585,9 @@ def _finish_run(run_id: str, state: dict) -> None:
             event_type,
             {"status": run.status, "error": state.get("error")},
         )
+        from app.skills.service import finish_run_usage
+
+        finish_run_usage(run_id, run.status, db_session=session)
         session.commit()
     # 报告 Run 完成后立即冻结章节产物。普通问析 Run 没有关联报告时该调用为空操作。
     from app.reports.service import sync_report_from_run
@@ -628,6 +650,8 @@ def execute_inline_conversation(run_id: str, direct_response: str | None = None)
             "session_id": run.session_id,
             "run_id": run.id,
             "source_id": run.source_id,
+            "skill_enhancement_enabled": bool(run.skill_enhancement_enabled),
+            "skill_context": {},
             "user_question": message.content,
             "conversation_context": context,
             "retry_count": 0,

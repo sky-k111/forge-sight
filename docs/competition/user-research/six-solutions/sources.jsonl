@@ -1,0 +1,20 @@
+{"source_id":"S01","title":"制造业生产质量分析数据介绍与CSV","url":"local:D:/aaa/a-外包/data/数据介绍.md","type":"primary-local-data","accessed_at":"2026-08-22"}
+{"source_id":"S02","title":"ThingsBoard Alarms","url":"https://thingsboard.io/docs/user-guide/alarms/","type":"official-docs","accessed_at":"2026-08-22"}
+{"source_id":"S03","title":"ThingsBoard Alarm Rules and Notification Triggers","url":"https://thingsboard.io/docs/user-guide/alarm-rules/","type":"official-docs","accessed_at":"2026-08-22"}
+{"source_id":"S04","title":"Oracle Production Supervisor Shift Report","url":"https://docs.oracle.com/en/cloud/saas/readiness/scm/24d/mfg24d/24D-mfg-wn-f34294.htm","type":"official-product-docs","accessed_at":"2026-08-22"}
+{"source_id":"S05","title":"PM4Py Object-Centric Process Mining API","url":"https://github.com/process-intelligence-solutions/pm4py/blob/release/docs/source/api.rst","type":"primary-source-code","accessed_at":"2026-08-22"}
+{"source_id":"S06","title":"How Object-Centric Process Mining Helps","url":"https://www.vdaalst.com/publications/p1520.pdf","type":"academic","accessed_at":"2026-08-22"}
+{"source_id":"S07","title":"Eclipse BaSyx Python SDK","url":"https://github.com/eclipse-basyx/basyx-python-sdk","type":"primary-source-code","accessed_at":"2026-08-22"}
+{"source_id":"S08","title":"LangChain Human-in-the-loop Middleware","url":"https://github.com/langchain-ai/docs/blob/main/src/oss/langchain/human-in-the-loop.mdx","type":"official-docs","accessed_at":"2026-08-22"}
+{"source_id":"S09","title":"LangGraph Persistence","url":"https://github.com/langchain-ai/docs/blob/main/src/oss/langgraph/persistence.mdx","type":"official-docs","accessed_at":"2026-08-22"}
+{"source_id":"S10","title":"Temporal Workflow Execution","url":"https://github.com/temporalio/documentation/blob/main/docs/encyclopedia/workflow/workflow-execution/workflow-execution.mdx","type":"official-docs","accessed_at":"2026-08-22"}
+{"source_id":"S11","title":"Camunda BPMN User Tasks","url":"https://docs.camunda.io/docs/components/modeler/bpmn/user-tasks/","type":"official-docs","accessed_at":"2026-08-22"}
+{"source_id":"S12","title":"OpenMetadata Standards","url":"https://github.com/open-metadata/OpenMetadataStandards","type":"standard-source-code","accessed_at":"2026-08-22"}
+{"source_id":"S13","title":"OpenLineage","url":"https://github.com/OpenLineage/OpenLineage","type":"standard-source-code","accessed_at":"2026-08-22"}
+{"source_id":"S14","title":"Phoenix AI Observability and Evaluation","url":"https://github.com/Arize-ai/phoenix","type":"primary-source-code","accessed_at":"2026-08-22"}
+{"source_id":"S15","title":"Langfuse","url":"https://github.com/langfuse/langfuse","type":"primary-source-code","accessed_at":"2026-08-22"}
+{"source_id":"S16","title":"Argilla","url":"https://github.com/argilla-io/argilla","type":"primary-source-code","accessed_at":"2026-08-22"}
+{"source_id":"S17","title":"LangMem","url":"https://github.com/langchain-ai/langmem","type":"primary-source-code","accessed_at":"2026-08-22"}
+{"source_id":"S18","title":"DSPy GEPA","url":"https://github.com/stanfordnlp/dspy/blob/main/docs/docs/diving-deeper/gepa-in-depth.md","type":"official-docs","accessed_at":"2026-08-22"}
+{"source_id":"S19","title":"ERPNext Job Card","url":"https://github.com/frappe/erpnext/blob/develop/erpnext/manufacturing/doctype/job_card/job_card.py","type":"primary-source-code","accessed_at":"2026-08-22"}
+{"source_id":"S20","title":"Temporal OpenAI Agents Integration","url":"https://github.com/temporalio/sdk-python/blob/main/temporalio/contrib/openai_agents/README.md","type":"official-source-code","accessed_at":"2026-08-22"}

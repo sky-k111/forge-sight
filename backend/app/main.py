@@ -23,6 +23,7 @@ from app.api import (
     resources,
     retrieval,
     security,
+    skills,
 )
 from app.config import settings
 from app.db import models  # noqa: F401 - 注册 ORM 模型供 create_all 使用
@@ -51,6 +52,9 @@ def create_platform_tables():
             scan_default_source(auto_register=True)
     seed_knowledge()
     seed_report_templates()
+    from app.skills.seed import seed_analysis_skills
+
+    seed_analysis_skills()
     from app.auth.service import seed_admin, seed_default_report_scopes
 
     seed_admin()
@@ -126,6 +130,7 @@ app.include_router(knowledge.router)
 app.include_router(messages.router)
 app.include_router(retrieval.router)
 app.include_router(analysis.router)
+app.include_router(skills.router)
 app.include_router(overview.router)
 app.include_router(operations.router)
 app.include_router(reports.router)

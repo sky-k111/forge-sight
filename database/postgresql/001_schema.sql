@@ -126,6 +126,8 @@ CREATE TABLE IF NOT EXISTS analysis_run (
 	estimated_cost NUMERIC(18, 8) NOT NULL,
 	currency VARCHAR(8) NOT NULL,
 	budget_snapshot_json JSONB NOT NULL,
+	skill_enhancement_enabled BOOLEAN NOT NULL,
+	skill_experiment_variant VARCHAR(16) NOT NULL,
 	lease_owner VARCHAR(100),
 	lease_expires_at TIMESTAMP WITHOUT TIME ZONE,
 	started_at TIMESTAMP WITHOUT TIME ZONE,
@@ -176,6 +178,52 @@ CREATE TABLE IF NOT EXISTS analysis_session (
 CREATE INDEX IF NOT EXISTS ix_analysis_session_source_id ON analysis_session (source_id);
 CREATE INDEX IF NOT EXISTS ix_analysis_session_user_id ON analysis_session (user_id);
 
+CREATE TABLE IF NOT EXISTS analysis_skill (
+	id VARCHAR(40) NOT NULL,
+	source_id INTEGER,
+	name VARCHAR(160) NOT NULL,
+	slug VARCHAR(120) NOT NULL,
+	description TEXT NOT NULL,
+	topic VARCHAR(50) NOT NULL,
+	status VARCHAR(20) NOT NULL,
+	version INTEGER NOT NULL,
+	trigger_json JSONB NOT NULL,
+	preconditions_json JSONB NOT NULL,
+	procedure_json JSONB NOT NULL,
+	output_policy_json JSONB NOT NULL,
+	constraints_json JSONB NOT NULL,
+	evidence_run_ids_json JSONB NOT NULL,
+	confidence NUMERIC(5, 4) NOT NULL,
+	created_by VARCHAR(64) NOT NULL,
+	reviewed_by VARCHAR(64),
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	published_at TIMESTAMP WITHOUT TIME ZONE,
+	retired_at TIMESTAMP WITHOUT TIME ZONE,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_analysis_skill_version UNIQUE (slug, source_id, version)
+);
+CREATE INDEX IF NOT EXISTS ix_analysis_skill_slug ON analysis_skill (slug);
+CREATE INDEX IF NOT EXISTS ix_analysis_skill_source_id ON analysis_skill (source_id);
+CREATE INDEX IF NOT EXISTS ix_analysis_skill_status ON analysis_skill (status);
+
+CREATE TABLE IF NOT EXISTS analysis_skill_usage (
+	id VARCHAR(40) NOT NULL,
+	run_id VARCHAR(40) NOT NULL,
+	task_id VARCHAR(40),
+	skill_id VARCHAR(40) NOT NULL,
+	variant VARCHAR(16) NOT NULL,
+	relevance_score NUMERIC(8, 6) NOT NULL,
+	applied BOOLEAN NOT NULL,
+	outcome VARCHAR(24),
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	finished_at TIMESTAMP WITHOUT TIME ZONE,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_analysis_skill_usage UNIQUE (run_id, task_id, skill_id)
+);
+CREATE INDEX IF NOT EXISTS ix_analysis_skill_usage_run_id ON analysis_skill_usage (run_id);
+CREATE INDEX IF NOT EXISTS ix_analysis_skill_usage_skill_id ON analysis_skill_usage (skill_id);
+
 CREATE TABLE IF NOT EXISTS analysis_task (
 	id VARCHAR(40) NOT NULL,
 	run_id VARCHAR(40) NOT NULL,
@@ -214,6 +262,7 @@ CREATE TABLE IF NOT EXISTS announcement (
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	published_at TIMESTAMP WITHOUT TIME ZONE,
 	withdrawn_at TIMESTAMP WITHOUT TIME ZONE,
+	withdrawal_reason VARCHAR(500),
 	PRIMARY KEY (id),
 	CONSTRAINT ck_announcement_status CHECK (status IN ('draft', 'published', 'withdrawn', 'expired')),
 	CONSTRAINT uq_announcement_revision UNIQUE (id, revision)
@@ -338,11 +387,77 @@ CREATE INDEX IF NOT EXISTS ix_domain_event_outbox_event_type ON domain_event_out
 CREATE INDEX IF NOT EXISTS ix_domain_event_outbox_status ON domain_event_outbox (status);
 CREATE INDEX IF NOT EXISTS ix_outbox_claim ON domain_event_outbox (status, next_retry_at, lease_expires_at);
 
+CREATE TABLE IF NOT EXISTS external_chat_conversation (
+	id VARCHAR(40) NOT NULL,
+	channel VARCHAR(24) NOT NULL,
+	tenant_key VARCHAR(80) NOT NULL,
+	external_chat_id VARCHAR(120) NOT NULL,
+	external_user_id VARCHAR(120) NOT NULL,
+	platform_user_id VARCHAR(64) NOT NULL,
+	source_id INTEGER NOT NULL,
+	analysis_session_id VARCHAR(40) NOT NULL,
+	status VARCHAR(20) NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_external_chat_conversation UNIQUE (channel, tenant_key, external_chat_id)
+);
+CREATE INDEX IF NOT EXISTS ix_external_chat_conversation_analysis_session_id ON external_chat_conversation (analysis_session_id);
+CREATE INDEX IF NOT EXISTS ix_external_chat_conversation_channel ON external_chat_conversation (channel);
+CREATE INDEX IF NOT EXISTS ix_external_chat_conversation_external_chat_id ON external_chat_conversation (external_chat_id);
+CREATE INDEX IF NOT EXISTS ix_external_chat_conversation_external_user_id ON external_chat_conversation (external_user_id);
+CREATE INDEX IF NOT EXISTS ix_external_chat_conversation_platform_user_id ON external_chat_conversation (platform_user_id);
+CREATE INDEX IF NOT EXISTS ix_external_chat_conversation_source_id ON external_chat_conversation (source_id);
+CREATE INDEX IF NOT EXISTS ix_external_chat_conversation_tenant_key ON external_chat_conversation (tenant_key);
+
+CREATE TABLE IF NOT EXISTS external_chat_job (
+	id VARCHAR(40) NOT NULL,
+	channel VARCHAR(24) NOT NULL,
+	tenant_key VARCHAR(80) NOT NULL,
+	external_message_id VARCHAR(120) NOT NULL,
+	external_chat_id VARCHAR(120) NOT NULL,
+	external_user_id VARCHAR(120) NOT NULL,
+	question TEXT NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	conversation_id VARCHAR(40),
+	analysis_session_id VARCHAR(40),
+	run_id VARCHAR(40),
+	ack_message_id VARCHAR(120),
+	result_message_id VARCHAR(120),
+	result_text TEXT,
+	attempt_count INTEGER NOT NULL,
+	lease_owner VARCHAR(100),
+	lease_expires_at TIMESTAMP WITHOUT TIME ZONE,
+	error_summary VARCHAR(500),
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	completed_at TIMESTAMP WITHOUT TIME ZONE,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_external_chat_message UNIQUE (channel, external_message_id),
+	CONSTRAINT ck_external_chat_attempt_count CHECK (attempt_count >= 0)
+);
+CREATE INDEX IF NOT EXISTS ix_external_chat_job_analysis_session_id ON external_chat_job (analysis_session_id);
+CREATE INDEX IF NOT EXISTS ix_external_chat_job_channel ON external_chat_job (channel);
+CREATE INDEX IF NOT EXISTS ix_external_chat_job_claim ON external_chat_job (channel, status, lease_expires_at);
+CREATE INDEX IF NOT EXISTS ix_external_chat_job_conversation_id ON external_chat_job (conversation_id);
+CREATE INDEX IF NOT EXISTS ix_external_chat_job_external_chat_id ON external_chat_job (external_chat_id);
+CREATE INDEX IF NOT EXISTS ix_external_chat_job_external_user_id ON external_chat_job (external_user_id);
+CREATE INDEX IF NOT EXISTS ix_external_chat_job_run_id ON external_chat_job (run_id);
+CREATE INDEX IF NOT EXISTS ix_external_chat_job_status ON external_chat_job (status);
+CREATE INDEX IF NOT EXISTS ix_external_chat_job_tenant_key ON external_chat_job (tenant_key);
+
 CREATE TABLE IF NOT EXISTS governed_model (
 	id VARCHAR(40) NOT NULL,
 	task_id VARCHAR(40) NOT NULL,
 	name VARCHAR(120) NOT NULL,
 	version INTEGER NOT NULL,
+	training_revision INTEGER NOT NULL,
+	artifact_format_version INTEGER NOT NULL,
+	artifact_checksum VARCHAR(64) NOT NULL,
+	decision_threshold NUMERIC(6, 4),
+	threshold_policy_json JSONB NOT NULL,
+	tuning_json JSONB NOT NULL,
+	explanation_json JSONB NOT NULL,
 	algorithm VARCHAR(30) NOT NULL,
 	status VARCHAR(16) NOT NULL,
 	owner_id VARCHAR(64) NOT NULL,
@@ -409,6 +524,19 @@ CREATE TABLE IF NOT EXISTS knowledge_topic (
 	PRIMARY KEY (code),
 	UNIQUE (name)
 );
+
+CREATE TABLE IF NOT EXISTS learning_feedback (
+	id VARCHAR(40) NOT NULL,
+	run_id VARCHAR(40) NOT NULL,
+	user_id VARCHAR(64) NOT NULL,
+	rating VARCHAR(24) NOT NULL,
+	correction_type VARCHAR(40) NOT NULL,
+	comment TEXT NOT NULL,
+	candidate_skill_id VARCHAR(40),
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_learning_feedback_run_id ON learning_feedback (run_id);
 
 CREATE TABLE IF NOT EXISTS llm_call_attempt (
 	id VARCHAR(40) NOT NULL,
@@ -537,13 +665,15 @@ CREATE INDEX IF NOT EXISTS ix_metric_table_binding_binding_id ON metric_table_bi
 CREATE TABLE IF NOT EXISTS modeling_evaluation (
 	id VARCHAR(40) NOT NULL,
 	task_id VARCHAR(40) NOT NULL,
+	training_revision INTEGER NOT NULL,
+	model_ids_json JSONB NOT NULL,
 	result_json JSONB NOT NULL,
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
-	PRIMARY KEY (id),
-	CONSTRAINT uq_modeling_eval_task UNIQUE (task_id)
+	PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS ix_modeling_evaluation_task_id ON modeling_evaluation (task_id);
+CREATE INDEX IF NOT EXISTS ix_modeling_evaluation_training_revision ON modeling_evaluation (training_revision);
 
 CREATE TABLE IF NOT EXISTS modeling_inference_log (
 	id VARCHAR(40) NOT NULL,
@@ -571,6 +701,11 @@ CREATE TABLE IF NOT EXISTS modeling_task (
 	target_label VARCHAR(100) NOT NULL,
 	features_json JSONB NOT NULL,
 	candidates_json JSONB NOT NULL,
+	split_strategy VARCHAR(16) NOT NULL,
+	time_field VARCHAR(64) NOT NULL,
+	group_field VARCHAR(64) NOT NULL,
+	diagnostics_json JSONB NOT NULL,
+	diagnosed_at TIMESTAMP WITHOUT TIME ZONE,
 	selected_model VARCHAR(30),
 	status VARCHAR(16) NOT NULL,
 	error_json JSONB,
@@ -606,6 +741,15 @@ CREATE TABLE IF NOT EXISTS organization_unit (
 CREATE INDEX IF NOT EXISTS ix_organization_unit_node_type ON organization_unit (node_type);
 CREATE INDEX IF NOT EXISTS ix_organization_unit_parent_id ON organization_unit (parent_id);
 CREATE INDEX IF NOT EXISTS ix_organization_unit_path ON organization_unit (path);
+
+CREATE TABLE IF NOT EXISTS platform_feature_flag (
+	key VARCHAR(64) NOT NULL,
+	enabled BOOLEAN NOT NULL,
+	config_json JSONB NOT NULL,
+	updated_by VARCHAR(64) NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (key)
+);
 
 CREATE TABLE IF NOT EXISTS platform_user (
 	id VARCHAR(40) NOT NULL,
@@ -694,10 +838,10 @@ CREATE TABLE IF NOT EXISTS report_delivery (
 	CONSTRAINT ck_report_delivery_attempt_count CHECK (attempt_count >= 0),
 	UNIQUE (idempotency_key)
 );
-CREATE INDEX IF NOT EXISTS ix_report_delivery_next_retry_at ON report_delivery (next_retry_at);
-CREATE INDEX IF NOT EXISTS ix_report_delivery_message_id ON report_delivery (message_id);
-CREATE INDEX IF NOT EXISTS ix_report_delivery_lease_owner ON report_delivery (lease_owner);
 CREATE INDEX IF NOT EXISTS ix_report_delivery_lease_expires_at ON report_delivery (lease_expires_at);
+CREATE INDEX IF NOT EXISTS ix_report_delivery_lease_owner ON report_delivery (lease_owner);
+CREATE INDEX IF NOT EXISTS ix_report_delivery_message_id ON report_delivery (message_id);
+CREATE INDEX IF NOT EXISTS ix_report_delivery_next_retry_at ON report_delivery (next_retry_at);
 CREATE INDEX IF NOT EXISTS ix_report_delivery_recipient_user_id ON report_delivery (recipient_user_id);
 CREATE INDEX IF NOT EXISTS ix_report_delivery_report_id ON report_delivery (report_id);
 CREATE INDEX IF NOT EXISTS ix_report_delivery_version_id ON report_delivery (version_id);
@@ -725,12 +869,12 @@ CREATE TABLE IF NOT EXISTS report_file (
 	CONSTRAINT ck_report_file_format CHECK (format IN ('pdf', 'xlsx')),
 	CONSTRAINT ck_report_file_status CHECK (status IN ('queued', 'generating', 'ready', 'failed', 'dead_letter'))
 );
+CREATE INDEX IF NOT EXISTS ix_report_file_lease_expires_at ON report_file (lease_expires_at);
+CREATE INDEX IF NOT EXISTS ix_report_file_lease_owner ON report_file (lease_owner);
+CREATE INDEX IF NOT EXISTS ix_report_file_next_retry_at ON report_file (next_retry_at);
 CREATE INDEX IF NOT EXISTS ix_report_file_report_id ON report_file (report_id);
 CREATE INDEX IF NOT EXISTS ix_report_file_status ON report_file (status);
 CREATE INDEX IF NOT EXISTS ix_report_file_version_id ON report_file (version_id);
-CREATE INDEX IF NOT EXISTS ix_report_file_next_retry_at ON report_file (next_retry_at);
-CREATE INDEX IF NOT EXISTS ix_report_file_lease_owner ON report_file (lease_owner);
-CREATE INDEX IF NOT EXISTS ix_report_file_lease_expires_at ON report_file (lease_expires_at);
 
 CREATE TABLE IF NOT EXISTS report_section (
 	id VARCHAR(40) NOT NULL,

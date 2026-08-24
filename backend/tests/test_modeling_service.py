@@ -3,7 +3,7 @@
 import joblib
 import pytest
 
-from app.db.models import GovernedModel, ModelingInferenceLog, ModelingTask
+from app.db.models import GovernedModel, ModelingEvaluation, ModelingInferenceLog, ModelingTask
 from app.modeling import service as modeling_service
 from app.modeling.contracts import ModelingTaskCreate
 from app.modeling.service import (
@@ -11,13 +11,18 @@ from app.modeling.service import (
     ModelNotFoundError,
     TaskNotTrainedError,
     create_task,
+    create_threshold_variant,
+    diagnose_task,
+    find_reusable_models,
     get_evaluation,
     get_task,
+    list_evaluations,
     list_models,
     list_tasks,
     predict,
     publish_model,
     retire_model,
+    rollback_model,
     review_model,
     train_task,
 )
@@ -91,6 +96,7 @@ def test_train_full_flow(modeling_session):
     assert len(evaluation["models"]) == 3
     assert evaluation["recommendedModel"] in {"logistic", "tree", "forest"}
     assert evaluation["data"]["sampleCount"] == 240
+    assert evaluation["qualityAssessment"]["status"] in {"ready", "warning", "blocked"}
     assert set(evaluation["data"]["encodedFeatures"]) >= {"工序", "产线"}
     # 每个模型都带指标与特征重要性
     for item in evaluation["models"]:
@@ -104,7 +110,9 @@ def test_train_full_flow(modeling_session):
     with modeling_session() as session:
         for row in session.query(GovernedModel).all():
             payload = joblib.load(row.model_path)
-            assert "model" in payload and "scaler" in payload
+            assert payload["formatVersion"] == 2
+            assert "pipeline" in payload and "schema" in payload
+            assert row.artifact_checksum and len(row.artifact_checksum) == 64
 
 
 def test_train_manual_only_requested_algorithm(modeling_session):
@@ -150,10 +158,13 @@ def test_predict_requires_trained(modeling_session):
 def test_predict_classification_multi_records(modeling_session):
     task, _ = create_task(make_task_payload())
     train_task(task["id"], "auto", ["logistic"], None, "zhangsan")
+    model = list_models()[0]
+    review_model(model["id"], "pass", "指标合格", "admin")
+    publish_model(model["id"], "admin")
 
     out = predict(task["id"], [
         {"工序": "SMT贴片", "产线": "L01", "停机时长": 480, "计划数量": 3200},
-        {"工序": "AOI检测", "产线": "L04", "停机时长": 30, "计划数量": 2100},
+        {"工序": "未来新增工序", "产线": "L04", "停机时长": None, "计划数量": 2100},
     ], "zhangsan")
     assert len(out["predictions"]) == 2
     for item in out["predictions"]:
@@ -176,7 +187,9 @@ def test_governance_lifecycle(modeling_session):
     with pytest.raises(ModelingError, match="不允许模型发布"):
         publish_model(model["id"], "admin")
     # 复核通过 → 发布 → 下线
-    published = review_model(model["id"], "pass", "指标合格", "admin")
+    reviewed = review_model(model["id"], "pass", "指标合格", "admin")
+    assert reviewed["status"] == "reviewing"
+    published = publish_model(model["id"], "admin")
     assert published["status"] == "published"
     assert published["tone"] == "green"
     retired = retire_model(model["id"], "admin")
@@ -186,6 +199,32 @@ def test_governance_lifecycle(modeling_session):
         retire_model(model["id"], "admin")
     with pytest.raises(ModelingError):
         review_model(model["id"], "pass", "", "admin")
+
+
+def test_publish_blocks_model_that_is_worse_than_regression_baseline(modeling_session):
+    task, _ = create_task(make_task_payload(
+        title="停机时长预测",
+        taskType="regression",
+        targetField="downtime_minutes",
+        targetLabel="停机时长",
+        features=["工序", "产线"],
+        candidates=["linear"],
+    ))
+    with modeling_session() as session:
+        model = GovernedModel(
+            id="mdl-poor-regression", task_id=task["id"], name="弱回归模型", version=1,
+            algorithm="linear", status="reviewing", owner_id="admin",
+            metrics_json={"r2": -0.1}, features_json=["工序", "产线"], model_path="unused",
+            feature_names_json=["工序", "产线"], feature_encoders_json={}, feature_importance_json=[],
+            explanation_json={"qualityAssessment": {
+                "status": "blocked", "publishable": False,
+                "reason": "R² 不高于 0，模型没有优于平均值基线。",
+            }},
+        )
+        session.add(model)
+        session.commit()
+    with pytest.raises(ModelingError, match="未达到发布门槛"):
+        publish_model("mdl-poor-regression", "admin")
 
 
 def test_reject_then_review_pass_and_retire(modeling_session):
@@ -198,7 +237,9 @@ def test_reject_then_review_pass_and_retire(modeling_session):
     # 已驳回不可直接发布，可重新复核通过或下线
     with pytest.raises(ModelingError, match="不允许模型发布"):
         publish_model(model["id"], "admin")
-    republished = review_model(model["id"], "pass", "已重新校验特征", "admin")
+    reviewed = review_model(model["id"], "pass", "已重新校验特征", "admin")
+    assert reviewed["status"] == "reviewing"
+    republished = publish_model(model["id"], "admin")
     assert republished["status"] == "published"
     retired = retire_model(model["id"], "admin")
     assert retired["status"] == "retired"
@@ -211,3 +252,70 @@ def test_unknown_task_or_model(modeling_session):
         train_task("mt-not-exist", "auto", ["logistic"], None, "zhangsan")
     with pytest.raises(ModelNotFoundError):
         publish_model("mdl-not-exist", "admin")
+
+
+def test_retrain_creates_versions_and_evaluation_history(modeling_session):
+    task, _ = create_task(make_task_payload(candidates=["logistic"]))
+    train_task(task["id"], "auto", ["logistic"], None, "zhangsan")
+    first = list_models()[0]
+    review_model(first["id"], "pass", "首版通过", "admin")
+    publish_model(first["id"], "admin")
+
+    train_task(task["id"], "auto", ["logistic"], None, "zhangsan")
+    models = sorted(list_models(), key=lambda item: item["version"])
+    assert [item["version"] for item in models] == [1, 2]
+    assert [item["trainingRevision"] for item in models] == [1, 2]
+    assert models[0]["status"] == "published"
+    assert models[1]["status"] == "pending"
+    history = list_evaluations(task["id"])
+    assert [item["trainingRevision"] for item in history] == [2, 1]
+    with modeling_session() as session:
+        assert session.query(ModelingEvaluation).count() == 2
+
+    # 待复核的新版本不能抢占生产流量，仍由已发布 v1 推理。
+    out = predict(task["id"], [{"工序": "SMT贴片", "产线": "L01", "停机时长": 480, "计划数量": 3200}], "zhangsan")
+    assert out["modelId"] == first["id"]
+    assert out["modelVersion"] == 1
+
+
+def test_diagnostics_tuning_threshold_variant_and_rollback(modeling_session):
+    task, _ = create_task(make_task_payload(candidates=["logistic"]))
+    diagnostics = diagnose_task(task["id"], "zhangsan")
+    assert diagnostics["status"] in {"ready", "warning"}
+    assert diagnostics["score"] > 0
+    diagnosed_task = get_task(task["id"])
+    assert diagnosed_task["sampleCount"] == diagnostics["sampleCount"]
+    assert "条样本" in diagnosed_task["sampleSummary"]
+
+    result = train_task(
+        task["id"], "auto", ["logistic"], None, "zhangsan", optimization_level="balanced",
+    )
+    trained = result["results"]["models"][0]
+    assert trained["tuning"]["searched"] is True
+    assert trained["explanation"]["applicabilityBoundary"]
+    model = list_models(task_id=task["id"])[0]
+    review_model(model["id"], "pass", "体检与阈值通过", "admin")
+    publish_model(model["id"], "admin")
+
+    variant = create_threshold_variant(model["id"], 0.35, "降低漏报", "admin")
+    assert variant["status"] == "reviewing"
+    assert variant["decisionThreshold"] == 0.35
+    assert variant["thresholdPolicy"]["basedOnModelId"] == model["id"]
+    publish_model(variant["id"], "admin")
+    assert next(item for item in list_models(task_id=task["id"]) if item["id"] == model["id"])["status"] == "retired"
+
+    restored = rollback_model(model["id"], "admin")
+    assert restored["status"] == "published"
+    assert next(item for item in list_models(task_id=task["id"]) if item["id"] == variant["id"])["status"] == "retired"
+
+
+def test_agent_model_discovery_only_returns_published_same_source(modeling_session):
+    task, _ = create_task(make_task_payload(candidates=["logistic"]))
+    train_task(task["id"], "auto", ["logistic"], None, "zhangsan")
+    model = list_models(task_id=task["id"])[0]
+    assert find_reusable_models("识别高不良风险生产记录", 1, "classification") == []
+    review_model(model["id"], "pass", "通过", "admin")
+    publish_model(model["id"], "admin")
+    matches = find_reusable_models("识别高不良风险生产记录", 1, "classification")
+    assert matches and matches[0]["modelId"] == model["id"]
+    assert find_reusable_models("识别高不良风险生产记录", 2, "classification") == []

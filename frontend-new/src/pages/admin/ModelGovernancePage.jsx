@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listGovernedModels, publishModel, retireModel, reviewModel } from "../../api/modeling";
+import { createThresholdVariant, listGovernedModels, publishModel, retireModel, reviewModel, rollbackModel } from "../../api/modeling";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
 import { Button, Card, ErrorNotice, PageFrame, RouteSkeleton, SectionHeader, StatusPill } from "../../components/ui";
@@ -23,6 +23,7 @@ export default function ModelGovernancePage() {
   const [reviewTarget, setReviewTarget] = useState(null);
   const [reviewDecision, setReviewDecision] = useState("pass");
   const [reviewComment, setReviewComment] = useState("");
+  const [thresholdValue, setThresholdValue] = useState("0.50");
 
   const load = () => {
     setError(null);
@@ -51,6 +52,10 @@ export default function ModelGovernancePage() {
 
   const confirmReview = async () => {
     if (!reviewTarget) return;
+    if (reviewDecision === "pass" && reviewTarget.qualityAssessment?.publishable === false) {
+      setActionError("该模型未达到最低发布门槛，只能驳回并返回业务端改进数据或特征。");
+      return;
+    }
     setActing(true);
     setActionError(null);
     try {
@@ -77,7 +82,10 @@ export default function ModelGovernancePage() {
 
   const canReview = ["pending", "reviewing", "rejected"].includes(selected?.status ?? "");
   const canPublish = selected?.status === "reviewing";
+  const qualityBlocked = selected?.qualityAssessment?.publishable === false;
   const canRetire = ["published", "rejected"].includes(selected?.status ?? "");
+  const canRollback = selected?.status === "retired";
+  const canTuneThreshold = selected?.decisionThreshold != null && ["published", "reviewing", "retired"].includes(selected?.status ?? "");
 
   return (
     <PageFrame>
@@ -155,16 +163,22 @@ export default function ModelGovernancePage() {
               <GovernanceDetail label="来源任务" value={selected.taskId} mono />
               <GovernanceDetail label="训练数据" value={selected.dataset} />
               <GovernanceDetail label="评估摘要" value={selected.metric} mono />
+              {selected.qualityAssessment && <div className={cn("rounded-control border px-3 py-2.5 text-[10px] leading-relaxed", qualityBlocked ? "border-red/25 bg-red-soft" : selected.qualityAssessment.status === "ready" ? "border-green/25 bg-green/10" : "border-amber/25 bg-amber-soft")}><div className="flex items-center justify-between gap-2"><strong className={qualityBlocked ? "text-red" : selected.qualityAssessment.status === "ready" ? "text-green" : "text-amber"}>{selected.qualityAssessment.label}</strong><span className="font-semibold text-muted">{qualityBlocked ? "禁止发布" : "可进入人工复核"}</span></div><p className="mt-1 text-ink-2">{selected.qualityAssessment.reason}</p>{selected.qualityAssessment.nextAction && <p className="mt-1 text-muted">建议：{selected.qualityAssessment.nextAction}</p>}</div>}
+              <GovernanceDetail label="参数搜索" value={selected.tuning?.searched ? `${selected.tuning.candidateCount} 组 · ${selected.tuning.cvPolicy || "交叉验证"}` : "默认参数"} />
+              {selected.decisionThreshold != null && <GovernanceDetail label="当前分类阈值" value={Number(selected.decisionThreshold).toFixed(2)} mono />}
               <GovernanceDetail label="调用次数" value={`${selected.calls} 次`} />
               <GovernanceDetail label="最近更新" value={selected.updatedAt} />
+              {selected.explanation?.applicabilityBoundary && <div className="rounded-control border border-amber/25 bg-amber-soft px-3 py-2.5 text-[10px] leading-relaxed text-muted"><strong className="text-amber">适用边界</strong><p className="mt-1">{selected.explanation.applicabilityBoundary}</p></div>}
+              {canTuneThreshold && <div className="rounded-control border border-line bg-surface-2 p-3"><div className="flex items-center justify-between gap-3"><div><strong className="block text-[11px] text-ink">创建阈值候选版本</strong><small className="mt-0.5 block text-[10px] text-muted">不会直接修改正在生产使用的版本</small></div><input aria-label="候选分类阈值" type="number" min="0.05" max="0.95" step="0.05" value={thresholdValue} onChange={(event) => setThresholdValue(event.target.value)} className="h-8 w-20 rounded-control border border-line bg-surface px-2 text-right font-mono text-xs outline-none focus:border-line-strong" /></div><Button variant="secondary" className="mt-2 w-full" disabled={acting} onClick={() => runAction(() => createThresholdVariant(selected.id, { threshold: Number(thresholdValue), reason: "管理员根据误报与漏报成本调整" }))}>生成待复核版本</Button></div>}
               <div className="border-t border-line pt-3">
                 <p className="text-[11px] leading-relaxed text-muted">管理员负责发布、下线、权限与版本治理；业务目标、特征确认与训练操作仍在业务端“智能建模”完成。</p>
               </div>
               <div className="flex justify-end gap-2">
-                {canPublish && <Button variant="primary" disabled={acting} onClick={() => runAction(() => publishModel(selected.id))}>发布模型</Button>}
-                {canReview && <Button variant="primary" disabled={acting} onClick={() => { setReviewTarget(selected); setReviewDecision("pass"); setReviewComment(""); }}>开始复核</Button>}
+                {canPublish && <Button variant="primary" disabled={acting || qualityBlocked} onClick={() => runAction(() => publishModel(selected.id))}>{qualityBlocked ? "未达发布门槛" : "发布模型"}</Button>}
+                {canReview && <Button variant="primary" disabled={acting} onClick={() => { setReviewTarget(selected); setReviewDecision(qualityBlocked ? "reject" : "pass"); setReviewComment(qualityBlocked ? "隔离测试指标未达到最低发布门槛，退回补充数据与特征。" : ""); }}>开始复核</Button>}
                 {canRetire && <Button variant="secondary" disabled={acting} onClick={() => runAction(() => retireModel(selected.id))}>下线模型</Button>}
-                {!canReview && !canPublish && !canRetire && <Button variant="secondary" disabled>查看版本</Button>}
+                {canRollback && <Button variant="secondary" disabled={acting} onClick={() => runAction(() => rollbackModel(selected.id))}>恢复为生产版本</Button>}
+                {!canReview && !canPublish && !canRetire && !canRollback && <Button variant="secondary" disabled>查看版本</Button>}
               </div>
             </div>
           </Card>}
@@ -192,11 +206,12 @@ export default function ModelGovernancePage() {
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => setReviewDecision("pass")}
-                  className={cn("cursor-pointer rounded-control border px-3 py-2.5 text-left transition-colors", reviewDecision === "pass" ? "border-green/40 bg-green/10" : "border-line bg-surface-2")}
+                  onClick={() => reviewTarget.qualityAssessment?.publishable !== false && setReviewDecision("pass")}
+                  disabled={reviewTarget.qualityAssessment?.publishable === false}
+                  className={cn("rounded-control border px-3 py-2.5 text-left transition-colors", reviewTarget.qualityAssessment?.publishable === false ? "cursor-not-allowed border-line bg-surface-2 opacity-50" : "cursor-pointer", reviewDecision === "pass" ? "border-green/40 bg-green/10" : "border-line bg-surface-2")}
                 >
                   <strong className="block text-xs font-semibold text-ink">通过</strong>
-                  <small className="mt-0.5 block text-[10px] text-muted">审核通过后进入已发布，可被调用</small>
+                  <small className="mt-0.5 block text-[10px] text-muted">{reviewTarget.qualityAssessment?.publishable === false ? "隔离评估未达门槛，不能通过" : "复核通过后等待显式发布，不会立即进入生产"}</small>
                 </button>
                 <button
                   type="button"

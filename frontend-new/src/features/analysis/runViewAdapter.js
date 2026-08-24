@@ -9,6 +9,7 @@ const STATUS_MAP = {
 };
 
 const STEP_ARTIFACT = {
+  "skill.retrieve": "analysis-skill",
   "context.retrieve": "context",
   "query.generate": "sql",
   "query.validate": "validation",
@@ -47,6 +48,16 @@ function detailFor(step, artifact) {
   if (artifact?.type === "sql") {
     detail.body = "SQL 已依据当前数据源元数据和业务口径生成，执行前仍需通过只读安全校验。";
     detail.code = content?.sql;
+  } else if (artifact?.type === "analysis-skill") {
+    const skills = content?.skills ?? [];
+    detail.body = content?.enabled
+      ? skills.length > 0
+        ? `已匹配 ${skills.length} 个经审核的分析技能；它们只提供分析步骤，不扩大数据权限。`
+        : "技能增强已开启，但当前问题没有匹配技能，已按基础链路继续。"
+      : "本次运行使用基线链路，未启用分析技能增强。";
+    detail.tags = skills.length > 0
+      ? skills.map((item) => `${item.name} · v${item.version}`)
+      : [content?.enabled ? "实验组：on" : "基线组：off"];
   } else if (artifact?.type === "context") {
     detail.body = `命中 ${content?.coverage?.metricCount ?? 0} 个指标口径、${content?.coverage?.tableCount ?? 0} 张数据表。`;
     detail.tags = [

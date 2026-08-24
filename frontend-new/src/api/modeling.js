@@ -33,14 +33,29 @@ export function createModelingTask(payload) {
 
 export function trainModelingTask(
   taskId,
-  { strategy = "auto", candidateIds = [], manualModelId = null, userId = USER_ID() } = {},
+  { strategy = "auto", candidateIds = [], manualModelId = null, optimizationLevel = "fast", userId = USER_ID() } = {},
 ) {
   return httpPost(`/api/v1/modeling/tasks/${taskId}/train`, {
     strategy,
     candidateIds,
     manualModelId,
+    optimizationLevel,
     userId,
   });
+}
+
+export function diagnoseModelingTask(taskId) {
+  return httpPost(`/api/v1/modeling/tasks/${taskId}/diagnostics`, {});
+}
+
+export function getModelVersionHistory(taskId) {
+  return httpGet(`/api/v1/modeling/tasks/${taskId}/versions`);
+}
+
+export async function findReusableModels({ question, sourceId, taskType = "" }) {
+  const params = new URLSearchParams({ question, sourceId: String(sourceId) });
+  if (taskType) params.set("taskType", taskType);
+  return (await httpGet(`/api/v1/modeling/reusable-models?${params}`)).items;
 }
 
 export function getModelingEvaluation(taskId) {
@@ -53,8 +68,11 @@ export function predictWithModel(taskId, records, userId = USER_ID()) {
 
 // —— 模型治理 ——
 
-export async function listGovernedModels({ status = "" } = {}) {
-  const suffix = status ? `?status=${encodeURIComponent(status)}` : "";
+export async function listGovernedModels({ status = "", taskId = "" } = {}) {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (taskId) params.set("taskId", taskId);
+  const suffix = params.toString() ? `?${params}` : "";
   return (await httpGet(`/api/v1/model-governance/models${suffix}`)).items;
 }
 
@@ -72,4 +90,16 @@ export function publishModel(modelId, userId = USER_ID()) {
 
 export function retireModel(modelId, userId = USER_ID()) {
   return httpPost(`/api/v1/model-governance/models/${modelId}/retire`, { userId });
+}
+
+export function rollbackModel(modelId, userId = USER_ID()) {
+  return httpPost(`/api/v1/model-governance/models/${modelId}/rollback`, { userId });
+}
+
+export function createThresholdVariant(modelId, { threshold, reason, userId = USER_ID() }) {
+  return httpPost(`/api/v1/model-governance/models/${modelId}/threshold-variant`, {
+    threshold,
+    reason,
+    userId,
+  });
 }

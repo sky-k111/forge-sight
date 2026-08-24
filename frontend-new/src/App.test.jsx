@@ -454,6 +454,28 @@ beforeEach(() => {
           ],
         });
       }
+      if (/\/api\/v1\/modeling\/tasks\/[^/]+\/diagnostics$/.test(u) && method === "POST") {
+        return okJson({
+          status: "ready",
+          score: 96,
+          sampleCount: 2752,
+          usableSampleCount: 2752,
+          featureCount: 4,
+          blockers: [],
+          warnings: [],
+          checks: [
+            { key: "sample_count", label: "样本规模", status: "pass", message: "共读取 2,752 条训练记录" },
+            { key: "target", label: "预测目标", status: "pass", message: "目标字段完整" },
+            { key: "leakage", label: "结果泄漏", status: "pass", message: "未发现明显标签泄漏信号" },
+            { key: "split", label: "验证方式", status: "pass", message: "按业务实体分组留出" },
+          ],
+          recommendedSplit: "group",
+          recommendedSplitLabel: "按业务实体分组留出",
+        });
+      }
+      if (/\/api\/v1\/modeling\/tasks\/[^/]+\/versions$/.test(u) && method === "GET") {
+        return okJson({ task: { id: "mt-demo" }, models: [], evaluations: [] });
+      }
       if (u.includes("/api/v1/modeling/tasks") && method === "POST") {
         const body = JSON.parse(options?.body ?? "{}");
         return okJson({
@@ -639,6 +661,7 @@ describe("ForgeSight application routes", () => {
   test("loads sidebar analysis sessions from the backend and opens the selected session", async () => {
     render(<App />);
 
+    fireEvent.click(await screen.findByRole("button", { name: "发起分析" }));
     const session = await screen.findByRole("button", { name: "制造业务问析" });
     fireEvent.click(session);
 
@@ -657,6 +680,7 @@ describe("ForgeSight application routes", () => {
   test("deletes a sidebar conversation only after explicit confirmation", async () => {
     render(<App />);
 
+    fireEvent.click(await screen.findByRole("button", { name: "发起分析" }));
     fireEvent.click(
       await screen.findByRole("button", { name: "会话操作：制造业务问析" }),
     );
@@ -677,33 +701,15 @@ describe("ForgeSight application routes", () => {
   test("renders the business overview without internal priority labels", async () => {
     const { container } = render(<App />);
     expect(
-      await screen.findByRole("heading", { name: "分析总览" }),
+      await screen.findByRole("heading", { name: "今日工作台" }),
     ).toBeTruthy();
     expect(
-      await screen.findByRole(
-        "heading",
-        { name: "华东制造数据底座" },
-        { timeout: 5000 },
-      ),
+      await screen.findByText("华东制造数据底座", {}, { timeout: 5000 }),
     ).toBeTruthy();
-    expect(
-      screen.getByRole("tab", { name: "总览" }).getAttribute("aria-selected"),
-    ).toBe("true");
-    expect(
-      screen.queryByRole("heading", { name: "当前数据源可以分析什么" }),
-    ).toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: "可分析内容" }));
-    expect(
-      screen.getByRole("heading", { name: "当前数据源可以分析什么" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("heading", { name: "选择一个分析问题" }),
-    ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "用所选问题开始" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("tab", { name: "最近分析" }));
-    expect(
-      screen.getByRole("heading", { name: "当前数据源的最近分析" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "今天的工作队列" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "从已有业务口径发起分析" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "最近调查" })).toBeTruthy();
+    expect(screen.getByText("查看当前可分析范围")).toBeTruthy();
     expect(screen.getByText("分析本月各工序良率并与目标值比较")).toBeTruthy();
     expect(screen.queryByText(/阶段5|EXPLAIN|验收/)).toBeNull();
     expect(screen.queryByText(/%/)).toBeNull();
@@ -722,7 +728,7 @@ describe("ForgeSight application routes", () => {
 
   test("navigates to a directly addressable analysis page", async () => {
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: "智能问析" }));
+    fireEvent.click(await screen.findByRole("button", { name: "发起分析" }));
     await waitFor(() =>
       expect(window.location.pathname).toBe("/workspace/analysis"),
     );
@@ -732,7 +738,7 @@ describe("ForgeSight application routes", () => {
     window.history.replaceState({}, "", "/workspace/analysis");
     render(<App />);
 
-    await screen.findByPlaceholderText("用业务语言描述你想分析的问题…");
+    await screen.findByPlaceholderText("用业务语言描述你想分析的问题…", {}, { timeout: 5000 });
     fireEvent.click(screen.getByRole("button", { name: "选择数据范围" }));
 
     expect(screen.getByRole("listbox", { name: "选择分析数据范围" })).toBeTruthy();
@@ -833,19 +839,19 @@ describe("ForgeSight application routes", () => {
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "管理" }));
     expect(
-      await screen.findByRole("heading", { name: "治理总览" }),
+      await screen.findByRole("heading", { name: "治理工作台" }),
     ).toBeTruthy();
     expect(screen.getByRole("navigation", { name: "管理员导航" })).toBeTruthy();
     expect(
       screen
-        .getByRole("button", { name: "数据治理" })
+        .getByRole("button", { name: "数据与语义" })
         .getAttribute("aria-expanded"),
     ).toBe("true");
     expect(
       screen
-        .getByRole("button", { name: "平台治理" })
+        .getByRole("button", { name: "平台运维" })
         .getAttribute("aria-expanded"),
-    ).toBe("true");
+    ).toBe("false");
     expect(await screen.findByText("待处理事项")).toBeTruthy();
     expect(window.location.pathname).toBe("/admin/overview");
   });
@@ -908,6 +914,11 @@ describe("ForgeSight application routes", () => {
     expect(
       await screen.findByRole("heading", { name: "智能建模" }),
     ).toBeTruthy();
+    await screen.findByRole(
+      "heading",
+      { name: "查看任务，确认下一步" },
+      { timeout: 5000 },
+    );
     expect(
       await screen.findByText(
         (_, element) =>
@@ -950,7 +961,12 @@ describe("ForgeSight application routes", () => {
     window.history.replaceState({}, "", "/workspace/modeling");
     render(<App />);
     await screen.findByRole("heading", { name: "智能建模" });
-    fireEvent.click(screen.getByRole("button", { name: /建模方案/ }));
+    await screen.findByRole(
+      "heading",
+      { name: "查看任务，确认下一步" },
+      { timeout: 5000 },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /建模方案/ }));
     expect(screen.getByText("候选模型")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /人工指定/ }));
     expect(screen.getByText("指定算法")).toBeTruthy();
@@ -993,7 +1009,7 @@ describe("ForgeSight application routes", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "智能建模" });
-    const title = await screen.findByText("可以开始识别高风险生产记录");
+    const title = await screen.findByText("等待管理员复核后发布");
     const section = title.closest("section");
 
     expect(section).toBeTruthy();
@@ -1007,7 +1023,7 @@ describe("ForgeSight application routes", () => {
 
     await screen.findByRole("heading", { name: "智能建模" });
     fireEvent.click(screen.getByRole("button", { name: /训练过程/ }));
-    const firstStep = await screen.findByText("理解建模目标");
+    const firstStep = (await screen.findAllByText("训练数据体检")).find((node) => node.closest(".modeling-step"));
     const item = firstStep.closest(".modeling-step");
     const badge = item?.querySelector("span:not(.modeling-step__connector)");
 
@@ -1022,7 +1038,7 @@ describe("ForgeSight application routes", () => {
 
     await screen.findByRole("heading", { name: "智能建模" });
     fireEvent.click(screen.getByRole("button", { name: /训练过程/ }));
-    const firstStep = await screen.findByText("理解建模目标");
+    const firstStep = (await screen.findAllByText("训练数据体检")).find((node) => node.closest(".modeling-step"));
     const step = firstStep.closest(".modeling-step");
     const connector = step?.querySelector(".modeling-step__connector");
 
@@ -1036,7 +1052,7 @@ describe("ForgeSight application routes", () => {
 
     await screen.findByRole("heading", { name: "智能建模" });
     fireEvent.click(screen.getByRole("button", { name: /训练过程/ }));
-    const firstStep = await screen.findByText("理解建模目标");
+    const firstStep = (await screen.findAllByText("训练数据体检")).find((node) => node.closest(".modeling-step"));
     const step = firstStep.closest(".modeling-step");
     const badge = step?.querySelector("span:not(.modeling-step__connector)");
     const connector = step?.querySelector(".modeling-step__connector");
@@ -1053,7 +1069,7 @@ describe("ForgeSight application routes", () => {
 
     await screen.findByRole("heading", { name: "智能建模" });
     fireEvent.click(screen.getByRole("button", { name: /训练过程/ }));
-    const firstStep = await screen.findByText("理解建模目标");
+    const firstStep = (await screen.findAllByText("训练数据体检")).find((node) => node.closest(".modeling-step"));
     const step = firstStep.closest(".modeling-step");
     const connector = step?.querySelector(".modeling-step__connector");
 
@@ -1079,17 +1095,19 @@ describe("ForgeSight application routes", () => {
   });
 
   test("marks the new task button with its primary variant for dark theme styling", async () => {
+    window.history.replaceState({}, "", "/workspace/analysis");
     render(<App />);
 
-    const action = await screen.findByRole("button", { name: "新建数据任务" });
+    const action = (await screen.findAllByRole("button", { name: "发起分析" })).find((item) => item.className.includes("sidebar-create-task"));
     expect(action.getAttribute("data-variant")).toBe("primary");
   });
 
   test("keeps a dedicated class on the new task button for dark mode contrast fixes", async () => {
+    window.history.replaceState({}, "", "/workspace/analysis");
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: "暗夜模式" }));
-    const action = await screen.findByRole("button", { name: "新建数据任务" });
+    const action = (await screen.findAllByRole("button", { name: "发起分析" })).find((item) => item.className.includes("sidebar-create-task"));
     expect(action.className).toContain("sidebar-create-task");
   });
 
@@ -1244,7 +1262,7 @@ describe("用户注册登录（渐进式认证）", () => {
     ).toBe("zhangsan");
     // 等待业务工作台真正渲染（AppShell 挂载），而非 LoginPage 上的「当前已登录」提示文本
     expect(
-      await screen.findByRole("heading", { name: "分析总览" }),
+      await screen.findByRole("heading", { name: "今日工作台" }),
     ).toBeTruthy();
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(
@@ -1299,7 +1317,7 @@ describe("用户注册登录（渐进式认证）", () => {
       expect(window.location.pathname).toBe("/workspace/overview"),
     );
     expect(
-      await screen.findByRole("heading", { name: "分析总览" }),
+      await screen.findByRole("heading", { name: "今日工作台" }),
     ).toBeTruthy();
     const manageTab = screen.getByRole("button", { name: "管理" });
     expect(manageTab.disabled).to.be.true;
@@ -1322,7 +1340,7 @@ describe("用户注册登录（渐进式认证）", () => {
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: "治理总览" }),
+      await screen.findByRole("heading", { name: "治理工作台" }),
     ).toBeTruthy();
     expect(await screen.findByText("林涛")).toBeTruthy();
     expect(screen.getByRole("button", { name: "管理" }).disabled).to.be.false;
@@ -1350,7 +1368,7 @@ describe("用户注册登录（渐进式认证）", () => {
   });
 });
 
-describe("历史会话", () => {
+describe("调查记录", () => {
   const inMain = () => within(screen.getByRole("main"));
 
   test("renders the session history page with filters and session rows", async () => {
@@ -1358,7 +1376,7 @@ describe("历史会话", () => {
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: "历史会话" }),
+      await screen.findByRole("heading", { name: "调查记录" }),
     ).toBeTruthy();
     // mock 返回的会话缺少 displayTitle/runCount/latestRunStatus，页面应容错展示
     const row = await inMain().findByRole("button", { name: /制造业务问析/ });

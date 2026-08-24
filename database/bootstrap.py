@@ -260,11 +260,13 @@ def initialize_postgres(
     from app.metadata.datasources import seed_default_source
     from app.metadata.scanner import scan_default_source
     from app.reports.templates import seed_report_templates
+    from app.skills.seed import seed_analysis_skills
 
     seed_default_source()
     scan_summary = scan_default_source(auto_register=True)
     knowledge_summary = seed_knowledge()
     report_summary = seed_report_templates()
+    seed_analysis_skills()
     print(
         "[PostgreSQL] baseline ready "
         f"(metadata: {scan_summary}; knowledge: {knowledge_summary}; reports: {report_summary})"

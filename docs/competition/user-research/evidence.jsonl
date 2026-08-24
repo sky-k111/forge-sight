@@ -1,0 +1,22 @@
+{"source_id":"a07-local","locator":"题面背景、用户期望与评分要点","evidence":"题面将普通业务人员不会数据库、SQL、Python 和数据建模作为核心门槛，典型问题覆盖生产、质量、设备和库存。"}
+{"source_id":"onet-production-manager","locator":"Tasks and Work Activities","evidence":"生产管理岗位要检查排程和订单、分析生产/质量/维护报告、解决生产问题、协调资源和维护并形成运营报告。"}
+{"source_id":"onet-quality-manager","locator":"Tasks","evidence":"质量管理岗位跟踪缺陷和检验结果、识别质量问题、生成不合格、趋势和根因报告，并在严重缺陷时采取停产等措施。"}
+{"source_id":"onet-planner","locator":"Tasks","evidence":"计划岗位协调工作与物料流，在短缺、积压和中断情况下修改计划，并编制进展、库存、成本和问题报告。"}
+{"source_id":"onet-maintenance","locator":"Tasks","evidence":"维修岗位检查、测试、诊断设备，实施预防维护并记录维修类型和成本。"}
+{"source_id":"isa95","locator":"Overview","evidence":"ISA-95 通过统一术语、对象和活动模型连接企业系统与制造控制，制造运营覆盖生产、质量、维护和库存。"}
+{"source_id":"iso22400","locator":"Abstract","evidence":"ISO 22400 给出制造运营 KPI 的定义、构成、交换和使用框架。"}
+{"source_id":"miit-scenes-2024","locator":"设备运行监控、故障诊断与预测性维护、智能仓储场景","evidence":"指南将实时设备数据、报警、故障诊断和预测维护用于降低非计划停机，并把库存效率和成本作为典型问题。"}
+{"source_id":"mlc-2026","locator":"Survey results","evidence":"63% 受访制造商分析和使用的数据不到一半，69% 的数据决策仍偏被动；遗留系统取数和多源整合是主要障碍。"}
+{"source_id":"mlc-manual-data","locator":"Survey results","evidence":"调查报道 70% 的受访制造商仍存在人工数据采集，数据决策责任更多集中于工厂领导和管理层。"}
+{"source_id":"deloitte-2025","locator":"Survey results","evidence":"600 名制造业高管调查显示数据分析、统一标准在推进，但生产运营和计划岗位人才及人员适应仍是挑战。"}
+{"source_id":"mckinsey-dpm","locator":"Frontline and management workflow","evidence":"周期报告可能让管理者数周后才看到中断；有效系统应给不同角色共享事实、根因与纠正行动。"}
+{"source_id":"powerbi-qna","locator":"Model structure, names and synonyms","evidence":"自然语言分析依赖清晰关系、对象命名和同义词；歧义同义词会产生错误结果。"}
+{"source_id":"looker-conversational","locator":"Overview","evidence":"会话分析需要由受治理的语义层提供可信自助分析，而不是绕过模型直接解释底层数据。"}
+{"source_id":"lean-visual","locator":"Visual management principles","evidence":"现场可视化应暴露问题并帮助快速现场决策；过多同权重指标会分散注意。"}
+{"source_id":"lean-tiered","locator":"Tiered daily management","evidence":"短频会议与可视化看板用于暴露问题、分派责任并向上升级。"}
+{"source_id":"asq-rca","locator":"Overview","evidence":"根因分析本身不产生结果，必须进入更完整的问题解决与纠正行动过程。"}
+{"source_id":"manual-disruptions","locator":"Abstract","evidence":"51 名潜在用户研究显示，感知有用性和岗位相关性会影响操作员使用人工数据采集软件的意愿。"}
+{"source_id":"manual-assembly-data","locator":"Abstract","evidence":"人工装配线的数据手工记录会降低数据质量并增加波动，需要用计划系统数据识别差异并采取措施。"}
+{"source_id":"dq-metadata","locator":"Abstract","evidence":"多源合并会放大数据质量问题，向决策者传达数据质量元数据很重要。"}
+{"source_id":"dq-decision","locator":"Highlights and abstract","evidence":"更多数据不会直接提高决策质量，其作用受数据质量和数据可诊断性中介。"}
+

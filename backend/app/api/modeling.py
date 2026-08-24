@@ -22,6 +22,15 @@ def list_algorithms():
     return {"items": service.list_algorithms()}
 
 
+@router.get("/modeling/reusable-models")
+def reusable_models(
+    question: str = Query(min_length=1, max_length=1000),
+    source_id: int = Query(alias="sourceId", ge=1),
+    task_type: str = Query(default="", alias="taskType", pattern=r"^(|regression|classification|clustering|anomaly)$"),
+):
+    return {"items": service.find_reusable_models(question, source_id, task_type)}
+
+
 @router.post("/modeling/tasks", status_code=status.HTTP_201_CREATED)
 def create_task(payload: ModelingTaskCreate, user: dict | None = Depends(optional_user)):
     try:
@@ -58,6 +67,7 @@ def train_task(task_id: str, payload: TrainRequest, user: dict | None = Depends(
             list(payload.candidateIds),
             payload.manualModelId,
             effective_user_id(payload.userId, user),
+            payload.optimizationLevel,
         )
     except Exception as exc:
         _raise(exc)
@@ -67,6 +77,30 @@ def train_task(task_id: str, payload: TrainRequest, user: dict | None = Depends(
 def get_evaluation(task_id: str):
     try:
         return service.get_evaluation(task_id)
+    except Exception as exc:
+        _raise(exc)
+
+
+@router.post("/modeling/tasks/{task_id}/diagnostics")
+def diagnose_task(task_id: str, user: dict | None = Depends(optional_user)):
+    try:
+        return service.diagnose_task(task_id, effective_user_id("local-test-user", user))
+    except Exception as exc:
+        _raise(exc)
+
+
+@router.get("/modeling/tasks/{task_id}/versions")
+def model_versions(task_id: str):
+    try:
+        return service.model_version_history(task_id)
+    except Exception as exc:
+        _raise(exc)
+
+
+@router.get("/modeling/tasks/{task_id}/evaluations")
+def list_evaluations(task_id: str):
+    try:
+        return {"items": service.list_evaluations(task_id)}
     except Exception as exc:
         _raise(exc)
 

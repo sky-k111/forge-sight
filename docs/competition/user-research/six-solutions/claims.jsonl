@@ -1,0 +1,7 @@
+{"claim_id":"C01","statement":"ForgeSight应将业务端首页改造成按角色和责任范围投影的今日工作台，而不是统一KPI墙。","evidence_ids":["E01","E03","E11"],"status":"supported","decision":"product"}
+{"claim_id":"C02","statement":"异常收件箱应使用可去重、可确认、可指派、可清除和可升级的持久化生命周期。","evidence_ids":["E01","E02"],"status":"supported","decision":"architecture"}
+{"claim_id":"C03","statement":"制造调查应采用最小对象事件层，按需接入OCPM；AAS仅作为可选设备语义适配。","evidence_ids":["E04","E05"],"status":"supported","decision":"architecture"}
+{"claim_id":"C04","statement":"行动闭环应基于LangGraph持久化HITL、应用自有任务状态和幂等outbox，不应由Agent直接修改MES/QMS。","evidence_ids":["E06","E07"],"status":"supported","decision":"safety"}
+{"claim_id":"C05","statement":"班次交接应复用报告引擎，将冻结事实、人工说明、未关闭事项和接班确认组织为高频工作对象。","evidence_ids":["E01","E03"],"status":"supported","decision":"product"}
+{"claim_id":"C06","statement":"可信回答应拆分语义、数据、范围、执行和解释五维，并以硬门禁封顶而非输出一个不透明百分比。","evidence_ids":["E01","E08","E09"],"status":"supported","decision":"trust"}
+{"claim_id":"C07","statement":"系统持续改进应经过反馈采集、人工标注、golden dataset、离线评测、审核和版本发布，禁止在线自动修改企业口径。","evidence_ids":["E09","E10"],"status":"supported","decision":"governance"}

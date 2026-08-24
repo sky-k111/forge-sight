@@ -6,9 +6,12 @@ import {
   Route,
   Routes,
   useLocation,
+  useNavigate,
   useOutletContext,
+  useRouteError,
 } from "react-router-dom";
 import AppShell from "../components/layout/AppShell";
+import { ErrorNotice, PageFrame } from "../components/ui";
 import { fetchMe } from "../api/auth";
 import { clearSession, getCachedUser, getToken, setSession } from "../lib/auth";
 
@@ -34,6 +37,9 @@ const KnowledgePage = lazy(() => import("../pages/admin/KnowledgePage"));
 const ResourcesPage = lazy(() => import("../pages/admin/ResourcesPage"));
 const ModelGovernancePage = lazy(
   () => import("../pages/admin/ModelGovernancePage"),
+);
+const SkillGovernancePage = lazy(
+  () => import("../pages/admin/SkillGovernancePage"),
 );
 const SettingsPage = lazy(() => import("../pages/admin/SettingsPage"));
 const SecurityPage = lazy(() => import("../pages/admin/SecurityPage"));
@@ -110,6 +116,24 @@ function AppGuard() {
   return <Outlet context={outletContext} />;
 }
 
+function RouteErrorFallback() {
+  const error = useRouteError();
+  const navigate = useNavigate();
+  const detail = error?.status === 404
+    ? "这个页面不存在或已经移动。"
+    : "页面组件加载失败，你的其他工作区内容不会受到影响。";
+
+  return (
+    <PageFrame className="max-w-[920px]">
+      <ErrorNotice
+        title="页面暂时无法显示"
+        detail={detail}
+        onRetry={() => navigate(0)}
+      />
+    </PageFrame>
+  );
+}
+
 export default function AppRouter() {
   return (
     <BrowserRouter>
@@ -118,7 +142,7 @@ export default function AppRouter() {
         <Route path="/verify-email" element={<EmailVerificationPage />} />
         <Route element={<EmailGate />}>
           <Route element={<AppShell />}>
-            <Route element={<AppGuard />}>
+            <Route element={<AppGuard />} errorElement={<RouteErrorFallback />}>
               <Route
                 index
                 element={<Navigate to="/workspace/overview" replace />}
@@ -149,6 +173,7 @@ export default function AppRouter() {
               <Route path="admin/knowledge" element={<KnowledgePage />} />
               <Route path="admin/resources" element={<ResourcesPage />} />
               <Route path="admin/models" element={<ModelGovernancePage />} />
+              <Route path="admin/skills" element={<SkillGovernancePage />} />
               <Route path="admin/settings" element={<SettingsPage />} />
               <Route path="admin/security" element={<SecurityPage />} />
               <Route

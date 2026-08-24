@@ -1,0 +1,14 @@
+{
+  "query": "针对ForgeSight六项用户价值优化建议给出官方数据实例，调研主流、开源与近期技术并形成适配方案",
+  "mode": "standard",
+  "started_at": "2026-08-22T18:20:00+08:00",
+  "completed_at": "2026-08-22T19:05:00+08:00",
+  "assumptions": [
+    "六项建议指上游报告P0中的角色化今日工作台、异常收件箱、制造调查、行动闭环、班次交接、可信回答卡",
+    "机器学习模块不在本次范围",
+    "案例数值来自赛题方模拟数据，不代表真实企业运营"
+  ],
+  "methods": ["local CSV verification", "official documentation research", "GitHub primary-source review", "architecture fit analysis"],
+  "source_count": 20,
+  "outputs": ["ForgeSight_六项用户价值优化方案调研.md", "sources.jsonl", "evidence.jsonl", "claims.jsonl"]
+}

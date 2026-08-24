@@ -18,12 +18,13 @@ from functools import lru_cache
 
 import httpx
 from openai import OpenAI
-from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam, or_, text
 
 from app.config import settings
 from app.db.models import (
     BusinessObject,
     BusinessRule,
+    AnalysisSkill,
     DataTable,
     KnowledgeMetric,
     MetricSourceBinding,
@@ -198,6 +199,34 @@ def collect_documents(session, source_id: int) -> list[SemanticDocument]:
                 topic=row.scope,
                 content=f"业务规则：{row.name}\n类型：{row.rule_type}\n范围：{row.scope}\n内容：{row.content}",
                 metadata={},
+            )
+        )
+    skill_rows = (
+        session.query(AnalysisSkill)
+        .filter(
+            AnalysisSkill.status == "published",
+            or_(AnalysisSkill.source_id.is_(None), AnalysisSkill.source_id == source_id),
+        )
+        .all()
+    )
+    for row in skill_rows:
+        documents.append(
+            SemanticDocument(
+                source_id=source_id,
+                object_type="analysis_skill",
+                object_id=row.id,
+                topic=row.topic,
+                content="\n".join(
+                    (
+                        f"分析技能：{row.name}",
+                        f"主题：{row.topic}",
+                        f"适用表达：{(row.trigger_json or {}).get('terms', [])}",
+                        f"说明：{row.description}",
+                        f"前置条件：{row.preconditions_json or []}",
+                        f"分析步骤：{row.procedure_json or []}",
+                    )
+                ),
+                metadata={"version": row.version, "scopeSourceId": row.source_id},
             )
         )
     return documents

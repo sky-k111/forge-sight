@@ -1,0 +1,11 @@
+{"claim_id":"C01","claim":"ForgeSight 的首批高频用户应是生产主管、质量工程师/主管、设备工程师/维修计划员和生产/物料计划员，而不是泛化的所有业务人员。","support":["a07-local","onet-production-manager","onet-quality-manager","onet-planner","onet-maintenance"],"status":"supported"}
+{"claim_id":"C02","claim":"厂长更适合作为摘要和行动状态消费者，现场操作人员更适合轻量触达与反馈，而不是开放式 ChatBI 的首要用户。","support":["onet-production-manager","manual-disruptions","lean-tiered"],"status":"inference_needs_interview"}
+{"claim_id":"C03","claim":"ForgeSight 应定位为现有 ERP/MES/QMS/EAM/WMS 与数据底座之上的制造运营决策支持层，而非替代事务系统。","support":["a07-local","isa95","iso22400"],"status":"supported"}
+{"claim_id":"C04","claim":"当前产品主要覆盖问、查、解释和展示，用户价值最大的缺口是行动、责任、期限、升级和效果验证。","support":["lean-visual","lean-tiered","asq-rca","mckinsey-dpm"],"status":"supported_by_external_and_code_audit"}
+{"claim_id":"C05","claim":"角色化今日工作台和异常收件箱比增加更多 KPI 卡片更贴近生产主管的高频任务。","support":["onet-production-manager","lean-visual","mlc-2026"],"status":"product_inference"}
+{"claim_id":"C06","claim":"自然语言问析的可信度必须由口径、数据质量、范围、执行校验和局限共同表达，不能只依赖单一百分比。","support":["iso22400","powerbi-qna","looker-conversational","dq-metadata","dq-decision"],"status":"supported"}
+{"claim_id":"C07","claim":"通用制造数据插座应通过元数据和语义映射把未知物理结构对齐到稳定制造对象，而不是对任意数据库盲目生成 SQL。","support":["a07-local","isa95","powerbi-qna","looker-conversational"],"status":"supported"}
+{"claim_id":"C08","claim":"业务端的检查点分支应改写为调整条件并建立对比方案，技术检查点只作为可展开证据。","support":["onet-planner","mckinsey-dpm"],"status":"product_inference"}
+{"claim_id":"C09","claim":"现场人工反馈应只收集高价值上下文，并明确区分人工事实、系统事实和模型推断。","support":["manual-disruptions","manual-assembly-data","dq-metadata"],"status":"supported"}
+{"claim_id":"C10","claim":"机器学习能力应包装为停机风险、异常批次、产量预测等业务任务，算法与训练细节由治理角色控制。","support":["a07-local","onet-production-manager","onet-quality-manager","onet-maintenance"],"status":"product_inference"}
+

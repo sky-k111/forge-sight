@@ -1,0 +1,11 @@
+{"evidence_id":"E01","source_ids":["S01"],"claim":"2026-07-15 L03良率96.98%；最近7天L05非计划停机340分钟；P026最近7天抽检不良率3.91%，可作为六项方案的贯通演示数据。","locator":"CSV聚合核验"}
+{"evidence_id":"E02","source_ids":["S02","S03"],"claim":"成熟告警模型包含对象、类型、严重度、指派、确认/清除、去重、自动清除、通知和升级生命周期。"}
+{"evidence_id":"E03","source_ids":["S04"],"claim":"生产主管交接报告围绕班次、工作中心、工单指标、未关闭异常、完成/待完成作业和操作员记录组织，并允许人工或AI摘要。"}
+{"evidence_id":"E04","source_ids":["S05","S06"],"claim":"制造事件通常同时关联工单、设备、产品、组件等多个对象，对象中心流程挖掘比单case模型更适合调查。"}
+{"evidence_id":"E05","source_ids":["S07"],"claim":"Eclipse BaSyx提供AAS 3.1系列规范、AASX和API实现，可作为标准化设备语义的可选适配层。"}
+{"evidence_id":"E06","source_ids":["S08","S09"],"claim":"LangGraph支持持久化中断、人工批准/编辑/拒绝以及按thread恢复，适合ForgeSight人在回路。"}
+{"evidence_id":"E07","source_ids":["S10","S11","S20"],"claim":"Camunda提供完整用户任务语义；Temporal提供可跨故障和长期运行的durable workflow/agent，但当前比赛版无需同时引入。"}
+{"evidence_id":"E08","source_ids":["S12","S13"],"claim":"指标、质量、术语、事件、血缘和审计可用结构化元数据与开放血缘标准表达。"}
+{"evidence_id":"E09","source_ids":["S14"],"claim":"Phoenix支持基于OpenTelemetry/OpenInference的Agent追踪、数据集、评测和人工annotation，适合研发层可观测。"}
+{"evidence_id":"E10","source_ids":["S15","S16","S17","S18"],"claim":"生产反馈应进入标注、数据集、离线评测和审核发布；长期记忆和prompt优化不能直接成为未经治理的企业真相。"}
+{"evidence_id":"E11","source_ids":["S19"],"claim":"ERPNext制造对象围绕Work Order、Job Card、工位、数量、时间和质量检验组织，可作为业务对象结构参考。"}

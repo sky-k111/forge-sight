@@ -6,6 +6,7 @@ import { Button, Card, ErrorNotice, StatusPill } from "../../components/ui";
 import { ChartLegend, ComboMetricChart, CorrelationScatterChart, MatrixHeatmapChart, RankBarChart, ShareDonutChart, TrendLineChart } from "../../components/charts";
 import { listSources } from "../../api/datasources";
 import { createModelingTask } from "../../api/modeling";
+import { submitSkillFeedback } from "../../api/skills";
 import {
   createAnalysisBranch,
   createAnalysisSession,
@@ -1043,6 +1044,7 @@ function ModelingProposalCard({ proposal, runId, onOpenModeling }) {
   const [confirming, setConfirming] = useState(false);
   const [createError, setCreateError] = useState(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const reusableModel = proposal.recommendedAction === "reuse" ? proposal.reusableModel : null;
 
   const confirm = async () => {
     if (confirming) return;
@@ -1078,21 +1080,28 @@ function ModelingProposalCard({ proposal, runId, onOpenModeling }) {
           <span className="grid h-8 w-8 shrink-0 place-items-center rounded-control bg-primary-soft text-primary"><Icon name="model" size={16} /></span>
           <div className="min-w-0"><span className="text-[10px] font-semibold tracking-wide text-faint">AGENT 建模方案</span><h3 className="mt-0.5 truncate text-body font-semibold text-ink">{proposal.title}</h3></div>
         </div>
-        <StatusPill tone={confirmed ? "green" : "amber"}>{confirmed ? "已进入任务台" : "等待确认"}</StatusPill>
+        <StatusPill tone={reusableModel || confirmed ? "green" : "amber"}>{reusableModel ? "生产模型可用" : confirmed ? "已进入任务台" : "等待确认"}</StatusPill>
       </div>
       <div className="px-4 py-3.5">
-        <p className="text-body leading-relaxed text-ink">我将这个问题识别为<strong className="font-semibold">{proposal.taskType}</strong>任务。系统会先形成可复核方案，不会在你不知情的情况下直接训练。</p>
+        <p className="text-body leading-relaxed text-ink">{reusableModel ? <>已发现同一数据源中用途相近的<strong className="font-semibold">已发布模型</strong>，优先复用可以避免重复训练。</> : <>我将这个问题识别为<strong className="font-semibold">{proposal.taskTypeLabel || proposal.taskType}</strong>任务。系统会先形成可复核方案，不会在你不知情的情况下直接训练。</>}</p>
         <div className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-card border border-line bg-line sm:grid-cols-4">
-          <ProposalField label="建模目标" value={proposal.goal} />
-          <ProposalField label="训练数据" value={`${proposal.dataset} · ${proposal.sampleCount} 条`} />
-          <ProposalField label="预测目标" value={proposal.target} mono />
-          <ProposalField label="评估重点" value={proposal.metric} />
+          {reusableModel ? <>
+            <ProposalField label="生产模型" value={reusableModel.name} />
+            <ProposalField label="算法与版本" value={`${reusableModel.algorithm} · v${reusableModel.version}`} />
+            <ProposalField label="预测目标" value={reusableModel.targetLabel || reusableModel.targetField} mono />
+            <ProposalField label="最近评估" value={reusableModel.metric || "已通过发布复核"} />
+          </> : <>
+            <ProposalField label="建模目标" value={proposal.goal} />
+            <ProposalField label="训练数据" value={`${proposal.dataset} · ${proposal.sampleCount} 条`} />
+            <ProposalField label="预测目标" value={proposal.target} mono />
+            <ProposalField label="评估重点" value={proposal.metric} />
+          </>}
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-1.5"><span className="mr-1 text-[10px] text-faint">候选模型</span>{proposal.candidates.map((candidate) => <span key={candidate} className="rounded-full border border-line bg-surface-2 px-2 py-1 text-[10px] text-ink-2">{candidate}</span>)}</div>
+        {!reusableModel && <div className="mt-3 flex flex-wrap items-center gap-1.5"><span className="mr-1 text-[10px] text-faint">候选模型</span>{(proposal.candidates ?? []).map((candidate) => <span key={candidate} className="rounded-full border border-line bg-surface-2 px-2 py-1 text-[10px] text-ink-2">{candidate}</span>)}</div>}
         {detailsOpen && <div className="mt-3 flex items-start gap-2 rounded-control border border-teal/25 bg-teal-soft px-3 py-2.5 text-[11px] leading-relaxed text-muted"><span className="mt-0.5 text-teal"><Icon name="shield" size={14} /></span><span>开始训练前将检查缺失值、类别比例、时间穿越和结果泄漏字段；训练代码在隔离 Python 环境运行，数据源保持只读。</span></div>}
         <div className="mt-3.5 flex flex-wrap justify-end gap-2">
           <Button variant="ghost" onClick={() => setDetailsOpen((value) => !value)}>{detailsOpen ? "收起检查项" : "查看检查项"}</Button>
-          {!confirmed ? <><Button variant="secondary" onClick={onOpenModeling}>调整方案</Button><Button variant="primary" onClick={confirm} disabled={confirming}><Icon name="play" size={14} />{confirming ? "创建中…" : "确认并创建任务"}</Button></> : <Button variant="primary" onClick={onOpenModeling}>在智能建模中查看 <Icon name="arrow" size={14} /></Button>}
+          {reusableModel ? <Button variant="primary" onClick={onOpenModeling}>查看生产模型 <Icon name="arrow" size={14} /></Button> : !confirmed ? <><Button variant="secondary" onClick={onOpenModeling}>调整方案</Button><Button variant="primary" onClick={confirm} disabled={confirming}><Icon name="play" size={14} />{confirming ? "创建中…" : "确认并创建任务"}</Button></> : <Button variant="primary" onClick={onOpenModeling}>在智能建模中查看 <Icon name="arrow" size={14} /></Button>}
         </div>
         {createError && <p className="mt-2 text-right text-[11px] leading-relaxed text-red">{createError}</p>}
       </div>
@@ -1186,6 +1195,8 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
   const [showSql, setShowSql] = useState(false);
   const [copied, setCopied] = useState(false);
   const [exported, setExported] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
   const chart = run.chart;
   const tableRequested = run.tasks?.some((task) => (task.requestedChart ?? task.intent?.requestedChart) === "table");
   const [showTable, setShowTable] = useState(tableRequested || !chart);
@@ -1228,6 +1239,15 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
     link.click();
     URL.revokeObjectURL(url);
     setExported(true);
+  };
+  const sendFeedback = async (rating) => {
+    setFeedbackBusy(true);
+    try {
+      await submitSkillFeedback(run.id, rating);
+      setFeedback(rating);
+    } finally {
+      setFeedbackBusy(false);
+    }
   };
   return (
     <article className="motion-soft-rise mt-1.5 overflow-hidden rounded-panel border border-line bg-surface shadow-card">
@@ -1401,7 +1421,10 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
         {run.execution?.columns?.length > 0 && <span className="inline-flex items-center gap-1"><Icon name="database" size={14} />结果表</span>}
         {sqlCode && <span className="inline-flex items-center gap-1"><Icon name="code" size={14} />SQL</span>}
         <span className="inline-flex items-center gap-1 text-teal"><Icon name="shield" size={14} />结果已校验</span>
-        <button type="button" onClick={exportCsv} disabled={!run.execution?.columns?.length} className="ml-auto flex cursor-pointer items-center gap-1 font-medium text-primary transition-opacity hover:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 disabled:cursor-not-allowed disabled:opacity-45">
+        <span className="ml-auto text-[11px] text-faint">这次分析有帮助吗？</span>
+        <button type="button" disabled={feedbackBusy || Boolean(feedback)} onClick={() => sendFeedback("helpful")} className="cursor-pointer font-medium text-muted hover:text-green disabled:cursor-default disabled:opacity-60">{feedback === "helpful" ? "已反馈有帮助" : "有帮助"}</button>
+        <button type="button" disabled={feedbackBusy || Boolean(feedback)} onClick={() => sendFeedback("needs_improvement")} className="cursor-pointer font-medium text-muted hover:text-red disabled:cursor-default disabled:opacity-60">{feedback === "needs_improvement" ? "已记录" : "需改进"}</button>
+        <button type="button" onClick={exportCsv} disabled={!run.execution?.columns?.length} className="flex cursor-pointer items-center gap-1 font-medium text-primary transition-opacity hover:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 disabled:cursor-not-allowed disabled:opacity-45">
           {exported ? "结果已导出" : "导出完整结果"}<Icon name="arrow" size={13} />
         </button>
         <button type="button" onClick={onOpenEvidence} className="shrink-0 cursor-pointer font-semibold text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25">查看证据链</button>

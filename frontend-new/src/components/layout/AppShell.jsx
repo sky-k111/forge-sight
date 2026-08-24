@@ -44,7 +44,7 @@ export default function AppShell() {
   const [sessions, setSessions] = useState(null);
   const [sessionsError, setSessionsError] = useState(null);
   const [activeSessionId, setActiveSessionId] = useState(null);
-  const [expandedItems, setExpandedItems] = useState(() => new Set(["analysis-center", "data-governance", "platform-governance"]));
+  const [expandedItems, setExpandedItems] = useState(() => new Set(["analysis-center", "data-semantic-governance"]));
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
@@ -80,8 +80,10 @@ export default function AppShell() {
   }, []);
 
   useEffect(() => {
+    if (role !== "business") return undefined;
     refreshSessions();
-  }, [refreshSessions]);
+    return undefined;
+  }, [refreshSessions, role]);
 
   useEffect(() => {
     let cancelled = false;
@@ -341,33 +343,33 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
       </nav>
 
       {role === "business" ? (
-        <>
+        ["analysis", "sessions"].includes(page) ? <>
           <div className="border-t border-line px-2 py-2.5">
-            <Button variant="primary" className="sidebar-create-task relative h-10 w-full text-[13px]" onClick={onCreateTask} aria-label="新建数据任务">
+            <Button variant="primary" className="sidebar-create-task relative h-10 w-full text-[13px]" onClick={onCreateTask} aria-label="发起分析">
               {collapsed ? (
                 <Icon name="plus" size={15} />
               ) : (
                 <>
                   <span className="absolute left-3 inline-flex"><Icon name="plus" size={15} /></span>
-                  新建数据任务
+                  发起分析
                 </>
               )}
             </Button>
             {!collapsed && (
               <label className="relative mt-2 block">
-                <span className="sr-only">搜索会话</span>
+                <span className="sr-only">搜索调查记录</span>
                 <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-faint"><Icon name="search" size={14} /></span>
                 <input
                   value={searchText}
                   onChange={(event) => setSearchText(event.target.value)}
-                  placeholder="搜索分析会话"
+                  placeholder="搜索调查记录"
                   className="h-9 w-full rounded-control border border-line bg-surface pl-8 pr-2.5 text-xs text-ink outline-none transition placeholder:text-faint focus:border-primary/50 focus:ring-2 focus:ring-primary/25"
                 />
               </label>
             )}
           </div>
           <div className="flex min-h-0 flex-1 flex-col border-t border-line px-2 pb-2.5">
-            {!collapsed && <div className="px-2 pb-1.5 pt-2.5 text-[11px] font-semibold text-muted">最近分析</div>}
+            {!collapsed && <div className="px-2 pb-1.5 pt-2.5 text-[11px] font-semibold text-muted">最近调查</div>}
             <div className={cn("flex min-h-0 flex-1 flex-col gap-1 overflow-auto px-0.5 pb-1.5", collapsed && "pt-2")}>
               {sessions === null && [1, 2, 3].map((item) => <i key={item} className="h-8 shrink-0 animate-pulse rounded-control bg-surface-3" />)}
               {sessions !== null && sessionsError && !collapsed && (
@@ -458,7 +460,7 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
               )}
             </div>
           </div>
-        </>
+        </> : null
       ) : (
         !collapsed && (
           <div className="border-t border-line px-2 pb-2.5">
@@ -649,7 +651,7 @@ function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, unreadCount, o
             分析证据链
           </Button>
         )}
-        <div className="flex items-center gap-0.5 rounded-control border border-line bg-surface-2 p-0.5" aria-label="切换工作区">
+        {!import.meta.env.PROD && <div className="flex items-center gap-0.5 rounded-control border border-line bg-surface-2 p-0.5" aria-label="切换工作区">
           <button
             type="button"
             className={cn(
@@ -673,7 +675,7 @@ function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, unreadCount, o
           >
             <Icon name="admin" size={14} />管理
           </button>
-        </div>
+        </div>}
         <button
           type="button"
           className="relative grid h-[34px] w-[34px] cursor-pointer place-items-center rounded-control border border-transparent text-muted transition-colors hover:border-line hover:bg-surface-2 hover:text-ink"

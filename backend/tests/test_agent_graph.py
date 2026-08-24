@@ -79,6 +79,49 @@ def test_langgraph_full_readonly_path():
     assert result["metric_resolution"]["source"] == "published"
 
 
+def test_enabled_governed_skill_is_injected_without_changing_execution_allowlist():
+    prompts = []
+    base = _deps(generate_text=lambda _state, step, _system, user: (
+        prompts.append((step, user)) or
+        ("SELECT SUM(good_qty) AS good_qty FROM mes_process_output" if step == "query.generate" else "结果为 90。")
+    ))
+    deps = GraphDependencies(
+        retrieve_context=base.retrieve_context,
+        generate_text=base.generate_text,
+        validate_sql=base.validate_sql,
+        execute_sql=base.execute_sql,
+        retrieve_skills=lambda _question, _source_id: {
+            "enabled": True,
+            "variant": "on",
+            "skills": [{
+                "id": "skill-1",
+                "name": "良率下降归因",
+                "version": 1,
+                "preconditions": ["核对时间覆盖"],
+                "steps": ["按工序定位变化贡献"],
+                "constraints": ["不得扩大白名单"],
+            }],
+        },
+    )
+    graph = build_analysis_graph(deps, checkpointer=InMemorySaver())
+    result = graph.invoke(
+        {
+            "session_id": "ses-skill",
+            "run_id": "run-skill",
+            "source_id": 1,
+            "user_question": "分析工序良率",
+            "skill_enhancement_enabled": True,
+            "retry_count": 0,
+            "attempted_sqls": [],
+        },
+        config={"configurable": {"thread_id": "run-skill"}},
+    )
+
+    query_prompt = next(user for step, user in prompts if step == "query.generate")
+    assert "良率下降归因" in query_prompt
+    assert result["semantic_context"]["executionPolicy"]["allowedTables"] == ["mes_process_output"]
+
+
 def test_unregistered_metric_is_inferred_and_confidence_is_capped():
     context = _context()
     context["metrics"] = []
@@ -767,9 +810,10 @@ def test_runner_projects_steps_events_artifacts_and_message(analysis_session):
     assert len(snapshot["tasks"]) == 1
     assert [step["stepKey"] for step in snapshot["steps"]] == [
         "intent.route",
-        "intent.guard",
-        "intent.parse",
-        "context.retrieve",
+            "intent.guard",
+            "intent.parse",
+            "skill.retrieve",
+            "context.retrieve",
         "query.generate",
         "query.validate",
         "query.execute",
@@ -1137,6 +1181,33 @@ def test_regression_modeling_proposal_targets_duration():
     assert proposal["target"] == "停机时长"
     assert proposal["candidates"] == ["linear", "tree", "forest"]
     assert proposal["metric"] == "R² / MAE"
+
+
+def test_modeling_proposal_prefers_reusable_published_model():
+    base = _modeling_deps()
+    deps = GraphDependencies(
+        retrieve_context=base.retrieve_context,
+        generate_text=base.generate_text,
+        validate_sql=base.validate_sql,
+        execute_sql=base.execute_sql,
+        find_reusable_models=lambda question, source_id, task_type: [{
+            "modelId": "mdl-production",
+            "taskId": "mt-existing",
+            "name": "高不良风险识别模型",
+            "version": 3,
+            "algorithm": "forest",
+            "taskType": task_type,
+            "targetField": "high_defect_risk",
+            "targetLabel": "高风险标记",
+            "metric": "AUC 0.986",
+            "matchScore": 0.82,
+            "decisionThreshold": 0.42,
+        }] if source_id == 1 and "不良风险" in question else [],
+    )
+    graph = build_analysis_graph(deps, checkpointer=InMemorySaver())
+    proposal = _invoke_modeling(graph, "识别高不良风险的生产记录")["modeling_proposal"]
+    assert proposal["recommendedAction"] == "reuse"
+    assert proposal["reusableModel"]["modelId"] == "mdl-production"
 
 
 def test_modeling_proposal_sql_must_pass_whitelist():

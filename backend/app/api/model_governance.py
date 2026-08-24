@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from app.modeling import service
-from app.modeling.contracts import GovernanceAction, GovernanceReview
+from app.modeling.contracts import GovernanceAction, GovernanceReview, ThresholdUpdate
 
 router = APIRouter(prefix="/api/v1", tags=["model-governance"])
 
@@ -17,8 +17,11 @@ def _raise(exc: Exception):
 
 
 @router.get("/model-governance/models")
-def list_models(statusValue: str | None = Query(default=None, alias="status")):
-    return {"items": service.list_models(status=statusValue or "")}
+def list_models(
+    statusValue: str | None = Query(default=None, alias="status"),
+    task_id: str = Query(default="", alias="taskId"),
+):
+    return {"items": service.list_models(status=statusValue or "", task_id=task_id)}
 
 
 @router.post("/model-governance/models/{model_id}/review")
@@ -41,5 +44,21 @@ def publish_model(model_id: str, payload: GovernanceAction):
 def retire_model(model_id: str, payload: GovernanceAction):
     try:
         return service.retire_model(model_id, payload.userId)
+    except Exception as exc:
+        _raise(exc)
+
+
+@router.post("/model-governance/models/{model_id}/rollback")
+def rollback_model(model_id: str, payload: GovernanceAction):
+    try:
+        return service.rollback_model(model_id, payload.userId)
+    except Exception as exc:
+        _raise(exc)
+
+
+@router.post("/model-governance/models/{model_id}/threshold-variant", status_code=201)
+def threshold_variant(model_id: str, payload: ThresholdUpdate):
+    try:
+        return service.create_threshold_variant(model_id, payload.threshold, payload.reason, payload.userId)
     except Exception as exc:
         _raise(exc)

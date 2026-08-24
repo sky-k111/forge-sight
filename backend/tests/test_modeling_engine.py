@@ -7,12 +7,14 @@ import pytest
 from app.modeling.engine import (
     ALGORITHMS,
     ModelingEngineError,
+    diagnose_dataset,
     encode_input_record,
     evaluate_model,
     extract_importance,
     prepare_dataset,
     summarize_metric,
     train_model,
+    tune_model,
 )
 
 
@@ -45,9 +47,9 @@ def test_prepare_dataset_classification():
     assert prepared["task_type"] == "classification"
     assert prepared["X_train"].shape[0] + prepared["X_test"].shape[0] == 400
     assert prepared["feature_names"] == ["工序", "产线", "停机时长", "计划数量"]
-    assert set(prepared["encoders"]) == {"工序", "产线"}  # 类别列已编码
-    assert "median" in prepared["impute_policy"].values()  # 数值缺失中位数填充
-    assert not prepared["X_train"].isna().any().any()
+    assert prepared["encoders"] == {}  # 编码器只允许在训练折内拟合并随模型持久化
+    assert prepared["impute_policy"]["numeric"] == "median"
+    assert prepared["X_train"].isna().any().any()  # 原始切分不提前填充，避免测试集泄漏
     assert prepared["y_train"].nunique() == 2
 
 
@@ -71,6 +73,10 @@ def test_prepare_dataset_rejects_missing_target():
 
 def test_train_and_evaluate_all_families():
     df = make_classification_df(600)
+    df["continuous_target"] = (
+        df["停机时长"].fillna(df["停机时长"].median()) * 0.7
+        + df["计划数量"] * 0.03
+    )
     cases = [
         ("classification", "logistic", {"auc", "f1", "precision", "recall", "accuracy", "confusionMatrix"}),
         ("classification", "forest", {"auc", "f1", "precision", "recall", "accuracy", "confusionMatrix"}),
@@ -81,12 +87,15 @@ def test_train_and_evaluate_all_families():
         ("anomaly", "isolation", {"anomalyRate", "contamination"}),
     ]
     for task_type, algorithm, expected_keys in cases:
-        target = "high_defect_risk" if task_type in ("classification", "regression") else ""
+        target = "continuous_target" if task_type == "regression" else (
+            "high_defect_risk" if task_type == "classification" else ""
+        )
         prepared = prepare_dataset(df, task_type, target_field=target)
-        model = train_model(task_type, algorithm, prepared["X_train"], prepared["y_train"], prepared["sample_count"])
+        effective_type = prepared["task_type"]
+        model = train_model(effective_type, algorithm, prepared["X_train"], prepared["y_train"], prepared["sample_count"])
         assert model is not None, algorithm
         metrics = evaluate_model(
-            task_type, algorithm, model,
+            effective_type, algorithm, model,
             prepared["X_test"], prepared["y_test"], prepared["sample_count"],
         )
         assert expected_keys.issubset(metrics.keys()), (algorithm, metrics)
@@ -125,3 +134,97 @@ def test_encode_input_record_roundtrip():
 def test_summarize_metric():
     assert summarize_metric("classification", "logistic", {"auc": 0.986}) == "AUC 0.986"
     assert summarize_metric("anomaly", "isolation", {"anomalyRate": 6.8}) == "异常占比 6.8%"
+
+
+def test_group_split_keeps_work_orders_isolated():
+    df = make_classification_df(300)
+    df["work_order_id"] = [f"WO-{index // 5:03d}" for index in range(len(df))]
+    prepared = prepare_dataset(
+        df,
+        "classification",
+        target_field="high_defect_risk",
+        features=["work_order_id", "工序", "停机时长"],
+        split_strategy="group",
+        group_field="work_order_id",
+    )
+    assert prepared["split"]["strategy"] == "group"
+    assert set(prepared["X_train"]["work_order_id"]).isdisjoint(prepared["X_test"]["work_order_id"])
+
+
+def test_time_split_fits_categories_only_on_past_rows():
+    df = make_classification_df(200)
+    df["record_date"] = pd.date_range("2026-01-01", periods=len(df), freq="D")
+    df.loc[160:, "工序"] = "未来新增工序"
+    prepared = prepare_dataset(
+        df,
+        "classification",
+        target_field="high_defect_risk",
+        features=["工序", "产线", "停机时长"],
+        split_strategy="time",
+        time_field="record_date",
+    )
+    assert prepared["split"]["strategy"] == "time"
+    assert prepared["split"]["trainEnd"] < prepared["split"]["testStart"]
+    model = train_model(
+        "classification", "logistic", prepared["X_train"], prepared["y_train"], prepared["sample_count"],
+    )
+    encoder = model.named_steps["preprocessor"].named_transformers_["categorical"].named_steps["encoder"]
+    categories = {str(value) for values in encoder.categories_ for value in values}
+    assert "未来新增工序" not in categories
+    assert len(model.predict(prepared["X_test"])) == prepared["test_count"]
+
+
+def test_dataset_diagnostics_blocks_bad_labels_and_recommends_group_split():
+    df = make_classification_df(240)
+    df["work_order_id"] = [f"WO-{index // 4:03d}" for index in range(len(df))]
+    report = diagnose_dataset(
+        df,
+        "classification",
+        target_field="high_defect_risk",
+        features=["work_order_id", "工序", "停机时长"],
+        split_strategy="auto",
+        group_field="work_order_id",
+    )
+    assert report["status"] in {"ready", "warning"}
+    assert report["recommendedSplit"] == "group"
+    assert report["sampleCount"] == 240
+    assert {item["key"] for item in report["checks"]} >= {"sample_count", "target", "leakage", "split"}
+
+    broken = df.copy()
+    broken["high_defect_risk"] = 1
+    blocked = diagnose_dataset(broken, "classification", target_field="high_defect_risk")
+    assert blocked["status"] == "blocked"
+    assert any("2 个类别" in item for item in blocked["blockers"])
+
+
+def test_balanced_automl_uses_training_cv_and_returns_threshold_policy():
+    prepared = prepare_dataset(make_classification_df(300), "classification", target_field="high_defect_risk")
+    model, tuning = tune_model("classification", "logistic", prepared, optimization_level="balanced")
+    assert tuning["searched"] is True
+    assert tuning["candidateCount"] == 3
+    assert tuning["cvPolicy"]
+    assert 0.2 <= tuning["decisionThreshold"] <= 0.8
+    assert tuning["thresholdPolicy"]["source"] in {"training_oof", "default"}
+    metrics = evaluate_model(
+        "classification", "logistic", model,
+        prepared["X_test"], prepared["y_test"], prepared["sample_count"],
+        decision_threshold=tuning["decisionThreshold"],
+    )
+    assert len(metrics["confusionMatrix"]) == 2
+
+
+def test_automl_search_failure_falls_back_to_a_trainable_default(monkeypatch):
+    class BrokenSearch:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def fit(self, *args, **kwargs):
+            raise ValueError("single-class validation fold")
+
+    monkeypatch.setattr("app.modeling.engine.GridSearchCV", BrokenSearch)
+    prepared = prepare_dataset(make_classification_df(220), "classification", target_field="high_defect_risk")
+    model, tuning = tune_model("classification", "logistic", prepared, optimization_level="balanced")
+
+    assert tuning["searched"] is False
+    assert "single-class validation fold" in tuning["fallbackReason"]
+    assert len(model.predict(prepared["X_test"])) == prepared["test_count"]

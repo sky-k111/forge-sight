@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
 import { Button, Card, PageFrame, SectionHeader, StatusPill } from "../../components/ui";
+import { getSkillSettings, updateSkillSettings } from "../../api/skills";
 
 const configs = [
   { icon: "database", name: "华东制造数据底座", type: "PostgreSQL 16", detail: "manufacturing · 只读账号", status: "连接正常", tone: "green" },
@@ -12,6 +13,32 @@ const configs = [
 
 export default function SettingsPage() {
   const [savedAt, setSavedAt] = useState("");
+  const [skillSetting, setSkillSetting] = useState({ enabled: false, experiment: {} });
+  const [skillLoading, setSkillLoading] = useState(true);
+  const [skillError, setSkillError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    getSkillSettings()
+      .then((data) => active && setSkillSetting(data))
+      .catch((error) => active && setSkillError(error.message))
+      .finally(() => active && setSkillLoading(false));
+    return () => { active = false; };
+  }, []);
+
+  const toggleSkillEnhancement = async () => {
+    const next = !skillSetting.enabled;
+    setSkillLoading(true);
+    setSkillError("");
+    try {
+      const changed = await updateSkillSettings(next);
+      setSkillSetting((current) => ({ ...current, ...changed }));
+    } catch (error) {
+      setSkillError(error.message);
+    } finally {
+      setSkillLoading(false);
+    }
+  };
   return (
     <PageFrame>
       <div className="grid items-start gap-3.5 xl:grid-cols-2">
@@ -50,8 +77,40 @@ export default function SettingsPage() {
           </div>
         </Card>
       </div>
+      <Card>
+        <SectionHeader eyebrow="受治理经验学习" title="分析技能增强实验" />
+        <div className="grid gap-4 px-5 pb-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+          <div className="max-w-3xl">
+            <div className="flex flex-wrap items-center gap-2">
+              <strong className="text-body font-semibold text-ink">在基础问析链路中召回已审核的分析步骤</strong>
+              <StatusPill tone={skillSetting.enabled ? "green" : "gray"}>{skillSetting.enabled ? "实验已开启" : "基线模式"}</StatusPill>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-muted">
+              开启后只会注入管理员已发布的程序性技能；数据权限、只读校验和 SQL 白名单保持不变。每次运行都会固化 on/off 变体，便于比较成功率、Token 与人工反馈。
+            </p>
+            {skillError && <p className="mt-2 text-xs text-red">{skillError}</p>}
+          </div>
+          <div className="flex items-center gap-4">
+            <ExperimentMetric label="关闭组" value={skillSetting.experiment?.off?.runs ?? 0} />
+            <ExperimentMetric label="开启组" value={skillSetting.experiment?.on?.runs ?? 0} />
+            <button
+              type="button"
+              disabled={skillLoading}
+              onClick={toggleSkillEnhancement}
+              aria-pressed={skillSetting.enabled}
+              className={cn("relative h-6 w-11 rounded-full transition-colors disabled:opacity-50", skillSetting.enabled ? "bg-green" : "bg-line-strong")}
+            >
+              <i className={cn("absolute top-1 h-4 w-4 rounded-full bg-white shadow-card transition-[left]", skillSetting.enabled ? "left-6" : "left-1")} />
+            </button>
+          </div>
+        </div>
+      </Card>
     </PageFrame>
   );
+}
+
+function ExperimentMetric({ label, value }) {
+  return <div className="text-right"><span className="block text-[10px] text-faint">{label}</span><strong className="font-mono text-sm text-ink">{value}</strong></div>;
 }
 
 function PolicyRow({ icon, title, description, enabled, value }) {

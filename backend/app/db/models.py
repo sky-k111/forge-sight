@@ -330,6 +330,8 @@ class AnalysisRun(Base):
     estimated_cost: Mapped[float] = mapped_column(Numeric(18, 8), default=0)
     currency: Mapped[str] = mapped_column(String(8), default="CNY")
     budget_snapshot_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    skill_enhancement_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    skill_experiment_variant: Mapped[str] = mapped_column(String(16), default="off")
     lease_owner: Mapped[str | None] = mapped_column(String(100), nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -502,6 +504,84 @@ class ExternalChatConversation(Base):
     status: Mapped[str] = mapped_column(String(20), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class PlatformFeatureFlag(Base):
+    """可审计的平台级能力开关；运行创建时将当前值快照到 AnalysisRun。"""
+
+    __tablename__ = "platform_feature_flag"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    config_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    updated_by: Mapped[str] = mapped_column(String(64), default="system")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class AnalysisSkill(Base):
+    """受治理的程序性分析技能：描述怎么分析，不授予任何数据访问权限。"""
+
+    __tablename__ = "analysis_skill"
+    __table_args__ = (
+        UniqueConstraint("slug", "source_id", "version", name="uq_analysis_skill_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    source_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    slug: Mapped[str] = mapped_column(String(120), index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    topic: Mapped[str] = mapped_column(String(50), default="通用分析")
+    status: Mapped[str] = mapped_column(String(20), default="candidate", index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    trigger_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    preconditions_json: Mapped[list] = mapped_column(JSON_TYPE, default=list)
+    procedure_json: Mapped[list] = mapped_column(JSON_TYPE, default=list)
+    output_policy_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    constraints_json: Mapped[list] = mapped_column(JSON_TYPE, default=list)
+    evidence_run_ids_json: Mapped[list] = mapped_column(JSON_TYPE, default=list)
+    confidence: Mapped[float] = mapped_column(Numeric(5, 4), default=0)
+    created_by: Mapped[str] = mapped_column(String(64), default="system")
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class LearningFeedback(Base):
+    """用户对分析结果的显式反馈，是候选技能生成的主要证据。"""
+
+    __tablename__ = "learning_feedback"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(40), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), default="local-test-user")
+    rating: Mapped[str] = mapped_column(String(24))
+    correction_type: Mapped[str] = mapped_column(String(40), default="")
+    comment: Mapped[str] = mapped_column(Text, default="")
+    candidate_skill_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AnalysisSkillUsage(Base):
+    """技能命中和结果快照，用于比较开关前后的成功率、耗时与成本。"""
+
+    __tablename__ = "analysis_skill_usage"
+    __table_args__ = (
+        UniqueConstraint("run_id", "task_id", "skill_id", name="uq_analysis_skill_usage"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(40), index=True)
+    task_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    skill_id: Mapped[str] = mapped_column(String(40), index=True)
+    variant: Mapped[str] = mapped_column(String(16), default="on")
+    relevance_score: Mapped[float] = mapped_column(Numeric(8, 6), default=0)
+    applied: Mapped[bool] = mapped_column(Boolean, default=True)
+    outcome: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ExternalChatJob(Base):
@@ -937,6 +1017,11 @@ class ModelingTask(Base):
     target_label: Mapped[str] = mapped_column(String(100), default="", comment="标签语义描述，如 不良率是否 ≥ 4%")
     features_json: Mapped[list] = mapped_column(JSON_TYPE, default=list, comment="特征列名")
     candidates_json: Mapped[list] = mapped_column(JSON_TYPE, default=list, comment="候选算法 id")
+    split_strategy: Mapped[str] = mapped_column(String(16), default="auto", comment="auto/random/time/group")
+    time_field: Mapped[str] = mapped_column(String(64), default="", comment="时间留出字段")
+    group_field: Mapped[str] = mapped_column(String(64), default="", comment="业务实体/工单分组字段")
+    diagnostics_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict, comment="最近一次训练数据体检")
+    diagnosed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     selected_model: Mapped[str | None] = mapped_column(String(30), nullable=True, comment="效果面板推荐模型算法 id")
     status: Mapped[str] = mapped_column(String(16), default="draft", index=True, comment="draft/training/trained/failed")
     error_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True, comment="训练失败原因")
@@ -958,6 +1043,13 @@ class GovernedModel(Base):
     task_id: Mapped[str] = mapped_column(String(40), index=True, comment="来源任务")
     name: Mapped[str] = mapped_column(String(120), comment="模型名")
     version: Mapped[int] = mapped_column(Integer, default=1, comment="同名模型按版本递增")
+    training_revision: Mapped[int] = mapped_column(Integer, default=1, comment="所属训练批次")
+    artifact_format_version: Mapped[int] = mapped_column(Integer, default=2, comment="模型包格式版本")
+    artifact_checksum: Mapped[str] = mapped_column(String(64), default="", comment="模型文件 SHA-256")
+    decision_threshold: Mapped[float | None] = mapped_column(Numeric(6, 4), nullable=True)
+    threshold_policy_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    tuning_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    explanation_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     algorithm: Mapped[str] = mapped_column(String(30), comment="linear/tree/forest/logistic/kmeans/isolation")
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True, comment="pending/reviewing/published/rejected/retired")
     owner_id: Mapped[str] = mapped_column(String(64), default="local-test-user")
@@ -977,13 +1069,14 @@ class GovernedModel(Base):
 
 
 class ModelingEvaluation(Base):
-    """建模任务最近一次训练的评估结果快照；重训覆盖旧值。"""
+    """一次训练批次的不可变评估快照；保留重训历史用于比较和回滚。"""
 
     __tablename__ = "modeling_evaluation"
-    __table_args__ = (UniqueConstraint("task_id", name="uq_modeling_eval_task"),)
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     task_id: Mapped[str] = mapped_column(String(40), index=True)
+    training_revision: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    model_ids_json: Mapped[list] = mapped_column(JSON_TYPE, default=list)
     result_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
