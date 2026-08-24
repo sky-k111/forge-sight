@@ -7,9 +7,12 @@ class AnalysisState(TypedDict, total=False):
     session_id: str
     run_id: str
     source_id: int
+    user_id: str
     user_question: str
     analysis_question: str
     conversation_context: list[dict[str, str]]
+    memory_enabled: bool
+    memory_context: dict[str, Any]
     intent_kind: str
     direct_response: str
     request_segments: list[dict[str, Any]]

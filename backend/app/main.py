@@ -14,6 +14,7 @@ from app.api import (
     deliveries,
     gateway,
     knowledge,
+    memory,
     messages,
     model_governance,
     modeling,
@@ -59,6 +60,12 @@ def create_platform_tables():
 
     seed_admin()
     seed_default_report_scopes()
+    try:
+        from app.memory.worker import start_worker as start_memory_worker
+
+        start_memory_worker()
+    except Exception:
+        log.exception("Agent memory worker initialization failed")
     if settings.retrieval_semantic_enabled and settings.semantic_index_worker_enabled:
         try:
             from app.retrieval.worker import start_worker as start_semantic_index_worker
@@ -78,6 +85,9 @@ def create_platform_tables():
 
 
 def stop_agent_runtime():
+    from app.memory.worker import stop_worker as stop_memory_worker
+
+    stop_memory_worker()
     if settings.retrieval_semantic_enabled and settings.semantic_index_worker_enabled:
         from app.retrieval.worker import stop_worker as stop_semantic_index_worker
 
@@ -131,6 +141,7 @@ app.include_router(messages.router)
 app.include_router(retrieval.router)
 app.include_router(analysis.router)
 app.include_router(skills.router)
+app.include_router(memory.router)
 app.include_router(overview.router)
 app.include_router(operations.router)
 app.include_router(reports.router)

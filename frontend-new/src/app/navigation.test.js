@@ -14,10 +14,12 @@ describe("role-aware navigation", () => {
     expect(items.find((item) => item.id === "analysis")?.label).toBe("发起分析");
     expect(items.find((item) => item.id === "sessions")?.label).toBe("调查记录");
     expect(items.find((item) => item.id === "reports")?.label).toBe("报告与交接");
+    expect(items.find((item) => item.id === "memory")).toBeUndefined();
   });
 
   it("keeps notification routes available outside the primary sidebar", () => {
     expect(routeByPage.messages).toBe("/workspace/messages");
     expect(routeByPage["admin-messages"]).toBe("/admin/messages");
+    expect(routeByPage.memory).toBe("/workspace/memory");
   });
 });

@@ -332,6 +332,8 @@ class AnalysisRun(Base):
     budget_snapshot_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     skill_enhancement_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     skill_experiment_variant: Mapped[str] = mapped_column(String(16), default="off")
+    memory_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    memory_experiment_variant: Mapped[str] = mapped_column(String(16), default="off")
     lease_owner: Mapped[str | None] = mapped_column(String(100), nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -513,6 +515,149 @@ class PlatformFeatureFlag(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    config_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    updated_by: Mapped[str] = mapped_column(String(64), default="system")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class AgentMemory(Base):
+    """受治理的长期记忆。
+
+    记忆与企业知识分开存储：知识描述企业事实与口径，记忆描述用户偏好、
+    已发生的调查以及可复用经验。所有检索必须先按作用域过滤，再做相关性排序。
+    """
+
+    __tablename__ = "agent_memory"
+    __table_args__ = (
+        Index("ix_agent_memory_scope", "tenant_id", "source_id", "user_id", "status"),
+        Index("ix_agent_memory_kind_status", "memory_kind", "status"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_agent_memory_confidence"),
+        CheckConstraint("importance >= 0 AND importance <= 1", name="ck_agent_memory_importance"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), default="default", index=True)
+    source_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    role_scope: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    channel: Mapped[str] = mapped_column(String(24), default="web")
+    memory_kind: Mapped[str] = mapped_column(String(24), index=True, comment="semantic / episodic / preference / procedural")
+    status: Mapped[str] = mapped_column(String(24), default="candidate", index=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    content: Mapped[str] = mapped_column(Text)
+    normalized_content: Mapped[str] = mapped_column(Text, default="")
+    keywords_json: Mapped[list] = mapped_column(JSON_TYPE, default=list)
+    metadata_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    confidence: Mapped[float] = mapped_column(Numeric(5, 4), default=0.7)
+    importance: Mapped[float] = mapped_column(Numeric(5, 4), default=0.5)
+    explicit: Mapped[bool] = mapped_column(Boolean, default=False)
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    access_count: Mapped[int] = mapped_column(Integer, default=0)
+    supersedes_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(64), default="system")
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class AgentMemoryEvidence(Base):
+    """记忆的来源与可追溯证据，不保存模型隐式思维链。"""
+
+    __tablename__ = "agent_memory_evidence"
+    __table_args__ = (Index("ix_agent_memory_evidence_memory", "memory_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    memory_id: Mapped[str] = mapped_column(String(40), index=True)
+    evidence_type: Mapped[str] = mapped_column(String(32), comment="message / run / feedback / admin")
+    reference_id: Mapped[str] = mapped_column(String(80), index=True)
+    excerpt: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AgentMemoryRelation(Base):
+    """记忆间的纠正、重复、因果与技能提升关系。"""
+
+    __tablename__ = "agent_memory_relation"
+    __table_args__ = (
+        UniqueConstraint("from_memory_id", "to_memory_id", "relation_type", name="uq_agent_memory_relation"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    from_memory_id: Mapped[str] = mapped_column(String(40), index=True)
+    to_memory_id: Mapped[str] = mapped_column(String(40), index=True)
+    relation_type: Mapped[str] = mapped_column(String(32), comment="supersedes / duplicate / supports / promotes")
+    metadata_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AgentMemoryAccessLog(Base):
+    """召回审计与 A/B 评估事实。"""
+
+    __tablename__ = "agent_memory_access_log"
+    __table_args__ = (Index("ix_agent_memory_access_run", "run_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    memory_id: Mapped[str] = mapped_column(String(40), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    query_text: Mapped[str] = mapped_column(Text, default="")
+    relevance_score: Mapped[float] = mapped_column(Numeric(8, 6), default=0)
+    used_in_context: Mapped[bool] = mapped_column(Boolean, default=False)
+    variant: Mapped[str] = mapped_column(String(16), default="off")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AgentMemoryFeedback(Base):
+    """对单条记忆的确认、纠正、否定与遗忘反馈。"""
+
+    __tablename__ = "agent_memory_feedback"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    memory_id: Mapped[str] = mapped_column(String(40), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    action: Mapped[str] = mapped_column(String(24), comment="confirm / correct / reject / forget")
+    comment: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AgentMemoryJob(Base):
+    """后台抽取、合并、过期与重建向量的持久化任务。"""
+
+    __tablename__ = "agent_memory_job"
+    __table_args__ = (
+        UniqueConstraint("job_type", "reference_id", name="uq_agent_memory_job_reference"),
+        Index("ix_agent_memory_job_claim", "status", "lease_expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    job_type: Mapped[str] = mapped_column(String(32), comment="capture_run / consolidate / rebuild_embedding")
+    reference_id: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    payload_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    error: Mapped[str] = mapped_column(Text, default="")
+    lease_owner: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class AgentMemoryPolicy(Base):
+    """企业级保留、自动激活与脱敏策略。"""
+
+    __tablename__ = "agent_memory_policy"
+    __table_args__ = (UniqueConstraint("tenant_id", "policy_key", name="uq_agent_memory_policy"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), default="default", index=True)
+    policy_key: Mapped[str] = mapped_column(String(64))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     config_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     updated_by: Mapped[str] = mapped_column(String(64), default="system")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)

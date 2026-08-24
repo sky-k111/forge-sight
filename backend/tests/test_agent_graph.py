@@ -812,6 +812,7 @@ def test_runner_projects_steps_events_artifacts_and_message(analysis_session):
         "intent.route",
             "intent.guard",
             "intent.parse",
+            "memory.retrieve",
             "skill.retrieve",
             "context.retrieve",
         "query.generate",

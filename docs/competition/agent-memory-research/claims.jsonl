@@ -1,0 +1,5 @@
+{"claim_id":"cl_001","claim":"ForgeSight checkpoint is short-term execution persistence rather than cross-session long-term memory.","evidence_ids":["ev_001"],"confidence":0.98}
+{"claim_id":"cl_002","claim":"A five-layer memory model is an engineering synthesis of working, short-term, semantic, episodic and procedural memory, not a universal industry standard.","evidence_ids":["ev_001","ev_002"],"confidence":0.92}
+{"claim_id":"cl_003","claim":"LangMem is the closest integration fit because ForgeSight already uses LangGraph and PostgreSQL.","evidence_ids":["ev_003"],"confidence":0.9}
+{"claim_id":"cl_004","claim":"Graphiti is most relevant when temporal validity and relationship history become first-class requirements.","evidence_ids":["ev_006"],"confidence":0.9}
+{"claim_id":"cl_005","claim":"ForgeSight should keep governed procedural skills separate from episodic and semantic memories.","evidence_ids":["ev_002","ev_008","ev_009"],"confidence":0.94}

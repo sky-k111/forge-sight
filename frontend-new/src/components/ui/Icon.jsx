@@ -46,6 +46,7 @@ export default function Icon({ name, size = 18, strokeWidth = 1.8, className = "
     more: <><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></>,
     logout: <><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 8l-4 4 4 4M6 12h11"/></>,
     history: <><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></>,
+    memory: <><path d="M9.5 4.5A3.5 3.5 0 0 0 6 8v.4A3.6 3.6 0 0 0 4 12a3.6 3.6 0 0 0 2 3.2v.3A3.5 3.5 0 0 0 9.5 19H12V5.5A2.5 2.5 0 0 0 9.5 3Z"/><path d="M14.5 4.5A3.5 3.5 0 0 1 18 8v.4a3.6 3.6 0 0 1 2 3.2 3.6 3.6 0 0 1-2 3.2v.7a3.5 3.5 0 0 1-3.5 3.5H12M7 9h2M15 8h2M15 14h2M8 15h2"/></>,
   };
 
   return (

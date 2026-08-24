@@ -25,6 +25,7 @@ const SessionHistoryPage = lazy(
   () => import("../pages/business/SessionHistoryPage"),
 );
 const ModelingPage = lazy(() => import("../pages/business/ModelingPage"));
+const MemoryPage = lazy(() => import("../pages/business/MemoryPage"));
 const ReportsPage = lazy(() => import("../pages/business/ReportsPage"));
 const ReportDetailPage = lazy(
   () => import("../pages/business/ReportDetailPage"),
@@ -40,6 +41,9 @@ const ModelGovernancePage = lazy(
 );
 const SkillGovernancePage = lazy(
   () => import("../pages/admin/SkillGovernancePage"),
+);
+const MemoryGovernancePage = lazy(
+  () => import("../pages/admin/MemoryGovernancePage"),
 );
 const SettingsPage = lazy(() => import("../pages/admin/SettingsPage"));
 const SecurityPage = lazy(() => import("../pages/admin/SecurityPage"));
@@ -154,6 +158,7 @@ export default function AppRouter() {
                 element={<SessionHistoryPage />}
               />
               <Route path="workspace/modeling" element={<ModelingPage />} />
+              <Route path="workspace/memory" element={<MemoryPage />} />
               <Route path="workspace/reports" element={<ReportsPage />} />
               <Route
                 path="workspace/reports/:reportId"
@@ -174,6 +179,7 @@ export default function AppRouter() {
               <Route path="admin/resources" element={<ResourcesPage />} />
               <Route path="admin/models" element={<ModelGovernancePage />} />
               <Route path="admin/skills" element={<SkillGovernancePage />} />
+              <Route path="admin/memory" element={<MemoryGovernancePage />} />
               <Route path="admin/settings" element={<SettingsPage />} />
               <Route path="admin/security" element={<SecurityPage />} />
               <Route

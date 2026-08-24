@@ -726,6 +726,18 @@ describe("ForgeSight application routes", () => {
     expect(container.querySelector('[data-icon="spark"]')).toBeNull();
   });
 
+  test("keeps analysis memory out of the primary sidebar and opens it from the account menu", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "今日工作台" });
+
+    expect(screen.queryByRole("button", { name: "我的偏好与记忆" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "打开账户菜单" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /分析偏好与记忆/ }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/workspace/memory"));
+    expect(await screen.findByRole("heading", { name: "分析偏好与记忆" }, { timeout: 5000 })).toBeTruthy();
+  });
+
   test("navigates to a directly addressable analysis page", async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "发起分析" }));

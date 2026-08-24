@@ -1,0 +1,13 @@
+{"source_id":"src_langchain_memory","title":"Memory overview","url":"https://docs.langchain.com/oss/python/concepts/memory","source_type":"official_docs","retrieved_at":"2026-08-24","credibility":95}
+{"source_id":"src_coala","title":"Cognitive Architectures for Language Agents","url":"https://arxiv.org/abs/2309.02427","source_type":"research_paper","retrieved_at":"2026-08-24","credibility":95}
+{"source_id":"src_langmem","title":"LangMem","url":"https://github.com/langchain-ai/langmem","source_type":"official_repository","retrieved_at":"2026-08-24","credibility":90}
+{"source_id":"src_mem0_repo","title":"Mem0","url":"https://github.com/mem0ai/mem0","source_type":"official_repository","retrieved_at":"2026-08-24","credibility":90}
+{"source_id":"src_mem0_paper","title":"Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory","url":"https://arxiv.org/abs/2504.19413","source_type":"research_paper","retrieved_at":"2026-08-24","credibility":85}
+{"source_id":"src_memgpt","title":"MemGPT: Towards LLMs as Operating Systems","url":"https://arxiv.org/abs/2310.08560","source_type":"research_paper","retrieved_at":"2026-08-24","credibility":95}
+{"source_id":"src_letta","title":"Letta","url":"https://github.com/letta-ai/letta","source_type":"official_repository","retrieved_at":"2026-08-24","credibility":90}
+{"source_id":"src_graphiti","title":"Graphiti","url":"https://github.com/getzep/graphiti","source_type":"official_repository","retrieved_at":"2026-08-24","credibility":90}
+{"source_id":"src_zep_paper","title":"Zep: A Temporal Knowledge Graph Architecture for Agent Memory","url":"https://arxiv.org/abs/2501.13956","source_type":"research_paper","retrieved_at":"2026-08-24","credibility":85}
+{"source_id":"src_cognee","title":"Cognee","url":"https://github.com/topoteretes/cognee","source_type":"official_repository","retrieved_at":"2026-08-24","credibility":88}
+{"source_id":"src_generative_agents","title":"Generative Agents: Interactive Simulacra of Human Behavior","url":"https://arxiv.org/abs/2304.03442","source_type":"research_paper","retrieved_at":"2026-08-24","credibility":95}
+{"source_id":"src_reflexion","title":"Reflexion: Language Agents with Verbal Reinforcement Learning","url":"https://arxiv.org/abs/2303.11366","source_type":"research_paper","retrieved_at":"2026-08-24","credibility":95}
+{"source_id":"src_memory_benchmarks","title":"Memory Benchmarks","url":"https://github.com/mem0ai/memory-benchmarks","source_type":"official_repository","retrieved_at":"2026-08-24","credibility":85}

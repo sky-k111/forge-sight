@@ -39,6 +39,7 @@ export const roleMenus = {
           children: [
             { id: "model-governance", label: "模型治理", icon: "model" },
             { id: "skill-governance", label: "分析技能", icon: "knowledge" },
+            { id: "memory-governance", label: "记忆治理", icon: "memory" },
           ],
         },
         {
@@ -113,10 +114,20 @@ export const pageMeta = {
     title: "模型治理",
     subtitle: "4 个模型 · 1 个待复核",
   },
+  memory: {
+    eyebrow: "个人设置",
+    title: "分析偏好与记忆",
+    subtitle: "管理 ForgeSight 自动整理的偏好与调查经验",
+  },
   "skill-governance": {
     eyebrow: "管理员工作区",
     title: "分析技能",
     subtitle: "审核由成功调查沉淀的程序性知识，并控制版本与生效范围",
+  },
+  "memory-governance": {
+    eyebrow: "管理员工作区",
+    title: "记忆治理",
+    subtitle: "控制长期记忆的作用域、生命周期、召回实验与技能提升",
   },
   settings: {
     eyebrow: "管理员工作区",

@@ -9,6 +9,7 @@ const STATUS_MAP = {
 };
 
 const STEP_ARTIFACT = {
+  "memory.retrieve": "memory-context",
   "skill.retrieve": "analysis-skill",
   "context.retrieve": "context",
   "query.generate": "sql",
@@ -48,6 +49,17 @@ function detailFor(step, artifact) {
   if (artifact?.type === "sql") {
     detail.body = "SQL 已依据当前数据源元数据和业务口径生成，执行前仍需通过只读安全校验。";
     detail.code = content?.sql;
+  } else if (artifact?.type === "memory-context") {
+    const memories = content?.memories ?? [];
+    const applied = content?.applied ?? [];
+    detail.body = content?.enabled
+      ? memories.length
+        ? `已在当前账号与数据源范围内召回 ${memories.length} 条相关记忆，其中 ${applied.length} 条偏好实际影响了本次展示。`
+        : "记忆增强已开启，但当前问题没有命中可用记忆，已按基础链路继续。"
+      : "本次运行属于记忆关闭对照组，没有召回或写入长期记忆。";
+    detail.tags = memories.length
+      ? memories.map((item) => `${item.title} · ${Math.round((item.relevance ?? item.confidence ?? 0) * 100)}%`).slice(0, 6)
+      : [content?.enabled ? "实验组：on" : "基线组：off"];
   } else if (artifact?.type === "analysis-skill") {
     const skills = content?.skills ?? [];
     detail.body = content?.enabled

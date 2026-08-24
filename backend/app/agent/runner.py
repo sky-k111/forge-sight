@@ -61,6 +61,7 @@ NODE_META = {
     "route_request": ("intent.route", 0, "判断问题类型"),
     "intent_guard": ("intent.guard", 1, "检查只读分析边界"),
     "plan_tasks": ("intent.parse", 2, "理解并拆解业务问题"),
+    "retrieve_memory": ("memory.retrieve", 3, "召回相关记忆"),
     "retrieve_skill": ("skill.retrieve", 3, "匹配分析技能"),
     "retrieve_context": ("context.retrieve", 4, "定位数据资源"),
     "propose_modeling": ("modeling.propose", 4, "生成建模方案"),
@@ -158,6 +159,7 @@ def _explain_for_source(sql: str, source_id: int) -> ExplainCheckResult:
 
 def default_dependencies() -> GraphDependencies:
     from app.modeling.service import find_reusable_models
+    from app.memory.service import retrieve_memories
     from app.skills.service import retrieve_skills
 
     return GraphDependencies(
@@ -167,6 +169,9 @@ def default_dependencies() -> GraphDependencies:
         execute_sql=_execute_for_source,
         explain_sql=_explain_for_source,
         retrieve_skills=retrieve_skills,
+        retrieve_memories=lambda question, source_id, user_id, session_id, run_id: retrieve_memories(
+            question, source_id, user_id, session_id=session_id, run_id=run_id
+        ),
         find_reusable_models=find_reusable_models,
     )
 
@@ -327,6 +332,7 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
             )
 
         artifact_map = {
+            "retrieve_memory": ("memory-context", update.get("memory_context")),
             "retrieve_skill": ("analysis-skill", update.get("skill_context")),
             "retrieve_context": ("context", update.get("semantic_context")),
             "propose_modeling": ("modeling-proposal", update.get("modeling_proposal")),
@@ -588,6 +594,10 @@ def _finish_run(run_id: str, state: dict) -> None:
         from app.skills.service import finish_run_usage
 
         finish_run_usage(run_id, run.status, db_session=session)
+        if run.memory_enabled:
+            from app.memory.service import enqueue_run_capture
+
+            enqueue_run_capture(run_id, db_session=session)
         session.commit()
     # 报告 Run 完成后立即冻结章节产物。普通问析 Run 没有关联报告时该调用为空操作。
     from app.reports.service import sync_report_from_run
@@ -1010,8 +1020,11 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
             "session_id": run.session_id,
             "run_id": run.id,
             "source_id": run.source_id,
+            "user_id": business_session.user_id if business_session else "local-test-user",
             "user_question": message.content,
             "conversation_context": conversation_context,
+            "memory_enabled": bool(run.memory_enabled),
+            "memory_context": {},
             "preclassified_route_labels": {
                 int(index): kind
                 for index, kind in (message.metadata_json or {}).get("routeLabels", {}).items()

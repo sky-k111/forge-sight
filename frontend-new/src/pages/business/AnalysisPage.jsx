@@ -678,6 +678,7 @@ export default function AnalysisPage() {
 const CHECKPOINT_BUSINESS_LABELS = {
   "intent.plan": "业务问题已理解",
   "context.retrieve": "数据与指标已定位",
+  "memory.retrieve": "相关经验已确认",
   "query.validate": "查询逻辑已校验",
   "query.execute": "查询结果已生成",
   "result.explain": "分析结论已生成",
@@ -1871,6 +1872,7 @@ function TraceArtifacts({ artifacts }) {
     violet: "bg-violet/8 text-violet",
   };
   const labels = {
+    "memory-context": { icon: "memory", name: "相关记忆", type: "偏好、经验与召回依据", tone: "blue" },
     context: { icon: "knowledge", name: "语义上下文", type: "指标、表与关联", tone: "blue" },
     sql: { icon: "code", name: "分析 SQL", type: "只读查询", tone: "violet" },
     validation: { icon: "shield", name: "校验报告", type: "安全与语义检查", tone: "teal" },

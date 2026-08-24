@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import Icon from "../ui/Icon";
 import { Button, RouteSkeleton } from "../ui";
@@ -246,6 +246,7 @@ export default function AppShell() {
           onOpenNavigation={() => setMobileNavOpen(true)}
           unreadCount={unreadCount}
           onOpenMessages={() => navigate(role === "admin" ? routeByPage["admin-messages"] : routeByPage.messages)}
+          onOpenMemory={() => navigate(routeByPage.memory)}
           onToggleEvidence={() => setEvidenceOpen((value) => !value)}
           onRoleChange={switchRole}
         />
@@ -630,8 +631,27 @@ function QueueItem({ dotClass, title, caption, count, onClick }) {
   );
 }
 
-function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, unreadCount, onToggleEvidence, onRoleChange, onOpenNavigation, onOpenMessages }) {
+function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, unreadCount, onToggleEvidence, onRoleChange, onOpenNavigation, onOpenMessages, onOpenMemory }) {
   const meta = pageMeta[page] ?? pageMeta.overview;
+  const [accountOpen, setAccountOpen] = useState(false);
+  const accountMenuRef = useRef(null);
+
+  useEffect(() => {
+    if (!accountOpen) return undefined;
+    const closeOnOutsidePointer = (event) => {
+      if (!accountMenuRef.current?.contains(event.target)) setAccountOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setAccountOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [accountOpen]);
+
   return (
     <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-line bg-surface/95 px-3 backdrop-blur md:gap-5 md:px-6">
       <div className="flex min-w-0 flex-1 items-center gap-2 md:gap-3">
@@ -685,8 +705,49 @@ function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, unreadCount, o
           <Icon name="bell" />
           {unreadCount > 0 && <span className="absolute -right-1 -top-1 grid min-h-4 min-w-4 place-items-center rounded-full bg-critical px-1 text-[9px] font-bold text-white ring-2 ring-surface">{unreadCount > 99 ? "99+" : unreadCount}</span>}
         </button>
-        <div className="hidden h-8 w-8 place-items-center rounded-full bg-surface-3 text-xs font-bold text-ink-2 sm:grid" title={`${user.name} · ${user.title}`}>
-          {user.initials}
+        <div ref={accountMenuRef} className="relative">
+          <button
+            type="button"
+            aria-label="打开账户菜单"
+            aria-haspopup="menu"
+            aria-expanded={accountOpen}
+            onClick={() => setAccountOpen((value) => !value)}
+            className={cn(
+              "grid h-9 w-9 cursor-pointer place-items-center rounded-full border text-xs font-bold transition-colors",
+              accountOpen
+                ? "border-primary/30 bg-primary-soft text-primary"
+                : "border-transparent bg-surface-3 text-ink-2 hover:border-line-strong hover:bg-surface-2",
+            )}
+            title={`${user.name} · ${user.title}`}
+          >
+            {user.initials}
+          </button>
+          {accountOpen && (
+            <div role="menu" aria-label="账户菜单" className="absolute right-0 top-11 z-50 w-64 overflow-hidden rounded-card border border-line bg-surface shadow-card-hover">
+              <div className="border-b border-line px-4 py-3">
+                <strong className="block truncate text-sm font-semibold text-ink">{user.name}</strong>
+                <span className="mt-0.5 block truncate text-xs text-muted">{user.title}</span>
+              </div>
+              {role === "business" && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setAccountOpen(false);
+                    onOpenMemory();
+                  }}
+                  className="group flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-none"
+                >
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-control bg-primary-soft text-primary"><Icon name="memory" size={16} /></span>
+                  <span className="min-w-0 flex-1">
+                    <strong className="block text-xs font-semibold text-ink">分析偏好与记忆</strong>
+                    <small className="mt-0.5 block text-[10px] leading-4 text-muted">查看自动学习内容与隐私控制</small>
+                  </span>
+                  <Icon name="chevron" size={14} className="text-faint transition-transform group-hover:translate-x-0.5" />
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </header>

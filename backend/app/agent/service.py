@@ -189,8 +189,10 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
             sequence_no=sequence_no,
         )
         from app.skills.service import snapshot_settings
+        from app.memory.service import snapshot_settings as snapshot_memory_settings
 
         skill_setting = snapshot_settings(session)
+        memory_setting = snapshot_memory_settings(session)
         run = AnalysisRun(
             id=new_id("run"),
             session_id=session_id,
@@ -200,6 +202,8 @@ def create_run(session_id: str, question: str, idempotency_key: str | None = Non
             budget_snapshot_json=default_budget(),
             skill_enhancement_enabled=skill_setting["enabled"],
             skill_experiment_variant=skill_setting["variant"],
+            memory_enabled=memory_setting["enabled"],
+            memory_experiment_variant=memory_setting["variant"],
         )
         if inline_conversation:
             now = datetime.now()
@@ -453,8 +457,10 @@ def create_branch(
         }
         if instruction and instruction.strip():
             from app.skills.service import snapshot_settings
+            from app.memory.service import snapshot_settings as snapshot_memory_settings
 
             skill_setting = snapshot_settings(session)
+            memory_setting = snapshot_memory_settings(session)
             message = AnalysisMessage(
                 id=new_id("msg"),
                 session_id=child.id,
@@ -478,6 +484,8 @@ def create_branch(
                 budget_snapshot_json=default_budget(),
                 skill_enhancement_enabled=skill_setting["enabled"],
                 skill_experiment_variant=skill_setting["variant"],
+                memory_enabled=memory_setting["enabled"],
+                memory_experiment_variant=memory_setting["variant"],
             )
             message.run_id = run.id
             session.add_all([message, run])
@@ -700,6 +708,10 @@ def _run_summary(run: AnalysisRun) -> dict:
         "skillEnhancement": {
             "enabled": bool(run.skill_enhancement_enabled),
             "variant": run.skill_experiment_variant,
+        },
+        "memory": {
+            "enabled": bool(run.memory_enabled),
+            "variant": run.memory_experiment_variant,
         },
         "lastSeq": run.last_event_seq,
         "errorCode": run.error_code,
