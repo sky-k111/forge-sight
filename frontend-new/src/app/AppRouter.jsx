@@ -27,6 +27,8 @@ const SessionHistoryPage = lazy(
 const ModelingPage = lazy(() => import("../pages/business/ModelingPage"));
 const MemoryPage = lazy(() => import("../pages/business/MemoryPage"));
 const ReportsPage = lazy(() => import("../pages/business/ReportsPage"));
+const AlertsPage = lazy(() => import("../pages/business/AlertsPage"));
+const AlertDetailPage = lazy(() => import("../pages/business/AlertDetailPage"));
 const ReportDetailPage = lazy(
   () => import("../pages/business/ReportDetailPage"),
 );
@@ -36,6 +38,7 @@ const AdminOverviewPage = lazy(
 );
 const KnowledgePage = lazy(() => import("../pages/admin/KnowledgePage"));
 const ResourcesPage = lazy(() => import("../pages/admin/ResourcesPage"));
+const MonitoringRulesPage = lazy(() => import("../pages/admin/MonitoringRulesPage"));
 const ModelGovernancePage = lazy(
   () => import("../pages/admin/ModelGovernancePage"),
 );
@@ -160,6 +163,8 @@ export default function AppRouter() {
               <Route path="workspace/modeling" element={<ModelingPage />} />
               <Route path="workspace/memory" element={<MemoryPage />} />
               <Route path="workspace/reports" element={<ReportsPage />} />
+              <Route path="workspace/alerts" element={<AlertsPage />} />
+              <Route path="workspace/alerts/:alertId" element={<AlertDetailPage />} />
               <Route
                 path="workspace/reports/:reportId"
                 element={<ReportDetailPage />}
@@ -177,6 +182,7 @@ export default function AppRouter() {
               />
               <Route path="admin/knowledge" element={<KnowledgePage />} />
               <Route path="admin/resources" element={<ResourcesPage />} />
+              <Route path="admin/monitoring-rules" element={<MonitoringRulesPage />} />
               <Route path="admin/models" element={<ModelGovernancePage />} />
               <Route path="admin/skills" element={<SkillGovernancePage />} />
               <Route path="admin/memory" element={<MemoryGovernancePage />} />

@@ -633,6 +633,8 @@ beforeEach(() => {
             role: "business",
             title: "业务人员",
             emailStatus: "pending_verification",
+            externalIdentityRequired: true,
+            externalIdentityBound: false,
           },
         });
       }
@@ -1284,7 +1286,7 @@ describe("用户注册登录（渐进式认证）", () => {
     });
   });
 
-  test("registers a business account and requires email verification", async () => {
+  test("requires a third-party identity before completing business registration", async () => {
     window.history.replaceState({}, "", "/login");
     render(<App />);
 
@@ -1298,15 +1300,33 @@ describe("用户注册登录（渐进式认证）", () => {
     fireEvent.change(screen.getByPlaceholderText("至少 6 位"), {
       target: { value: "pass1234" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "注册并登录" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "创建账号并继续绑定" }),
+    );
 
-    await waitFor(() => expect(window.location.pathname).toBe("/verify-email"));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "注册前请选择并绑定钉钉或飞书账号",
+    );
+    expect(window.localStorage.getItem("forgesight:auth-user")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "钉钉账号绑定" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "创建账号并继续绑定" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "完成第三方账号绑定" }),
+    ).toBeTruthy();
     expect(
       JSON.parse(window.localStorage.getItem("forgesight:auth-user")).role,
     ).toBe("business");
+    expect(screen.getByRole("button", { name: "完成注册" }).disabled).toBe(
+      true,
+    );
     expect(
-      await screen.findByRole("heading", { name: "绑定并验证接收邮箱" }),
-    ).toBeTruthy();
+      window.localStorage.getItem("forgesight:registration-binding-provider"),
+    ).toBe("dingtalk");
+    expect(window.location.pathname).toBe("/login");
   });
 
   test("blocks a business user from /admin/* and redirects to the workspace", async () => {

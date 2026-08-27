@@ -44,6 +44,7 @@ def auth_session(monkeypatch):
     monkeypatch.setattr(settings, "auth_admin_display_name", "系统管理员")
     monkeypatch.setattr(settings, "email_code_secret", "test-email-secret")
     monkeypatch.setattr(settings, "auth_email_gate_enabled", False)
+    monkeypatch.setattr(settings, "auth_external_identity_gate_enabled", False)
     monkeypatch.setattr(settings, "auth_email_gate_allow_capture", True)
     monkeypatch.setattr(settings, "demo_mode_enabled", True)
     provider = CaptureMailProvider()
@@ -95,6 +96,33 @@ def test_register_creates_business_user_with_token(auth_session):
     assert auth_service.decode_token(body["token"])["auth_scope"] == "restricted"
     assert "email" not in body["user"]
     assert "password_hash" not in body["user"]
+
+
+def test_register_requires_external_identity_when_gate_is_enabled(
+    auth_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "auth_external_identity_gate_enabled", True)
+
+    response = TestClient(app).post(
+        "/api/auth/register",
+        json={
+            "username": "identityrequired",
+            "password": "pass1234",
+            "displayName": "身份绑定用户",
+            "email": "identity@example.com",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["user"]["externalIdentityRequired"] is True
+    assert body["user"]["externalIdentityBound"] is False
+    assert body["user"]["externalIdentityProviders"] == []
+    assert body["nextAction"] == "bind_external_identity"
+    with auth_session() as session:
+        user = session.query(PlatformUser).filter_by(username="identityrequired").one()
+        assert user.external_identity_required is True
 
 
 def test_register_provisions_weekly_report_access_to_the_default_source(auth_session):

@@ -47,6 +47,7 @@ from app.db.models import (
     AnalysisSession,
     ExternalChatConversation,
     ExternalChatJob,
+    FeishuBinding,
 )
 from app.db.platform import PlatformSession
 from app.integrations.access import allowed_source_ids, resolve_business_user, source_exists
@@ -72,6 +73,10 @@ class FeishuBindingRequired(PermissionError):
     def __init__(self, external_user_id: str):
         self.external_user_id = external_user_id
         super().__init__(f"飞书用户 {external_user_id} 尚未绑定 ForgeSight 账号")
+
+
+class FeishuSourceRequired(PermissionError):
+    pass
 
 
 class UnsupportedFeishuMessage(ValueError):
@@ -213,6 +218,45 @@ def _validate_binding(session, binding: Binding) -> Binding:
     return Binding(user_id=user.id, source_id=binding.source_id)
 
 
+def _binding_for_message(
+    session,
+    external_user_id: str,
+    tenant_key: str,
+    config: Settings,
+) -> Binding | None:
+    """优先使用 OAuth 数据库绑定，保留静态 JSON 作为旧部署退化通道。"""
+
+    identity_query = session.query(FeishuBinding).filter(
+        FeishuBinding.bind_status == "bound",
+        or_(
+            FeishuBinding.open_id == external_user_id,
+            FeishuBinding.union_id == external_user_id,
+            FeishuBinding.employee_id == external_user_id,
+        ),
+    )
+    database_binding = None
+    if tenant_key:
+        database_binding = identity_query.filter(
+            or_(FeishuBinding.tenant_key == tenant_key, FeishuBinding.tenant_key == "")
+        ).first()
+    if database_binding is None:
+        # lark-channel-sdk 的规范化消息可能不保留事件 tenant_key；此时
+        # _tenant_key() 会回退为 app_id。仅当身份在全库唯一时允许回退，
+        # 避免多租户下相同外部标识被错误关联。
+        candidates = identity_query.limit(2).all()
+        if len(candidates) == 1:
+            database_binding = candidates[0]
+    if database_binding is not None:
+        if database_binding.source_id is None:
+            raise FeishuSourceRequired("请先在 ForgeSight 为飞书账号选择可访问的数据源")
+        return Binding(
+            user_id=database_binding.user_id,
+            source_id=database_binding.source_id,
+        )
+
+    return parse_bindings(config.feishu_bot_bindings_json).get(external_user_id)
+
+
 def accept_message(
     message: Any,
     *,
@@ -229,12 +273,12 @@ def accept_message(
     if not external_message_id or not external_chat_id or not external_user_id:
         raise UnsupportedFeishuMessage("飞书消息缺少 message_id、chat_id 或发送人标识")
     question = _question(message)
-    binding = parse_bindings(config.feishu_bot_bindings_json).get(external_user_id)
-    if binding is None:
-        raise FeishuBindingRequired(external_user_id)
     tenant_key = _tenant_key(message, config)
 
     with session_factory() as session:
+        binding = _binding_for_message(session, external_user_id, tenant_key, config)
+        if binding is None:
+            raise FeishuBindingRequired(external_user_id)
         binding = _validate_binding(session, binding)
         existing_job = session.query(ExternalChatJob).filter_by(
             channel=CHANNEL,
@@ -412,7 +456,12 @@ def execute_job(
         conversation = session.get(ExternalChatConversation, row.conversation_id)
         if conversation is None or conversation.status != "active":
             raise FeishuBotConfigurationError("飞书会话已解绑或归档")
-        current_binding = parse_bindings(config.feishu_bot_bindings_json).get(row.external_user_id)
+        current_binding = _binding_for_message(
+            session,
+            row.external_user_id,
+            row.tenant_key,
+            config,
+        )
         if current_binding is None:
             raise FeishuBindingRequired(row.external_user_id)
         current_binding = _validate_binding(session, current_binding)
@@ -691,9 +740,11 @@ async def run_bot(config: Settings = settings) -> None:
             spawn_notification(
                 message,
                 "该飞书账号尚未绑定 ForgeSight 业务账号与数据源。\n\n"
-                f"请管理员在 `FEISHU_BOT_BINDINGS_JSON` 中配置 open_id：`{exc.external_user_id}`。",
+                f"请打开 {config.public_app_url.rstrip('/')}/login 登录并完成飞书 OAuth 绑定。",
                 "unbound",
             )
+        except FeishuSourceRequired as exc:
+            spawn_notification(message, str(exc), "source-required")
         except UnsupportedFeishuMessage as exc:
             spawn_notification(message, str(exc), "unsupported")
         except Exception:

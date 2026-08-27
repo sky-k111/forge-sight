@@ -17,6 +17,7 @@ import cn from "../../lib/cn";
 const TYPE_LABEL = {
   weekly_report: "Agent 周报",
   admin_announcement: "管理员公告",
+  monitoring_alert: "智能异常监测",
 };
 const PRIORITY = {
   normal: ["一般", "gray"],
@@ -125,7 +126,7 @@ export default function MessagesPage() {
             重要信息，在一个地方读完
           </h2>
           <p className="mt-2 text-base text-muted">
-            Agent 周报与管理员公告按优先级和时间统一排列。
+            异常警报、Agent 周报与管理员公告按优先级和时间统一排列。
           </p>
         </div>
         <label className="relative w-full sm:w-72">
@@ -158,6 +159,7 @@ export default function MessagesPage() {
                 ["", "全部"],
                 ["weekly_report", "Agent 周报"],
                 ["admin_announcement", "管理员公告"],
+                ["monitoring_alert", "异常警报"],
               ]}
               label="消息类型"
             />
@@ -257,6 +259,7 @@ export default function MessagesPage() {
             <MessageDetail
               message={selected}
               onOpenReport={(id) => navigate(`/workspace/reports/${id}`)}
+              onOpenAlert={(id) => navigate(`/workspace/alerts/${id}`)}
             />
           ) : (
             <EmptyState
@@ -329,7 +332,7 @@ function MessageRow({ item, active, onOpen }) {
   );
 }
 
-function MessageDetail({ message, onOpenReport }) {
+function MessageDetail({ message, onOpenReport, onOpenAlert }) {
   const [priorityLabel, tone] = PRIORITY[message.priority] ?? PRIORITY.normal;
   return (
     <article className="mx-auto max-w-3xl p-5 sm:p-8">
@@ -364,6 +367,16 @@ function MessageDetail({ message, onOpenReport }) {
             onClick={() => onOpenReport(message.primaryAction.resourceId)}
           >
             查看完整周报 <Icon name="arrow" size={15} />
+          </Button>
+        </div>
+      )}
+      {message.primaryAction?.type === "open_monitoring_alert" && (
+        <div className="mt-6 border-t border-line pt-5">
+          <Button
+            variant="primary"
+            onClick={() => onOpenAlert(message.primaryAction.resourceId)}
+          >
+            查看异常证据 <Icon name="arrow" size={15} />
           </Button>
         </div>
       )}

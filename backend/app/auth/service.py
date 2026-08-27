@@ -26,7 +26,13 @@ from app.auth.email_verification import (
     normalize_email,
 )
 from app.config import settings
-from app.db.models import DataScopePolicy, DataSource, PlatformUser
+from app.db.models import (
+    DataScopePolicy,
+    DataSource,
+    DingTalkBinding,
+    FeishuBinding,
+    PlatformUser,
+)
 from app.db.platform import PlatformSession
 
 SCRYPT_N, SCRYPT_R, SCRYPT_P, SCRYPT_DKLEN = 2**14, 8, 1, 32
@@ -116,8 +122,38 @@ def validate_credentials(username: str, password: str) -> None:
         raise ValueError("密码长度需为 6-64 位")
 
 
+def external_identity_status_for(user: PlatformUser) -> dict:
+    """Return current real binding state; never trust a browser-side completion flag."""
+
+    with PlatformSession() as session:
+        dingtalk_bound = (
+            session.query(DingTalkBinding.id)
+            .filter_by(user_id=user.id, bind_status="bound")
+            .first()
+            is not None
+        )
+        feishu_bound = (
+            session.query(FeishuBinding.id)
+            .filter_by(user_id=user.id, bind_status="bound")
+            .first()
+            is not None
+        )
+    providers = [
+        provider
+        for provider, bound in (("dingtalk", dingtalk_bound), ("feishu", feishu_bound))
+        if bound
+    ]
+    return {
+        "required": bool(user.external_identity_required),
+        "bound": bool(providers),
+        "provider": providers[0] if providers else None,
+        "providers": providers,
+    }
+
+
 def user_payload(user: PlatformUser) -> dict:
     email_status = email_status_for(user)
+    identity = external_identity_status_for(user)
     return {
         "id": user.id,
         "username": user.username,
@@ -126,6 +162,10 @@ def user_payload(user: PlatformUser) -> dict:
         "title": user.title,
         "emailMasked": mask_email(user.email) if user.email else None,
         "emailStatus": email_status,
+        "externalIdentityRequired": identity["required"],
+        "externalIdentityBound": identity["bound"],
+        "externalIdentityProvider": identity["provider"],
+        "externalIdentityProviders": identity["providers"],
     }
 
 
@@ -138,6 +178,9 @@ def email_status_for(user: PlatformUser) -> str:
 
 
 def next_action_for(user: PlatformUser) -> str | None:
+    identity = external_identity_status_for(user)
+    if identity["required"] and not identity["bound"]:
+        return "bind_external_identity"
     status = email_status_for(user)
     if status == "unbound":
         return "bind_email"
@@ -189,6 +232,32 @@ def _provision_default_report_scope(session, user_id: str) -> None:
     )
 
 
+def _provision_default_monitoring_scope(session, user_id: str) -> None:
+    """Give an unconfigured business user baseline read access to monitoring alerts."""
+
+    configured = session.query(DataScopePolicy.id).filter_by(
+        subject_type="user",
+        subject_id=user_id,
+        business_key="anomaly_monitoring",
+    ).first()
+    if configured is not None:
+        return
+    source_ids = [source_id for (source_id,) in session.query(DataSource.id).order_by(DataSource.id)]
+    if not source_ids:
+        return
+    session.add(
+        DataScopePolicy(
+            id=new_id("dsp"),
+            subject_type="user",
+            subject_id=user_id,
+            business_key="anomaly_monitoring",
+            effect="allow",
+            data_source_ids_json=source_ids,
+            created_by="system:account-bootstrap",
+        )
+    )
+
+
 def seed_default_report_scopes() -> None:
     """Backfill baseline report access for existing, otherwise unconfigured users."""
 
@@ -201,6 +270,7 @@ def seed_default_report_scopes() -> None:
         ]
         for user_id in user_ids:
             _provision_default_report_scope(session, user_id)
+            _provision_default_monitoring_scope(session, user_id)
         session.commit()
 
 
@@ -224,11 +294,13 @@ def register_user(username: str, password: str, display_name: str, email: str) -
         title="业务人员",
         email=deliverable,
         email_canonical=canonical,
+        external_identity_required=settings.auth_external_identity_gate_enabled,
     )
     with PlatformSession() as session:
         session.add(user)
         session.flush()
         _provision_default_report_scope(session, user.id)
+        _provision_default_monitoring_scope(session, user.id)
         try:
             session.commit()
         except IntegrityError as exc:

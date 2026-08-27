@@ -100,7 +100,7 @@ def _raise_domain(exc: Exception):
 )
 def list_messages(
     message_type: str | None = Query(
-        default=None, alias="type", pattern=r"^(weekly_report|admin_announcement)$"
+        default=None, alias="type", pattern=r"^(weekly_report|admin_announcement|monitoring_alert)$"
     ),
     read_value: bool | None = Query(default=None, alias="read"),
     priority: str | None = Query(default=None, pattern=r"^(normal|high|urgent)$"),

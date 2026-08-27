@@ -5,11 +5,13 @@ export const routeByPage = {
   modeling: "/workspace/modeling",
   memory: "/workspace/memory",
   reports: "/workspace/reports",
+  alerts: "/workspace/alerts",
   messages: "/workspace/messages",
   "admin-messages": "/admin/messages",
   "admin-overview": "/admin/overview",
   knowledge: "/admin/knowledge",
   resources: "/admin/resources",
+  "monitoring-rules": "/admin/monitoring-rules",
   "model-governance": "/admin/models",
   "skill-governance": "/admin/skills",
   "memory-governance": "/admin/memory",
@@ -23,6 +25,7 @@ export const pageByPath = Object.fromEntries(Object.entries(routeByPage).map(([p
 
 export function pageFromPath(pathname) {
   if (pathname.startsWith("/workspace/reports/")) return "reports";
+  if (pathname.startsWith("/workspace/alerts/")) return "alerts";
   if (pathname.startsWith("/workspace/messages/")) return "messages";
   if (pathname.startsWith("/admin/messages/")) return "admin-messages";
   return pageByPath[pathname];

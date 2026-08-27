@@ -15,6 +15,7 @@ export const roleMenus = {
           ],
         },
         { id: "reports", label: "报告与交接", icon: "report" },
+        { id: "alerts", label: "智能异常监测", icon: "alert" },
       ],
     },
   ],
@@ -30,6 +31,7 @@ export const roleMenus = {
           children: [
             { id: "resources", label: "数据源与资源", icon: "database" },
             { id: "knowledge", label: "业务知识与指标", icon: "knowledge" },
+            { id: "monitoring-rules", label: "监控规则", icon: "alert" },
           ],
         },
         {
@@ -84,6 +86,11 @@ export const pageMeta = {
     title: "报告与交接",
     subtitle: "周报、月报、专题分析与交接信息统一管理",
   },
+  alerts: {
+    eyebrow: "业务人员工作区",
+    title: "智能异常监测",
+    subtitle: "查看生产异常、恢复状态与可追溯证据",
+  },
   messages: {
     eyebrow: "消息工作区",
     title: "消息中心",
@@ -108,6 +115,11 @@ export const pageMeta = {
     eyebrow: "管理员工作区",
     title: "数据源与资源",
     subtitle: "管理数据连接、表字段、关系和同步状态",
+  },
+  "monitoring-rules": {
+    eyebrow: "管理员工作区",
+    title: "监控规则",
+    subtitle: "通过元数据绑定管理监控口径、调度与通知范围",
   },
   "model-governance": {
     eyebrow: "管理员工作区",
