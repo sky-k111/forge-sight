@@ -28,6 +28,7 @@ from app.db.models import (
 )
 from app.db.platform import PlatformSession
 from app.integrations.dingtalk_chat import allowed_source_ids
+from app.tenancy.service import TenantContext, tenant_context
 
 router = APIRouter(prefix="/api/feishu", tags=["feishu"])
 
@@ -139,9 +140,12 @@ def get_my_binding(user: dict = Depends(require_user)) -> dict:
 
 
 @router.get("/binding/sources")
-def list_binding_sources(user: dict = Depends(require_user)) -> dict:
+def list_binding_sources(
+    user: dict = Depends(require_user),
+    context: TenantContext = Depends(tenant_context),
+) -> dict:
     with PlatformSession() as session:
-        allowed_ids = allowed_source_ids(session, user["id"])
+        allowed_ids = allowed_source_ids(session, user["id"], tenant_id=context.tenant_id)
         sources = (
             session.query(DataSource)
             .filter(DataSource.id.in_(allowed_ids))
@@ -164,6 +168,7 @@ def list_binding_sources(user: dict = Depends(require_user)) -> dict:
 def select_binding_source(
     payload: FeishuSourceSelection,
     user: dict = Depends(require_user),
+    context: TenantContext = Depends(tenant_context),
 ) -> dict:
     with PlatformSession() as session:
         binding = (
@@ -174,7 +179,7 @@ def select_binding_source(
         )
         if binding is None or binding.bind_status != "bound":
             raise HTTPException(status_code=409, detail="请先完成飞书账号绑定")
-        if payload.sourceId not in allowed_source_ids(session, user["id"]):
+        if payload.sourceId not in allowed_source_ids(session, user["id"], tenant_id=context.tenant_id):
             raise HTTPException(status_code=403, detail="该数据源不在当前账号授权范围内")
         source = session.get(DataSource, payload.sourceId)
         if source is None:

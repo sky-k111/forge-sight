@@ -10,6 +10,7 @@ from sqlalchemy import func
 
 from app.agent.ids import new_id
 from app.auth.deps import optional_user
+from app.config import settings
 from app.db.models import (
     AnalysisCheckpoint,
     AnalysisInteraction,
@@ -123,29 +124,40 @@ def provision_private_tenant(session, user: PlatformUser, display_name: str = ""
     return membership
 
 
+def collect_user_tenants(session, user_id: str) -> list[dict]:
+    """Query tenant memberships on a caller-owned session.
+
+    Callers that already manage a platform session (e.g. the auth service)
+    should pass their own session so tests and deployments always observe the
+    same database they write to.
+    """
+
+    rows = (
+        session.query(TenantMembership, Tenant)
+        .join(Tenant, Tenant.id == TenantMembership.tenant_id)
+        .filter(
+            TenantMembership.user_id == user_id,
+            TenantMembership.enabled.is_(True),
+            Tenant.status == "active",
+        )
+        .order_by(TenantMembership.is_default.desc(), Tenant.name)
+        .all()
+    )
+    return [
+        {
+            "id": tenant.id,
+            "slug": tenant.slug,
+            "name": tenant.name,
+            "role": membership.member_role,
+            "isDefault": membership.is_default,
+        }
+        for membership, tenant in rows
+    ]
+
+
 def list_user_tenants(user_id: str) -> list[dict]:
     with PlatformSession() as session:
-        rows = (
-            session.query(TenantMembership, Tenant)
-            .join(Tenant, Tenant.id == TenantMembership.tenant_id)
-            .filter(
-                TenantMembership.user_id == user_id,
-                TenantMembership.enabled.is_(True),
-                Tenant.status == "active",
-            )
-            .order_by(TenantMembership.is_default.desc(), Tenant.name)
-            .all()
-        )
-        return [
-            {
-                "id": tenant.id,
-                "slug": tenant.slug,
-                "name": tenant.name,
-                "role": membership.member_role,
-                "isDefault": membership.is_default,
-            }
-            for membership, tenant in rows
-        ]
+        return collect_user_tenants(session, user_id)
 
 
 def _legacy_default_context(session, user: dict | None) -> TenantContext:
@@ -172,11 +184,13 @@ def resolve_tenant_context(user: dict | None, requested_tenant_id: str | None = 
     if user is None:
         if requested and requested != DEFAULT_TENANT_ID:
             raise HTTPException(status_code=403, detail="演示模式不能访问其他企业空间")
+        # 演示模式保留开箱即用的管理员体验；非演示部署下匿名请求降级为只读访客，
+        # 即使网关误放行也不会拿到租户管理权限。
         return TenantContext(
             tenant_id=DEFAULT_TENANT_ID,
             tenant_name="ForgeSight 演示企业",
             tenant_slug="forgesight-demo",
-            member_role="owner",
+            member_role="owner" if settings.demo_mode_enabled else "viewer",
             user_id=None,
         )
     with PlatformSession() as session:
@@ -232,6 +246,15 @@ def tenant_source_ids(session, tenant_id: str) -> set[int]:
     }
 
 
+def tenant_id_for_source(session, source_id: int) -> str:
+    """Resolve the owning tenant of a data source; unknown ids fail closed."""
+
+    tenant_id = session.query(DataSource.tenant_id).filter_by(id=source_id).scalar()
+    if not tenant_id:
+        raise KeyError(f"数据源 {source_id} 不存在")
+    return str(tenant_id)
+
+
 def ensure_source_access(session, source_id: int, tenant_id: str) -> DataSource:
     source = session.query(DataSource).filter_by(id=source_id, tenant_id=tenant_id).first()
     if source is None:
@@ -240,49 +263,62 @@ def ensure_source_access(session, source_id: int, tenant_id: str) -> DataSource:
     return source
 
 
-def ensure_analysis_session_access(session, session_id: str, tenant_id: str) -> AnalysisSession:
+def ensure_analysis_session_access(
+    session, session_id: str, tenant_id: str, *, user_id: str | None = None
+) -> AnalysisSession:
     row = session.query(AnalysisSession).filter_by(id=session_id, tenant_id=tenant_id).first()
-    if row is None:
+    if row is None or (user_id is not None and row.user_id != user_id):
+        # 租户外与他人资源统一 404，不向调用方确认资源存在。
         raise HTTPException(status_code=404, detail="分析会话不存在或不属于当前企业")
     return row
 
 
-def ensure_analysis_run_access(session, run_id: str, tenant_id: str) -> AnalysisRun:
-    row = (
-        session.query(AnalysisRun)
+def _analysis_run_row_with_owner(session, run_id: str, tenant_id: str) -> tuple[AnalysisRun, str | None] | None:
+    return (
+        session.query(AnalysisRun, AnalysisSession.user_id)
         .join(AnalysisSession, AnalysisSession.id == AnalysisRun.session_id)
         .filter(AnalysisRun.id == run_id, AnalysisSession.tenant_id == tenant_id)
         .first()
     )
-    if row is None:
+
+
+def ensure_analysis_run_access(
+    session, run_id: str, tenant_id: str, *, user_id: str | None = None
+) -> AnalysisRun:
+    found = _analysis_run_row_with_owner(session, run_id, tenant_id)
+    if found is None or (user_id is not None and found[1] != user_id):
         raise HTTPException(status_code=404, detail="分析运行不存在或不属于当前企业")
-    return row
+    return found[0]
 
 
-def ensure_checkpoint_access(session, checkpoint_id: str, tenant_id: str) -> AnalysisCheckpoint:
+def ensure_checkpoint_access(
+    session, checkpoint_id: str, tenant_id: str, *, user_id: str | None = None
+) -> AnalysisCheckpoint:
     row = (
-        session.query(AnalysisCheckpoint)
+        session.query(AnalysisCheckpoint, AnalysisSession.user_id)
         .join(AnalysisRun, AnalysisRun.id == AnalysisCheckpoint.run_id)
         .join(AnalysisSession, AnalysisSession.id == AnalysisRun.session_id)
         .filter(AnalysisCheckpoint.id == checkpoint_id, AnalysisSession.tenant_id == tenant_id)
         .first()
     )
-    if row is None:
+    if row is None or (user_id is not None and row[1] != user_id):
         raise HTTPException(status_code=404, detail="分析检查点不存在或不属于当前企业")
-    return row
+    return row[0]
 
 
-def ensure_interaction_access(session, interaction_id: str, tenant_id: str) -> AnalysisInteraction:
+def ensure_interaction_access(
+    session, interaction_id: str, tenant_id: str, *, user_id: str | None = None
+) -> AnalysisInteraction:
     row = (
-        session.query(AnalysisInteraction)
+        session.query(AnalysisInteraction, AnalysisSession.user_id)
         .join(AnalysisRun, AnalysisRun.id == AnalysisInteraction.run_id)
         .join(AnalysisSession, AnalysisSession.id == AnalysisRun.session_id)
         .filter(AnalysisInteraction.id == interaction_id, AnalysisSession.tenant_id == tenant_id)
         .first()
     )
-    if row is None:
+    if row is None or (user_id is not None and row[1] != user_id):
         raise HTTPException(status_code=404, detail="交互请求不存在或不属于当前企业")
-    return row
+    return row[0]
 
 
 def tenant_summary(context: TenantContext) -> dict:

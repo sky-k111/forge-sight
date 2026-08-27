@@ -70,6 +70,18 @@ CREATE INDEX IF NOT EXISTS ix_business_object_tenant_id ON business_object (tena
 CREATE INDEX IF NOT EXISTS ix_business_rule_tenant_id ON business_rule (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_knowledge_metric_tenant_id ON knowledge_metric (tenant_id);
 
+-- Stable codes are only guaranteed unique inside one tenant, so the primary keys
+-- become (tenant_id, code/id). Pre-migration rows were already globally unique,
+-- so rebuilding the key cannot produce duplicates.
+ALTER TABLE knowledge_topic DROP CONSTRAINT IF EXISTS knowledge_topic_pkey;
+ALTER TABLE knowledge_topic ADD CONSTRAINT knowledge_topic_pkey PRIMARY KEY (tenant_id, code);
+ALTER TABLE business_object DROP CONSTRAINT IF EXISTS business_object_pkey;
+ALTER TABLE business_object ADD CONSTRAINT business_object_pkey PRIMARY KEY (tenant_id, id);
+ALTER TABLE business_rule DROP CONSTRAINT IF EXISTS business_rule_pkey;
+ALTER TABLE business_rule ADD CONSTRAINT business_rule_pkey PRIMARY KEY (tenant_id, id);
+ALTER TABLE knowledge_metric DROP CONSTRAINT IF EXISTS knowledge_metric_pkey;
+ALTER TABLE knowledge_metric ADD CONSTRAINT knowledge_metric_pkey PRIMARY KEY (tenant_id, id);
+
 ALTER TABLE knowledge_topic DROP CONSTRAINT IF EXISTS knowledge_topic_name_key;
 ALTER TABLE business_object DROP CONSTRAINT IF EXISTS business_object_name_key;
 ALTER TABLE business_rule DROP CONSTRAINT IF EXISTS business_rule_name_key;
@@ -96,3 +108,10 @@ UPDATE agent_memory SET tenant_id = 'tenant-default' WHERE tenant_id = 'default'
 ALTER TABLE agent_memory ALTER COLUMN tenant_id SET DEFAULT 'tenant-default';
 UPDATE agent_memory_policy SET tenant_id = 'tenant-default' WHERE tenant_id = 'default';
 ALTER TABLE agent_memory_policy ALTER COLUMN tenant_id SET DEFAULT 'tenant-default';
+
+-- Knowledge reference index gains the same tenant boundary as its entities.
+ALTER TABLE knowledge_reference ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(40) NOT NULL DEFAULT 'tenant-default';
+CREATE INDEX IF NOT EXISTS ix_knowledge_reference_tenant_id ON knowledge_reference (tenant_id);
+ALTER TABLE knowledge_reference DROP CONSTRAINT IF EXISTS uq_knowledge_reference;
+ALTER TABLE knowledge_reference ADD CONSTRAINT uq_knowledge_reference
+    UNIQUE (tenant_id, entity_type, entity_id, consumer_type, consumer_id);

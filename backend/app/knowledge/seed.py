@@ -63,23 +63,33 @@ METRICS = [
 
 def seed_knowledge() -> dict:
     """幂等初始化：只补缺失知识，不覆盖管理员已有修改。"""
+    from app.tenancy.service import DEFAULT_TENANT_ID
+
     created = {"topics": 0, "objects": 0, "rules": 0, "metrics": 0, "bindings": 0}
     with PlatformSession() as session:
         for item in TOPICS:
-            if session.query(KnowledgeTopic).filter_by(code=item["code"]).first() is None:
-                session.add(KnowledgeTopic(**item))
+            if session.query(KnowledgeTopic).filter_by(
+                tenant_id=DEFAULT_TENANT_ID, code=item["code"]
+            ).first() is None:
+                session.add(KnowledgeTopic(tenant_id=DEFAULT_TENANT_ID, **item))
                 created["topics"] += 1
         for item in OBJECTS:
-            if session.query(BusinessObject).filter_by(id=item["id"]).first() is None:
-                session.add(BusinessObject(**item))
+            if session.query(BusinessObject).filter_by(
+                tenant_id=DEFAULT_TENANT_ID, id=item["id"]
+            ).first() is None:
+                session.add(BusinessObject(tenant_id=DEFAULT_TENANT_ID, **item))
                 created["objects"] += 1
         for item in RULES:
-            if session.query(BusinessRule).filter_by(id=item["id"]).first() is None:
-                session.add(BusinessRule(**item))
+            if session.query(BusinessRule).filter_by(
+                tenant_id=DEFAULT_TENANT_ID, id=item["id"]
+            ).first() is None:
+                session.add(BusinessRule(tenant_id=DEFAULT_TENANT_ID, **item))
                 created["rules"] += 1
         session.flush()
 
-        source = session.query(DataSource).filter_by(is_default=True).first()
+        source = session.query(DataSource).filter_by(
+            tenant_id=DEFAULT_TENANT_ID, is_default=True
+        ).first()
         source_id = source.id if source else None
         registered = set()
         registered_fields = set()
@@ -94,13 +104,16 @@ def seed_knowledge() -> dict:
             }
 
         for item in METRICS:
-            metric = session.query(KnowledgeMetric).filter_by(id=item["id"]).first()
+            metric = session.query(KnowledgeMetric).filter_by(
+                tenant_id=DEFAULT_TENANT_ID, id=item["id"]
+            ).first()
             valid_tables = [name for name in item["tables"] if name in registered]
             valid_fields = [field for field in item["fields"] if (field[1], field[2]) in registered_fields]
             binding_valid = len(valid_tables) == len(item["tables"]) and len(valid_fields) == len(item["fields"])
             if metric is None:
                 metric = KnowledgeMetric(
                     id=item["id"],
+                    tenant_id=DEFAULT_TENANT_ID,
                     name=item["name"],
                     topic=item["topic"],
                     definition=item["definition"],

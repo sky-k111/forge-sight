@@ -46,7 +46,8 @@ def test_memory_recall_is_filtered_by_user_and_source_before_ranking(monkeypatch
     result = service.retrieve_memories("查看良率趋势", 1, "u1", run_id="run-1")
 
     assert [item["id"] for item in result["memories"]] == [own["id"]]
-    assert result["scope"] == {"tenantId": "default", "sourceId": 1, "userId": "u1"}
+    # 未显式传租户时按数据源归属推导；默认企业已归一化为 tenant-default。
+    assert result["scope"] == {"tenantId": "tenant-default", "sourceId": 1, "userId": "u1"}
 
 
 def test_correction_supersedes_old_memory_and_forget_hides_new_memory(monkeypatch):

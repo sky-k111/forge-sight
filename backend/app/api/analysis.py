@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from app.agent import service, usage
 from app.agent.contracts import BranchCreate, ClarificationResponse, RunCreate, SessionCreate
-from app.auth.deps import effective_user_id, optional_user
+from app.auth.deps import optional_user
 from app.db.platform import PlatformSession
 from app.tenancy.service import (
     TenantContext,
@@ -27,6 +27,32 @@ def _not_found(exc: Exception) -> HTTPException:
     return HTTPException(status_code=404, detail=str(exc).strip("'"))
 
 
+def _actor(user: dict | None) -> str:
+    """归属校验用的账号标识；与 AnalysisSession.user_id 的写入口径一致。"""
+
+    return user["username"] if user else "local-test-user"
+
+
+def _guard_session(session_id: str, context: TenantContext, user: dict | None) -> None:
+    with PlatformSession() as db:
+        ensure_analysis_session_access(db, session_id, context.tenant_id, user_id=_actor(user))
+
+
+def _guard_run(run_id: str, context: TenantContext, user: dict | None) -> None:
+    with PlatformSession() as db:
+        ensure_analysis_run_access(db, run_id, context.tenant_id, user_id=_actor(user))
+
+
+def _guard_checkpoint(checkpoint_id: str, context: TenantContext, user: dict | None) -> None:
+    with PlatformSession() as db:
+        ensure_checkpoint_access(db, checkpoint_id, context.tenant_id, user_id=_actor(user))
+
+
+def _guard_interaction(interaction_id: str, context: TenantContext, user: dict | None) -> None:
+    with PlatformSession() as db:
+        ensure_interaction_access(db, interaction_id, context.tenant_id, user_id=_actor(user))
+
+
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
 def create_session(
     payload: SessionCreate,
@@ -35,7 +61,7 @@ def create_session(
 ):
     try:
         return service.create_session(
-            payload.title, payload.sourceId, effective_user_id(payload.userId, user), context.tenant_id
+            payload.title, payload.sourceId, _actor(user), context.tenant_id
         )
     except service.AnalysisNotFound as exc:
         raise _not_found(exc) from exc
@@ -47,11 +73,23 @@ def list_sessions(
     user: dict | None = Depends(optional_user),
     context: TenantContext = Depends(tenant_context),
 ):
-    return service.list_sessions(effective_user_id(userId, user), context.tenant_id)
+    # 归属以服务端解析为准：匿名演示沿用参数（兼容本地联调），登录后仅能查看自己；
+    # 登录态携带他人 userId 时返回空列表而非报错，避免确认他人会话是否存在。
+    scope_user = _actor(user)
+    if user is None:
+        scope_user = userId
+    elif userId != scope_user:
+        scope_user = "\u0000out-of-scope"
+    return service.list_sessions(scope_user, context.tenant_id)
 
 
 @router.get("/sessions/{session_id}")
-def get_session(session_id: str, context: TenantContext = Depends(tenant_context)):
+def get_session(
+    session_id: str,
+    user: dict | None = Depends(optional_user),
+    context: TenantContext = Depends(tenant_context),
+):
+    _guard_session(session_id, context, user)
     try:
         return service.get_session(session_id, context.tenant_id)
     except service.AnalysisNotFound as exc:
@@ -66,7 +104,7 @@ def delete_session(
     context: TenantContext = Depends(tenant_context),
 ):
     try:
-        return service.delete_session(session_id, effective_user_id(userId, user), context.tenant_id)
+        return service.delete_session(session_id, _actor(user), context.tenant_id)
     except service.AnalysisNotFound as exc:
         raise _not_found(exc) from exc
 
@@ -76,8 +114,11 @@ def create_run(
     session_id: str,
     payload: RunCreate,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=100),
+    user: dict | None = Depends(optional_user),
     context: TenantContext = Depends(tenant_context),
 ):
+    # 只有会话归属人可以在会话内继续提问，同租户其他成员不能插入。
+    _guard_session(session_id, context, user)
     try:
         return service.create_run(session_id, payload.question, idempotency_key, context.tenant_id)
     except service.AnalysisNotFound as exc:
@@ -87,10 +128,12 @@ def create_run(
 
 
 @router.get("/runs/{run_id}")
-def get_run(run_id: str, context: TenantContext = Depends(tenant_context)):
-    if context.user_id is not None:
-        with PlatformSession() as session:
-            ensure_analysis_run_access(session, run_id, context.tenant_id)
+def get_run(
+    run_id: str,
+    user: dict | None = Depends(optional_user),
+    context: TenantContext = Depends(tenant_context),
+):
+    _guard_run(run_id, context, user)
     try:
         return service.get_run(run_id)
     except service.AnalysisNotFound as exc:
@@ -98,10 +141,12 @@ def get_run(run_id: str, context: TenantContext = Depends(tenant_context)):
 
 
 @router.post("/runs/{run_id}/cancel")
-def cancel_run(run_id: str, context: TenantContext = Depends(tenant_context)):
-    if context.user_id is not None:
-        with PlatformSession() as session:
-            ensure_analysis_run_access(session, run_id, context.tenant_id)
+def cancel_run(
+    run_id: str,
+    user: dict | None = Depends(optional_user),
+    context: TenantContext = Depends(tenant_context),
+):
+    _guard_run(run_id, context, user)
     try:
         return service.cancel_run(run_id)
     except service.AnalysisNotFound as exc:
@@ -110,12 +155,12 @@ def cancel_run(run_id: str, context: TenantContext = Depends(tenant_context)):
 
 @router.post("/interactions/{interaction_id}/responses", status_code=status.HTTP_202_ACCEPTED)
 def answer_clarification(
-    interaction_id: str, payload: ClarificationResponse,
+    interaction_id: str,
+    payload: ClarificationResponse,
+    user: dict | None = Depends(optional_user),
     context: TenantContext = Depends(tenant_context),
 ):
-    if context.user_id is not None:
-        with PlatformSession() as session:
-            ensure_interaction_access(session, interaction_id, context.tenant_id)
+    _guard_interaction(interaction_id, context, user)
     try:
         return service.respond_to_interaction(interaction_id, payload.answer)
     except service.AnalysisNotFound as exc:
@@ -125,10 +170,12 @@ def answer_clarification(
 
 
 @router.get("/runs/{run_id}/checkpoints")
-def get_checkpoints(run_id: str, context: TenantContext = Depends(tenant_context)):
-    if context.user_id is not None:
-        with PlatformSession() as session:
-            ensure_analysis_run_access(session, run_id, context.tenant_id)
+def get_checkpoints(
+    run_id: str,
+    user: dict | None = Depends(optional_user),
+    context: TenantContext = Depends(tenant_context),
+):
+    _guard_run(run_id, context, user)
     try:
         return {"items": service.list_checkpoints(run_id)}
     except service.AnalysisNotFound as exc:
@@ -142,13 +189,11 @@ def create_branch(
     user: dict | None = Depends(optional_user),
     context: TenantContext = Depends(tenant_context),
 ):
-    if context.user_id is not None:
-        with PlatformSession() as session:
-            ensure_checkpoint_access(session, checkpoint_id, context.tenant_id)
+    _guard_checkpoint(checkpoint_id, context, user)
     try:
         return service.create_branch(
             checkpoint_id,
-            effective_user_id(payload.userId, user),
+            _actor(user),
             payload.title,
             instruction=payload.instruction,
             adjustments=payload.adjustments,
@@ -164,11 +209,10 @@ def get_events(
     afterSeq: int = Query(default=0, ge=0),
     limit: int = Query(default=500, ge=1, le=500),
     includeAdmin: bool = False,
+    user: dict | None = Depends(optional_user),
     context: TenantContext = Depends(tenant_context),
 ):
-    if context.user_id is not None:
-        with PlatformSession() as session:
-            ensure_analysis_run_access(session, run_id, context.tenant_id)
+    _guard_run(run_id, context, user)
     try:
         return {"items": service.list_events(run_id, afterSeq, limit, include_admin=includeAdmin)}
     except service.AnalysisNotFound as exc:
@@ -180,11 +224,10 @@ def stream_events(
     run_id: str,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     includeAdmin: bool = False,
+    user: dict | None = Depends(optional_user),
     context: TenantContext = Depends(tenant_context),
 ):
-    if context.user_id is not None:
-        with PlatformSession() as session:
-            ensure_analysis_run_access(session, run_id, context.tenant_id)
+    _guard_run(run_id, context, user)
     try:
         service.get_run_status(run_id)
     except service.AnalysisNotFound as exc:
@@ -221,12 +264,12 @@ def stream_events(
 
 @router.get("/runs/{run_id}/usage")
 def get_usage(
-    run_id: str, includeAttempts: bool = False,
+    run_id: str,
+    includeAttempts: bool = False,
+    user: dict | None = Depends(optional_user),
     context: TenantContext = Depends(tenant_context),
 ):
-    if context.user_id is not None:
-        with PlatformSession() as session:
-            ensure_analysis_run_access(session, run_id, context.tenant_id)
+    _guard_run(run_id, context, user)
     try:
         return usage.run_usage(run_id, include_attempts=includeAttempts)
     except KeyError as exc:

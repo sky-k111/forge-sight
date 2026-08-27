@@ -3,6 +3,7 @@ import { listSources } from "../../api/datasources";
 import { getCurrentTenant, listCurrentTenantMembers } from "../../api/tenants";
 import Icon from "../../components/ui/Icon";
 import { Card, ErrorNotice, PageFrame, RouteSkeleton, StatusPill } from "../../components/ui";
+import { getToken } from "../../lib/auth";
 
 const roleLabels = { owner: "所有者", admin: "管理员", member: "成员", viewer: "只读成员" };
 
@@ -12,8 +13,19 @@ export default function TenantManagementPage() {
 
   const load = () => {
     setError(null);
-    Promise.all([getCurrentTenant(), listCurrentTenantMembers(), listSources()])
-      .then(([tenant, memberResult, sources]) => setData({ tenant, members: memberResult.items ?? [], sources }))
+    // 成员名单仅对登录账号开放；演示模式的匿名访问只展示企业边界概览。
+    const authenticated = Boolean(getToken());
+    Promise.all([
+      getCurrentTenant(),
+      authenticated ? listCurrentTenantMembers() : Promise.resolve({ items: [] }),
+      listSources(),
+    ])
+      .then(([tenant, memberResult, sources]) => setData({
+        tenant,
+        members: memberResult.items ?? [],
+        authenticated,
+        sources,
+      }))
       .catch(setError);
   };
 
@@ -67,6 +79,9 @@ export default function TenantManagementPage() {
                 <StatusPill tone={member.enabled ? "green" : "red"}>{member.enabled ? "已启用" : "已停用"}</StatusPill>
               </div>
             ))}
+            {!data.authenticated && (
+              <div className="py-6 text-center text-xs text-muted">成员名单仅对已登录的企业管理员开放，登录后可查看完整列表。</div>
+            )}
           </div>
         </Card>
 

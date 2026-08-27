@@ -8,10 +8,24 @@ from sqlalchemy.pool import StaticPool
 from app.agent import runner as runner_service
 from app.agent import service as analysis_service
 from app.agent import usage as usage_service
+from app.api import analysis as analysis_api
 from app.config import settings
+from app.db import platform as platform_db
 from app.db.models import Base, DataSource, DataTable, TableField, TableRelation
 from app.knowledge import seed, service
 from app.retrieval import service as retrieval_service
+
+
+@pytest.fixture(scope="session", autouse=True)
+def provision_placeholder_platform_db():
+    """把 settings.platform_db_url 指向的占位库建出全量表结构。
+
+    部分模块（审计、飞书 OAuth 回调等）在个别测试里没有替换会话工厂，
+    会落到平台库默认引擎；与已执行迁移的生产环境保持同构，避免误报。
+    """
+
+    Base.metadata.create_all(platform_db.platform_engine)
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -127,6 +141,8 @@ def analysis_session(monkeypatch):
     monkeypatch.setattr(analysis_service, "PlatformSession", session_factory)
     monkeypatch.setattr(usage_service, "PlatformSession", session_factory)
     monkeypatch.setattr(runner_service, "PlatformSession", session_factory)
+    # HTTP 守卫（租户/归属校验）在 API 模块内开自己的会话，必须指向同一测试库。
+    monkeypatch.setattr(analysis_api, "PlatformSession", session_factory)
     with session_factory() as session:
         session.add(
             DataSource(

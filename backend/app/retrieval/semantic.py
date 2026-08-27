@@ -25,6 +25,7 @@ from app.db.models import (
     BusinessObject,
     BusinessRule,
     AnalysisSkill,
+    DataSource,
     DataTable,
     KnowledgeMetric,
     MetricSourceBinding,
@@ -119,10 +120,18 @@ def collect_documents(session, source_id: int) -> list[SemanticDocument]:
     """Build object-type-separated semantic documents for one source."""
 
     documents: list[SemanticDocument] = []
+    tenant_id = session.query(DataSource.tenant_id).filter_by(id=source_id).scalar()
+    if not tenant_id:
+        return documents
     metric_rows = (
         session.query(KnowledgeMetric, MetricSourceBinding)
-        .join(MetricSourceBinding, MetricSourceBinding.metric_id == KnowledgeMetric.id)
+        .join(
+            MetricSourceBinding,
+            (MetricSourceBinding.metric_id == KnowledgeMetric.id)
+            & (KnowledgeMetric.tenant_id == tenant_id),
+        )
         .filter(
+            KnowledgeMetric.tenant_id == tenant_id,
             KnowledgeMetric.status == "已发布",
             MetricSourceBinding.source_id == source_id,
             MetricSourceBinding.status == "已验证",
@@ -179,7 +188,7 @@ def collect_documents(session, source_id: int) -> list[SemanticDocument]:
             )
         )
 
-    for row in session.query(BusinessObject).filter_by(enabled=True).all():
+    for row in session.query(BusinessObject).filter_by(tenant_id=tenant_id, enabled=True).all():
         documents.append(
             SemanticDocument(
                 source_id=source_id,
@@ -190,7 +199,7 @@ def collect_documents(session, source_id: int) -> list[SemanticDocument]:
                 metadata={},
             )
         )
-    for row in session.query(BusinessRule).filter_by(enabled=True).all():
+    for row in session.query(BusinessRule).filter_by(tenant_id=tenant_id, enabled=True).all():
         documents.append(
             SemanticDocument(
                 source_id=source_id,

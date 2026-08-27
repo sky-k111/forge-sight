@@ -163,7 +163,7 @@ def remember(
     source_id: int | None,
     memory_kind: str = "preference",
     title: str = "",
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
     session_id: str | None = None,
     channel: str = "web",
     explicit: bool = True,
@@ -284,11 +284,20 @@ def retrieve_memories(
 ) -> dict:
     with PlatformSession() as session:
         if tenant_id is None:
-            tenant_id = session.query(DataSource.tenant_id).filter_by(id=source_id).scalar() or "default"
-            # Compatibility for pre-migration unit stores and interrupted upgrades.
-            if tenant_id == DEFAULT_TENANT_ID and not session.query(AgentMemory.id).filter_by(
-                tenant_id=tenant_id, source_id=source_id
-            ).first():
+            tenant_id = (
+                session.query(DataSource.tenant_id).filter_by(id=source_id).scalar()
+                or DEFAULT_TENANT_ID
+            )
+            # Compatibility for pre-migration unit stores and interrupted upgrades:
+            # fall back to the legacy literal partition only when the normalized
+            # tenant has no memories for this source.
+            if (
+                source_id is not None
+                and tenant_id == DEFAULT_TENANT_ID
+                and not session.query(AgentMemory.id).filter_by(
+                    tenant_id=tenant_id, source_id=source_id
+                ).first()
+            ):
                 tenant_id = "default"
         setting = _setting(session)
         config = dict(setting.config_json or {})
@@ -428,7 +437,7 @@ def _semantic_scores(session, question: str, tenant_id: str, source_id: int, use
 
 def correct_memory(
     memory_id: str, content: str, *, user_id: str, admin: bool = False,
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> dict:
     with PlatformSession() as session:
         old = session.query(AgentMemory).filter_by(
@@ -461,7 +470,7 @@ def correct_memory(
 
 def forget_memory(
     memory_id: str, *, user_id: str, admin: bool = False,
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> dict:
     with PlatformSession() as session:
         row = session.query(AgentMemory).filter_by(

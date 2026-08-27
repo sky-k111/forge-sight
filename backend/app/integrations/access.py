@@ -28,17 +28,32 @@ def allowed_source_ids(
     session,
     user_id: str,
     now: datetime | None = None,
+    *,
+    tenant_id: str | None = None,
 ) -> set[int]:
-    """合并分析相关显式授权；deny 始终覆盖 allow。"""
+    """合并分析相关显式授权；deny 始终覆盖 allow。
+
+    指定 tenant_id 时把授权与候选源锁定在该企业内（IM 渠道按绑定数据源
+    所属租户使用），用户在其它企业的策略与数据源不会混入；未指定时保持
+    兼容行为，取用户全部有效租户的并集。
+    """
 
     now = now or datetime.now()
-    tenant_ids = {
-        tenant_id for (tenant_id,) in session.query(TenantMembership.tenant_id).filter_by(
-            user_id=user_id, enabled=True
-        ).all()
-    }
-    if not tenant_ids:
-        tenant_ids = {"tenant-default"}
+    if tenant_id is not None:
+        member = session.query(TenantMembership.id).filter_by(
+            user_id=user_id, tenant_id=tenant_id, enabled=True
+        ).first()
+        if member is None:
+            return set()
+        tenant_ids = {tenant_id}
+    else:
+        tenant_ids = {
+            tenant for (tenant,) in session.query(TenantMembership.tenant_id).filter_by(
+                user_id=user_id, enabled=True
+            ).all()
+        }
+        if not tenant_ids:
+            tenant_ids = {"tenant-default"}
     policies = (
         session.query(DataScopePolicy)
         .filter(

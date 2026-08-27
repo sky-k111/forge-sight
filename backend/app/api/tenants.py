@@ -26,5 +26,9 @@ def current_tenant(context: TenantContext = Depends(tenant_context)) -> dict:
 
 
 @router.get("/current/members")
-def current_tenant_members(context: TenantContext = Depends(require_tenant_admin)) -> dict:
+def current_tenant_members(
+    user: dict = Depends(require_user),
+    context: TenantContext = Depends(require_tenant_admin),
+) -> dict:
+    # 成员名单包含平台账号信息，即使演示模式的匿名管理员上下文也不允许读取。
     return {"items": list_tenant_members(context.tenant_id)}

@@ -13,6 +13,7 @@ from app.db.models import (
     ExternalChatConversation,
     ExternalChatJob,
     PlatformUser,
+    TenantMembership,
 )
 from app.integrations import dingtalk_chat
 from app.api import dingtalk as dingtalk_api
@@ -42,7 +43,15 @@ def _seed_bound_user(
             source_id=source_id,
             bind_status="bound",
         )
-        rows = [user, binding]
+        rows = [
+            user,
+            # 生产环境中启动回填会给每个账号建立默认企业成员关系。
+            TenantMembership(
+                id="tm-dingtalk", tenant_id="tenant-default",
+                user_id=user.id, member_role="member", is_default=True,
+            ),
+            binding,
+        ]
         if with_scope:
             rows.append(
                 DataScopePolicy(

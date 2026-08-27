@@ -156,10 +156,8 @@ def generate_metric_candidates(
     sourceId: int = Query(...),
     context: TenantContext = Depends(require_tenant_admin),
 ):
-    # Candidate generation resolves the source again inside the service; the tenant
-    # argument prevents a caller from pointing it at another enterprise's source.
-    _call(service.list_metrics, source_id=sourceId, tenant_id=context.tenant_id)
-    return _call(candidates.generate_candidates, sourceId)
+    # 候选生成在 service 内按租户校验数据源归属，防止指向其他企业的源。
+    return _call(candidates.generate_candidates, sourceId, context.tenant_id)
 
 
 @router.post("/metric-candidates/{candidate_id}/accept")

@@ -103,14 +103,21 @@ def _validate_binding(session, binding: DingTalkBinding) -> None:
         raise DingTalkSourceRequired("请先在 ForgeSight 为钉钉账号选择可访问的数据源")
     if not source_exists(session, binding.source_id):
         raise DingTalkSourceRequired("绑定的数据源不存在或已被移除")
-    if binding.source_id not in allowed_source_ids(session, binding.user_id):
+    # 授权只看绑定源所属企业，避免用户在其它企业的策略影响本渠道判断。
+    bound_tenant = tenant_id_for_source(session, binding.source_id)
+    if binding.source_id not in shared_allowed_source_ids(
+        session, binding.user_id, tenant_id=bound_tenant
+    ):
         raise DingTalkSourceRequired("绑定的数据源已不在当前账号授权范围内")
 
 
-def allowed_source_ids(session, user_id: str, now: datetime | None = None) -> set[int]:
+def allowed_source_ids(
+    session, user_id: str, now: datetime | None = None,
+    *, tenant_id: str | None = None,
+) -> set[int]:
     """兼容既有 API；权限规则由所有外部 IM 入口共用。"""
 
-    return shared_allowed_source_ids(session, user_id, now)
+    return shared_allowed_source_ids(session, user_id, now, tenant_id=tenant_id)
 
 
 def _external_user_id(message: InboundMessage) -> str:

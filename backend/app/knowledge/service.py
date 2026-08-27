@@ -60,9 +60,11 @@ def _updated_label(value: datetime | None) -> str:
     return value.strftime("%m-%d %H:%M") if value else "—"
 
 
-def _next_code(session, model, prefix: str) -> str:
+def _next_code(session, model, prefix: str, tenant_id: str = DEFAULT_TENANT_ID) -> str:
+    """租户内自增编码；不同企业可以各自拥有 R-001 / M-001。"""
+
     maximum = 0
-    for (value,) in session.query(model.id).all():
+    for (value,) in session.query(model.id).filter(model.tenant_id == tenant_id).all():
         match = re.fullmatch(rf"{re.escape(prefix)}-(\d+)", value or "")
         if match:
             maximum = max(maximum, int(match.group(1)))
@@ -97,8 +99,10 @@ def _reference_count(session, entity_type: str, entity_id: str) -> int:
     return session.query(KnowledgeReference).filter_by(entity_type=entity_type, entity_id=entity_id).count()
 
 
-def _block_if_referenced(session, entity_type: str, entity_id: str) -> None:
-    references = session.query(KnowledgeReference).filter_by(entity_type=entity_type, entity_id=entity_id).all()
+def _block_if_referenced(session, entity_type: str, entity_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> None:
+    references = session.query(KnowledgeReference).filter_by(
+        tenant_id=tenant_id, entity_type=entity_type, entity_id=entity_id
+    ).all()
     if references:
         examples = "、".join(f"{row.consumer_type}:{row.consumer_id}" for row in references[:3])
         raise KnowledgeConflict(f"该知识项仍被 {len(references)} 个内容引用（{examples}），不能删除")
@@ -190,7 +194,7 @@ def delete_topic(code: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
         row = session.query(KnowledgeTopic).filter_by(tenant_id=tenant_id, code=code).first()
         if row is None:
             raise KnowledgeNotFound(f"分析主题 {code} 不存在")
-        _block_if_referenced(session, "topic", code)
+        _block_if_referenced(session, "topic", code, tenant_id)
         dependencies = (
             session.query(BusinessObject).filter_by(tenant_id=tenant_id, topic=row.name).count()
             + session.query(BusinessRule).filter_by(tenant_id=tenant_id, scope=row.name).count()
@@ -302,7 +306,7 @@ def delete_object(object_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
         row = session.query(BusinessObject).filter_by(tenant_id=tenant_id, id=object_id).first()
         if row is None:
             raise KnowledgeNotFound(f"业务对象 {object_id} 不存在")
-        _block_if_referenced(session, "object", object_id)
+        _block_if_referenced(session, "object", object_id, tenant_id)
         used_by = [
             metric.id
             for metric in session.query(KnowledgeMetric).filter_by(tenant_id=tenant_id).all()
@@ -341,7 +345,7 @@ def create_rule(payload: dict, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
         raise KnowledgeValidation("业务规则名称不能为空")
     with PlatformSession() as session:
         _ensure_topic(session, scope, tenant_id=tenant_id, allow_global=True)
-        rule_id = str(payload.get("id") or _next_code(session, BusinessRule, "R")).strip()
+        rule_id = str(payload.get("id") or _next_code(session, BusinessRule, "R", tenant_id)).strip()
         if session.query(BusinessRule).filter(
             BusinessRule.tenant_id == tenant_id,
             (BusinessRule.id == rule_id) | (BusinessRule.name == name),
@@ -389,7 +393,7 @@ def delete_rule(rule_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
         row = session.query(BusinessRule).filter_by(tenant_id=tenant_id, id=rule_id).first()
         if row is None:
             raise KnowledgeNotFound(f"业务规则 {rule_id} 不存在")
-        _block_if_referenced(session, "rule", rule_id)
+        _block_if_referenced(session, "rule", rule_id, tenant_id)
         session.delete(row)
         enqueue_all_sources(session, tenant_id=tenant_id, reason=f"删除业务规则：{rule_id}")
         session.commit()
@@ -634,8 +638,8 @@ def save_metric(
         created = row is None
         semantic_time_field = str(payload.get("semanticTimeField") or (row.time_field if row else "统计时间")).strip()
         if created:
-            code = str(payload.get("id") or _next_code(session, KnowledgeMetric, "M")).strip()
-            if session.query(KnowledgeMetric).filter_by(id=code).first():
+            code = str(payload.get("id") or _next_code(session, KnowledgeMetric, "M", tenant_id)).strip()
+            if session.query(KnowledgeMetric).filter_by(tenant_id=tenant_id, id=code).first():
                 raise KnowledgeConflict(f"指标ID已存在：{code}")
             row = KnowledgeMetric(
                 id=code,
@@ -811,7 +815,7 @@ def delete_metric(metric_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
         row = session.query(KnowledgeMetric).filter_by(tenant_id=tenant_id, id=metric_id).first()
         if row is None:
             raise KnowledgeNotFound(f"指标 {metric_id} 不存在")
-        _block_if_referenced(session, "metric", metric_id)
+        _block_if_referenced(session, "metric", metric_id, tenant_id)
         bindings = session.query(MetricSourceBinding).filter_by(metric_id=metric_id).all()
         affected_source_ids = {binding.source_id for binding in bindings}
         for binding in bindings:

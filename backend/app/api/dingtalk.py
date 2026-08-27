@@ -21,6 +21,7 @@ from app.config import settings
 from app.db.models import DataSource, DingTalkBinding, DingTalkOAuthState, ExternalChatConversation
 from app.db.platform import PlatformSession
 from app.integrations.dingtalk_chat import allowed_source_ids
+from app.tenancy.service import TenantContext, tenant_context
 
 router = APIRouter(prefix="/api/dingtalk", tags=["dingtalk"])
 
@@ -29,10 +30,16 @@ class DingTalkSourceSelection(BaseModel):
     sourceId: int = Field(ge=1)
 
 
-def _allowed_source_ids(session, user_id: str, now: datetime | None = None) -> set[int]:
-    """兼容 API 内部调用；实际权限规则由机器人入口与 API 共用。"""
+def _allowed_source_ids(
+    session, user_id: str, now: datetime | None = None,
+    tenant_id: str | None = None,
+) -> set[int]:
+    """兼容 API 内部调用；实际权限规则由机器人入口与 API 共用。
 
-    return allowed_source_ids(session, user_id, now)
+    传入 tenant_id 时把授权锁定在该企业内，与当前工作区保持一致。
+    """
+
+    return allowed_source_ids(session, user_id, now, tenant_id=tenant_id)
 
 
 def _http_json(
@@ -126,9 +133,12 @@ def get_my_binding(user: dict = Depends(require_user)) -> dict:
 
 
 @router.get("/binding/sources")
-def list_binding_sources(user: dict = Depends(require_user)) -> dict:
+def list_binding_sources(
+    user: dict = Depends(require_user),
+    context: TenantContext = Depends(tenant_context),
+) -> dict:
     with PlatformSession() as session:
-        allowed_ids = _allowed_source_ids(session, user["id"])
+        allowed_ids = _allowed_source_ids(session, user["id"], tenant_id=context.tenant_id)
         sources = (
             session.query(DataSource)
             .filter(DataSource.id.in_(allowed_ids))
@@ -151,12 +161,13 @@ def list_binding_sources(user: dict = Depends(require_user)) -> dict:
 def select_binding_source(
     payload: DingTalkSourceSelection,
     user: dict = Depends(require_user),
+    context: TenantContext = Depends(tenant_context),
 ) -> dict:
     with PlatformSession() as session:
         binding = session.query(DingTalkBinding).filter_by(user_id=user["id"]).with_for_update().first()
         if binding is None or binding.bind_status != "bound":
             raise HTTPException(status_code=409, detail="请先完成钉钉账号绑定")
-        if payload.sourceId not in _allowed_source_ids(session, user["id"]):
+        if payload.sourceId not in _allowed_source_ids(session, user["id"], tenant_id=context.tenant_id):
             raise HTTPException(status_code=403, detail="该数据源不在当前账号授权范围内")
         source = session.get(DataSource, payload.sourceId)
         if source is None:

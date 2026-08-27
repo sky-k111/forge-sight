@@ -154,9 +154,11 @@ def external_identity_status_for(user: PlatformUser) -> dict:
 def user_payload(user: PlatformUser) -> dict:
     email_status = email_status_for(user)
     identity = external_identity_status_for(user)
-    from app.tenancy.service import list_user_tenants
+    from app.tenancy.service import collect_user_tenants
 
-    tenants = list_user_tenants(user.id)
+    # 用 auth 模块自己的会话工厂查询，保证与注册/登录写入落在同一个库。
+    with PlatformSession() as session:
+        tenants = collect_user_tenants(session, user.id)
     return {
         "id": user.id,
         "username": user.username,

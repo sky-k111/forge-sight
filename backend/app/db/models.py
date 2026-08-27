@@ -12,6 +12,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    PrimaryKeyConstraint,
     String,
     Text,
     UniqueConstraint,
@@ -164,9 +165,12 @@ class KnowledgeTopic(Base):
     """分析主题：组织指标、对象和规则的顶层业务分类。"""
 
     __tablename__ = "knowledge_topic"
-    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_knowledge_topic_tenant_name"),)
+    __table_args__ = (
+        PrimaryKeyConstraint("tenant_id", "code", name="pk_knowledge_topic"),
+        UniqueConstraint("tenant_id", "name", name="uq_knowledge_topic_tenant_name"),
+    )
 
-    code: Mapped[str] = mapped_column(String(20), primary_key=True, comment="稳定编码，如 QUAL")
+    code: Mapped[str] = mapped_column(String(20), comment="稳定编码，如 QUAL")
     tenant_id: Mapped[str] = mapped_column(String(40), default="tenant-default", index=True)
     name: Mapped[str] = mapped_column(String(50), comment="主题名称")
     color: Mapped[str] = mapped_column(String(20), default="blue")
@@ -181,9 +185,12 @@ class BusinessObject(Base):
     """业务对象：产品、工单、工序、设备等企业语义实体。"""
 
     __tablename__ = "business_object"
-    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_business_object_tenant_name"),)
+    __table_args__ = (
+        PrimaryKeyConstraint("tenant_id", "id", name="pk_business_object"),
+        UniqueConstraint("tenant_id", "name", name="uq_business_object_tenant_name"),
+    )
 
-    id: Mapped[str] = mapped_column(String(50), primary_key=True, comment="稳定英文标识")
+    id: Mapped[str] = mapped_column(String(50), comment="稳定英文标识")
     tenant_id: Mapped[str] = mapped_column(String(40), default="tenant-default", index=True)
     name: Mapped[str] = mapped_column(String(80))
     topic: Mapped[str] = mapped_column(String(50), default="全局")
@@ -198,9 +205,12 @@ class BusinessRule(Base):
     """业务规则：指标计算、数据校验、异常识别与查询约束。"""
 
     __tablename__ = "business_rule"
-    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_business_rule_tenant_name"),)
+    __table_args__ = (
+        PrimaryKeyConstraint("tenant_id", "id", name="pk_business_rule"),
+        UniqueConstraint("tenant_id", "name", name="uq_business_rule_tenant_name"),
+    )
 
-    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    id: Mapped[str] = mapped_column(String(20))
     tenant_id: Mapped[str] = mapped_column(String(40), default="tenant-default", index=True)
     name: Mapped[str] = mapped_column(String(180))
     rule_type: Mapped[str] = mapped_column(String(30), default="业务规则")
@@ -215,9 +225,12 @@ class KnowledgeMetric(Base):
     """企业统一指标语义；这里只描述业务含义，不出现某个数据源的物理字段。"""
 
     __tablename__ = "knowledge_metric"
-    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_knowledge_metric_tenant_name"),)
+    __table_args__ = (
+        PrimaryKeyConstraint("tenant_id", "id", name="pk_knowledge_metric"),
+        UniqueConstraint("tenant_id", "name", name="uq_knowledge_metric_tenant_name"),
+    )
 
-    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    id: Mapped[str] = mapped_column(String(20))
     tenant_id: Mapped[str] = mapped_column(String(40), default="tenant-default", index=True)
     name: Mapped[str] = mapped_column(String(100))
     topic: Mapped[str] = mapped_column(String(50))
@@ -328,11 +341,17 @@ class KnowledgeReference(Base):
     __tablename__ = "knowledge_reference"
     __table_args__ = (
         UniqueConstraint(
-            "entity_type", "entity_id", "consumer_type", "consumer_id", name="uq_knowledge_reference"
+            "tenant_id",
+            "entity_type",
+            "entity_id",
+            "consumer_type",
+            "consumer_id",
+            name="uq_knowledge_reference",
         ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(40), default="tenant-default", index=True)
     entity_type: Mapped[str] = mapped_column(String(30), index=True, comment="topic / object / rule / metric")
     entity_id: Mapped[str] = mapped_column(String(50), index=True)
     consumer_type: Mapped[str] = mapped_column(String(30), comment="metric / analysis_template / report_template")

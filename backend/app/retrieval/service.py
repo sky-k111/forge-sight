@@ -294,10 +294,18 @@ def _metric_candidates(
     topic_scores = {item["name"]: item["score"] for item in topic_matches}
     semantic_hits = semantic_hits or []
     semantic_ids = {str(item["objectId"]) for item in semantic_hits}
+    tenant_id = session.query(DataSource.tenant_id).filter_by(id=source_id).scalar()
+    if not tenant_id:
+        return []
     rows = (
         session.query(KnowledgeMetric, MetricSourceBinding)
-        .join(MetricSourceBinding, MetricSourceBinding.metric_id == KnowledgeMetric.id)
+        .join(
+            MetricSourceBinding,
+            (MetricSourceBinding.metric_id == KnowledgeMetric.id)
+            & (KnowledgeMetric.tenant_id == tenant_id),
+        )
         .filter(
+            KnowledgeMetric.tenant_id == tenant_id,
             KnowledgeMetric.status == "已发布",
             MetricSourceBinding.source_id == source_id,
             MetricSourceBinding.status == "已验证",
@@ -706,7 +714,7 @@ def build_context_package(
         selected_topics = {item["metric"].topic for item in metric_items}
         selected_topics.update(item["name"] for item in topic_matches[:2])
         dimensions = {dimension for item in metric_items for dimension in item["dimensions"]}
-        object_rows = session.query(BusinessObject).filter_by(enabled=True).all()
+        object_rows = session.query(BusinessObject).filter_by(tenant_id=source.tenant_id, enabled=True).all()
         objects = []
         semantic_object_ids = {str(item["objectId"]) for item in semantic_object_hits}
         for row in object_rows:
@@ -738,7 +746,7 @@ def build_context_package(
                 item["semanticScore"] = object_fusion[item["id"]]["semanticScore"]
         objects.sort(key=lambda item: (-item["relevanceScore"], item["id"]))
 
-        rule_rows = session.query(BusinessRule).filter_by(enabled=True).all()
+        rule_rows = session.query(BusinessRule).filter_by(tenant_id=source.tenant_id, enabled=True).all()
         rules = []
         semantic_rule_ids = {str(item["objectId"]) for item in semantic_rule_hits}
         for row in rule_rows:

@@ -71,10 +71,15 @@ def _coverage(session, template: ReportTemplate, source_id: int) -> dict:
                 for section in (template.sections_json or [])
             ],
         }
+    source_tenant = session.query(DataSource.tenant_id).filter_by(id=source_id).scalar()
     published = {
         row.name: row.id
         for row in session.query(KnowledgeMetric)
-        .filter(KnowledgeMetric.name.in_(required), KnowledgeMetric.status == "已发布")
+        .filter(
+            KnowledgeMetric.tenant_id == (source_tenant or ""),
+            KnowledgeMetric.name.in_(required),
+            KnowledgeMetric.status == "已发布",
+        )
         .all()
     }
     verified_ids = {

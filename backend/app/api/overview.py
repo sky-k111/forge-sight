@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 
-from app.auth.deps import effective_user_id, optional_user
+from app.auth.deps import optional_user
 from app.db.models import (
     AnalysisMessage,
     AnalysisRun,
@@ -100,6 +100,8 @@ def get_business_overview(
     user: dict | None = Depends(optional_user),
     context: TenantContext = Depends(tenant_context),
 ):
+    # userId 参数仅为兼容保留；归属统计一律以服务端解析的账号为准。
+    actor = user["username"] if user else "local-test-user"
     with PlatformSession() as session:
         source = _source_or_default(session, sourceId, context.tenant_id)
         if source is None:
@@ -147,7 +149,7 @@ def get_business_overview(
         latest_scan = max((item.scanned_at for item in tables if item.scanned_at), default=None)
         update_dates = [item.data_updated for item in tables if item.data_updated]
         session_scope = session.query(AnalysisSession).filter_by(
-            source_id=source.id, user_id=effective_user_id(userId, user), tenant_id=context.tenant_id
+            source_id=source.id, user_id=actor, tenant_id=context.tenant_id
         )
         session_count = session_scope.count()
         sessions = (

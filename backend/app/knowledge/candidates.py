@@ -352,8 +352,12 @@ def _generation_context(session, source_id: int) -> tuple[DataSource, str, dict[
     return source, json.dumps(context, ensure_ascii=False), missing
 
 
-def generate_candidates(source_id: int) -> dict:
+def generate_candidates(source_id: int, tenant_id: str = "tenant-default") -> dict:
     with PlatformSession() as session:
+        # 请求者只能为当前企业的数据源生成候选，跨租户视为不存在。
+        source = session.query(DataSource).filter_by(id=source_id, tenant_id=tenant_id).first()
+        if source is None:
+            raise service.KnowledgeNotFound(f"数据源 {source_id} 不存在")
         source, context, missing_metrics = _generation_context(session, source_id)
     try:
         response = chat_completion(_SYSTEM_PROMPT, context, temperature=0.05, max_tokens=5000)

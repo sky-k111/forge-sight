@@ -13,6 +13,7 @@ from app.db.models import (
     ExternalChatJob,
     FeishuBinding,
     PlatformUser,
+    TenantMembership,
 )
 from app.integrations import feishu_p2p
 
@@ -99,6 +100,11 @@ def _seed_business_binding(session_factory, *, with_scope: bool = True) -> None:
             enabled=True,
         )
         session.add(user)
+        # 生产环境中启动回填会给每个账号建立默认企业成员关系。
+        session.add(TenantMembership(
+            id="tm-feishu", tenant_id="tenant-default",
+            user_id=user.id, member_role="member", is_default=True,
+        ))
         if with_scope:
             session.add(
                 DataScopePolicy(

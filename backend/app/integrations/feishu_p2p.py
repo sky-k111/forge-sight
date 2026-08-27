@@ -211,7 +211,9 @@ def _validate_binding(session, binding: Binding) -> Binding:
         raise FeishuBotConfigurationError(
             f"绑定账号 {binding.user_id} 不存在、已停用或不是业务人员"
         )
-    if binding.source_id not in allowed_source_ids(session, user.id):
+    # 授权只看绑定源所属企业，避免用户在其它企业的策略影响本渠道判断。
+    bound_tenant = tenant_id_for_source(session, binding.source_id)
+    if binding.source_id not in allowed_source_ids(session, user.id, tenant_id=bound_tenant):
         raise FeishuBotConfigurationError(
             f"绑定的数据源 {binding.source_id} 不在账号 {user.username} 的授权范围内"
         )

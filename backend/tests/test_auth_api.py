@@ -19,7 +19,7 @@ from app.auth import service as auth_service
 from app.auth.deps import validate_email_gate_configuration
 from app.auth.mail_provider import CaptureMailProvider
 from app.config import settings
-from app.db.models import Base, DataScopePolicy, DataSource, PlatformUser
+from app.db.models import Base, DataScopePolicy, DataSource, PlatformUser, TenantMembership
 from app.main import app
 
 
@@ -125,7 +125,8 @@ def test_register_requires_external_identity_when_gate_is_enabled(
         assert user.external_identity_required is True
 
 
-def test_register_provisions_weekly_report_access_to_the_default_source(auth_session):
+def test_register_provisions_isolated_workspace_without_shared_scopes(auth_session):
+    """多租户契约：新注册账号进入私有企业空间，不继承兼容租户的数据源授权。"""
     response = TestClient(app).post(
         "/api/auth/register",
         json={
@@ -137,17 +138,26 @@ def test_register_provisions_weekly_report_access_to_the_default_source(auth_ses
     )
 
     assert response.status_code == 201
+    user_id = response.json()["user"]["id"]
     with auth_session() as session:
-        source_id = session.query(DataSource.id).filter_by(is_default=True).scalar()
-        policy = session.query(DataScopePolicy).filter_by(
-            subject_type="user",
-            subject_id=response.json()["user"]["id"],
-            business_key="weekly_report",
-        ).one()
+        legacy_source_id = session.query(DataSource.id).filter_by(is_default=True).scalar()
+        membership = session.query(TenantMembership).filter_by(user_id=user_id).one()
 
-    assert policy.effect == "allow"
-    assert policy.enabled is True
-    assert policy.data_source_ids_json == [source_id]
+        assert membership.member_role == "owner"
+        assert membership.tenant_id != "tenant-default"
+        # 私有空间内还没有任何数据源，也不存在指向兼容租户数据源的授权。
+        assert session.query(DataSource.id).filter_by(tenant_id=membership.tenant_id).count() == 0
+        granted = (
+            session.query(DataScopePolicy)
+            .filter(
+                DataScopePolicy.subject_type == "user",
+                DataScopePolicy.subject_id == user_id,
+                DataScopePolicy.business_key.in_(["weekly_report", "analysis", "anomaly_monitoring"]),
+            )
+            .all()
+        )
+        assert granted == []
+        assert legacy_source_id is not None
 
 
 def test_scope_bootstrap_backfills_an_existing_business_user(auth_session):
