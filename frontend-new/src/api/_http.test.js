@@ -12,6 +12,7 @@ vi.mock("../lib/auth", () => ({
 
 beforeEach(() => {
   vi.unstubAllGlobals();
+  window.localStorage.clear();
 });
 
 
@@ -32,5 +33,21 @@ test("preserves backend email gate error code for restricted-state routing", asy
     message: "请先完成邮箱验证",
     code: "EMAIL_VERIFICATION_REQUIRED",
     status: 403,
+  });
+});
+
+test("sends the active enterprise boundary with every API request", async () => {
+  window.localStorage.setItem("forgesight:active-tenant-id", "tenant-factory-a");
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ ok: true }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await httpGet("/api/datasources");
+
+  expect(fetchMock.mock.calls[0][1].headers).toMatchObject({
+    Authorization: "Bearer restricted-token",
+    "X-Tenant-ID": "tenant-factory-a",
   });
 });

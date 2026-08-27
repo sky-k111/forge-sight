@@ -25,7 +25,7 @@ from app.db.models import (
     PlatformUser,
 )
 from app.db.platform import PlatformSession
-from app.integrations.access import allowed_source_ids as shared_allowed_source_ids
+from app.integrations.access import allowed_source_ids as shared_allowed_source_ids, tenant_id_for_source
 from app.integrations.access import source_exists
 
 CHANNEL = "dingtalk"
@@ -175,6 +175,7 @@ def accept_message(
                 title="钉钉业务问析",
                 user_id=binding.user_id,
                 source_id=binding.source_id,
+                tenant_id=tenant_id_for_source(session, binding.source_id),
             )
             session.add(analysis_session)
             if conversation is None:
@@ -375,6 +376,7 @@ def execute_job(
         _validate_binding(session, binding)
         if binding.source_id != conversation.source_id:
             raise DingTalkSourceRequired("钉钉会话的数据源绑定已变化，请重新发送问题")
+        tenant_id = tenant_id_for_source(session, conversation.source_id)
         interaction = _pending_interaction(session, analysis_session_id) if analysis_session_id else None
     if not analysis_session_id:
         raise RuntimeError("外部消息任务没有关联 Analysis Session")

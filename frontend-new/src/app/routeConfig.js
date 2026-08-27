@@ -9,6 +9,7 @@ export const routeByPage = {
   messages: "/workspace/messages",
   "admin-messages": "/admin/messages",
   "admin-overview": "/admin/overview",
+  tenants: "/admin/tenants",
   knowledge: "/admin/knowledge",
   resources: "/admin/resources",
   "monitoring-rules": "/admin/monitoring-rules",

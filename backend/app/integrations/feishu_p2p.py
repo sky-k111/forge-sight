@@ -50,7 +50,7 @@ from app.db.models import (
     FeishuBinding,
 )
 from app.db.platform import PlatformSession
-from app.integrations.access import allowed_source_ids, resolve_business_user, source_exists
+from app.integrations.access import allowed_source_ids, resolve_business_user, source_exists, tenant_id_for_source
 from app.integrations.feishu_charts import build_chart_specs, render_chart_png
 
 log = logging.getLogger(__name__)
@@ -309,6 +309,7 @@ def accept_message(
                 title="飞书业务问析",
                 user_id=binding.user_id,
                 source_id=binding.source_id,
+                tenant_id=tenant_id_for_source(session, binding.source_id),
             )
             session.add(analysis_session)
             if conversation is None:
@@ -470,6 +471,7 @@ def execute_job(
             or current_binding.source_id != conversation.source_id
         ):
             raise FeishuBotConfigurationError("飞书账号或数据源绑定已变化，请重新发送问题")
+        tenant_id = tenant_id_for_source(session, conversation.source_id)
         run_id = row.run_id
         analysis_session_id = row.analysis_session_id
         question = row.question

@@ -28,6 +28,7 @@ from app.db.models import (
     DataSource,
 )
 from app.db.platform import PlatformSession
+from app.tenancy.service import DEFAULT_TENANT_ID
 
 
 class AnalysisNotFound(KeyError):
@@ -38,24 +39,28 @@ class AnalysisConflict(RuntimeError):
     pass
 
 
-def create_session(title: str, source_id: int, user_id: str) -> dict:
+def create_session(title: str, source_id: int, user_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     with PlatformSession() as session:
-        source = session.query(DataSource).filter_by(id=source_id).first()
+        source = session.query(DataSource).filter_by(id=source_id, tenant_id=tenant_id).first()
         if source is None:
             raise AnalysisNotFound(f"数据源 {source_id} 不存在")
-        row = AnalysisSession(id=new_id("ses"), title=title.strip(), user_id=user_id, source_id=source_id)
+        row = AnalysisSession(
+            id=new_id("ses"), title=title.strip(), user_id=user_id,
+            source_id=source_id, tenant_id=tenant_id,
+        )
         session.add(row)
         session.commit()
         return _session_dict(row, source.name)
 
 
-def list_sessions(user_id: str) -> list[dict]:
+def list_sessions(user_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> list[dict]:
     with PlatformSession() as session:
         rows = (
             session.query(AnalysisSession, DataSource.name)
             .join(DataSource, DataSource.id == AnalysisSession.source_id)
             .filter(
                 AnalysisSession.user_id == user_id,
+                AnalysisSession.tenant_id == tenant_id,
                 AnalysisSession.status != "deleted",
             )
             .order_by(AnalysisSession.updated_at.desc())
@@ -108,12 +113,12 @@ def list_sessions(user_id: str) -> list[dict]:
         return result
 
 
-def delete_session(session_id: str, user_id: str) -> dict:
+def delete_session(session_id: str, user_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     """Soft-delete a user conversation while retaining its evidence for audit."""
     with PlatformSession() as session:
         row = (
             session.query(AnalysisSession)
-            .filter_by(id=session_id, user_id=user_id)
+            .filter_by(id=session_id, user_id=user_id, tenant_id=tenant_id)
             .with_for_update()
             .first()
         )
@@ -129,9 +134,9 @@ def delete_session(session_id: str, user_id: str) -> dict:
         }
 
 
-def get_session(session_id: str) -> dict:
+def get_session(session_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     with PlatformSession() as session:
-        row = session.query(AnalysisSession).filter_by(id=session_id).first()
+        row = session.query(AnalysisSession).filter_by(id=session_id, tenant_id=tenant_id).first()
         if row is None:
             raise AnalysisNotFound(f"会话 {session_id} 不存在")
         source = session.query(DataSource).filter_by(id=row.source_id).first()
@@ -144,10 +149,16 @@ def get_session(session_id: str) -> dict:
         return result
 
 
-def create_run(session_id: str, question: str, idempotency_key: str | None = None) -> dict:
+def create_run(
+    session_id: str, question: str, idempotency_key: str | None = None,
+    tenant_id: str | None = None,
+) -> dict:
     normalized_question = question.strip()
     with PlatformSession() as session:
-        parent = session.query(AnalysisSession).filter_by(id=session_id).with_for_update().first()
+        parent_query = session.query(AnalysisSession).filter_by(id=session_id)
+        if tenant_id is not None:
+            parent_query = parent_query.filter_by(tenant_id=tenant_id)
+        parent = parent_query.with_for_update().first()
         if parent is None:
             raise AnalysisNotFound(f"会话 {session_id} 不存在")
         if parent.status != "active":

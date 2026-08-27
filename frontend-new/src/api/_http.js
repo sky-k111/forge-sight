@@ -1,5 +1,6 @@
 // 真实后端 HTTP 访问层。默认连接当前联调后端 8000，可用 VITE_API_BASE 覆盖。
 import { AUTH_EXPIRED_EVENT, clearSession, getToken } from "../lib/auth";
+import { getActiveTenantId } from "../lib/tenant";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
 
@@ -15,6 +16,7 @@ async function request(path, options = {}) {
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      "X-Tenant-ID": getActiveTenantId(),
       ...(optionHeaders ?? {}),
     },
   });

@@ -28,6 +28,7 @@ from app.api import (
     retrieval,
     security,
     skills,
+    tenants,
 )
 from app.config import settings
 from app.db import models  # noqa: F401 - 注册 ORM 模型供 create_all 使用
@@ -50,6 +51,9 @@ def create_platform_tables():
     from app.metadata.scanner import scan_default_source
     from app.reports.templates import seed_report_templates
 
+    from app.tenancy.service import seed_default_tenant
+
+    seed_default_tenant()
     seed_default_source()
     with PlatformSession() as session:
         if session.query(DataTable).count() == 0:
@@ -62,6 +66,9 @@ def create_platform_tables():
     from app.auth.service import seed_admin, seed_default_report_scopes
 
     seed_admin()
+    from app.tenancy.service import seed_legacy_memberships
+
+    seed_legacy_memberships()
     seed_default_report_scopes()
     from app.monitoring.seed import seed_monitoring_baseline
 
@@ -138,6 +145,7 @@ app.add_middleware(
 
 app.include_router(security.router)
 app.include_router(auth.router)
+app.include_router(tenants.router)
 app.include_router(dingtalk.router)
 app.include_router(feishu.router)
 app.include_router(gateway.router)

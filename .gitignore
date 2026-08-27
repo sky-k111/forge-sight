@@ -33,6 +33,11 @@ logs/
 *.pid
 *.pid.lock
 
+# Local SQLite databases (never commit local dumps)
+*.db
+*.sqlite
+*.sqlite3
+
 # Test / tooling artifacts
 .pytest-tmp-*/
 .playwright-cli/

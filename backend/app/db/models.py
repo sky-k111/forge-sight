@@ -32,6 +32,7 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(40), default="tenant-default", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment="发生时间")
     user_name: Mapped[str] = mapped_column(String(50), default="演示用户", comment="操作人")
     role: Mapped[str] = mapped_column(String(20), default="业务人员", comment="角色")
@@ -45,12 +46,32 @@ class AuditLog(Base):
 RESULT_TONES = {"允许": "green", "已拦截": "red", "已记录": "blue"}
 
 
+class Tenant(Base):
+    """SaaS 租户根节点；组织树、数据源和业务资产都必须归属于一个租户。"""
+
+    __tablename__ = "tenant"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'suspended', 'archived')", name="ck_tenant_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+    plan_code: Mapped[str] = mapped_column(String(40), default="enterprise")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class DataSource(Base):
     """数据源连接（当前支持 mysql / postgresql）。密码为演示环境明文存储，生产必须加密。"""
 
     __tablename__ = "data_source"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("tenant.id", ondelete="RESTRICT"), default="tenant-default", index=True
+    )
     name: Mapped[str] = mapped_column(String(100), comment="数据源名称，如 华东制造数据底座")
     type: Mapped[str] = mapped_column(String(20), comment="mysql / postgresql")
     host: Mapped[str] = mapped_column(String(100), default="127.0.0.1")
@@ -143,9 +164,11 @@ class KnowledgeTopic(Base):
     """分析主题：组织指标、对象和规则的顶层业务分类。"""
 
     __tablename__ = "knowledge_topic"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_knowledge_topic_tenant_name"),)
 
     code: Mapped[str] = mapped_column(String(20), primary_key=True, comment="稳定编码，如 QUAL")
-    name: Mapped[str] = mapped_column(String(50), unique=True, comment="主题名称")
+    tenant_id: Mapped[str] = mapped_column(String(40), default="tenant-default", index=True)
+    name: Mapped[str] = mapped_column(String(50), comment="主题名称")
     color: Mapped[str] = mapped_column(String(20), default="blue")
     description: Mapped[str] = mapped_column(String(255), default="")
     coverage: Mapped[int] = mapped_column(Integer, default=0, comment="语义覆盖率，仅用于治理展示")
@@ -158,9 +181,11 @@ class BusinessObject(Base):
     """业务对象：产品、工单、工序、设备等企业语义实体。"""
 
     __tablename__ = "business_object"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_business_object_tenant_name"),)
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True, comment="稳定英文标识")
-    name: Mapped[str] = mapped_column(String(80), unique=True)
+    tenant_id: Mapped[str] = mapped_column(String(40), default="tenant-default", index=True)
+    name: Mapped[str] = mapped_column(String(80))
     topic: Mapped[str] = mapped_column(String(50), default="全局")
     description: Mapped[str] = mapped_column(String(255), default="")
     relation_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -173,9 +198,11 @@ class BusinessRule(Base):
     """业务规则：指标计算、数据校验、异常识别与查询约束。"""
 
     __tablename__ = "business_rule"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_business_rule_tenant_name"),)
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
-    name: Mapped[str] = mapped_column(String(180), unique=True)
+    tenant_id: Mapped[str] = mapped_column(String(40), default="tenant-default", index=True)
+    name: Mapped[str] = mapped_column(String(180))
     rule_type: Mapped[str] = mapped_column(String(30), default="业务规则")
     scope: Mapped[str] = mapped_column(String(50), default="全局")
     content: Mapped[str] = mapped_column(Text, default="")
@@ -188,9 +215,11 @@ class KnowledgeMetric(Base):
     """企业统一指标语义；这里只描述业务含义，不出现某个数据源的物理字段。"""
 
     __tablename__ = "knowledge_metric"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_knowledge_metric_tenant_name"),)
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
-    name: Mapped[str] = mapped_column(String(100), unique=True)
+    tenant_id: Mapped[str] = mapped_column(String(40), default="tenant-default", index=True)
+    name: Mapped[str] = mapped_column(String(100))
     topic: Mapped[str] = mapped_column(String(50))
     definition: Mapped[str] = mapped_column(Text, default="")
     formula: Mapped[str] = mapped_column(Text, comment="业务语义公式，如 SUM(合格数量)/SUM(投入数量)")
@@ -317,6 +346,7 @@ class AnalysisSession(Base):
     __tablename__ = "analysis_session"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(40), default="tenant-default", index=True)
     title: Mapped[str] = mapped_column(String(200), default="新分析")
     user_id: Mapped[str] = mapped_column(String(64), index=True, default="local-test-user")
     source_id: Mapped[int] = mapped_column(Integer, index=True)
@@ -571,7 +601,7 @@ class AgentMemory(Base):
     )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String(64), default="default", index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), default="tenant-default", index=True)
     source_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     role_scope: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -690,7 +720,7 @@ class AgentMemoryPolicy(Base):
     __table_args__ = (UniqueConstraint("tenant_id", "policy_key", name="uq_agent_memory_policy"),)
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String(64), default="default", index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), default="tenant-default", index=True)
     policy_key: Mapped[str] = mapped_column(String(64))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     config_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
@@ -1408,6 +1438,31 @@ class PlatformUser(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class TenantMembership(Base):
+    """平台账号在租户内的成员身份；平台角色与租户角色分开管理。"""
+
+    __tablename__ = "tenant_membership"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "user_id", name="uq_tenant_membership_user"),
+        CheckConstraint(
+            "member_role IN ('owner', 'admin', 'member', 'viewer')",
+            name="ck_tenant_membership_role",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("tenant.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("platform_user.id", ondelete="CASCADE"), index=True
+    )
+    member_role: Mapped[str] = mapped_column(String(24), default="member", index=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class OrganizationUnit(Base):
     """企业、区域、部门等可组合的树形组织节点。"""
 
@@ -1456,11 +1511,16 @@ class DataScopePolicy(Base):
     __tablename__ = "data_scope_policy"
     __table_args__ = (
         UniqueConstraint(
-            "subject_type", "subject_id", "business_key", name="uq_data_scope_subject_business"
+            "tenant_id",
+            "subject_type",
+            "subject_id",
+            "business_key",
+            name="uq_data_scope_tenant_subject_business",
         ),
     )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(40), default="tenant-default", index=True)
     subject_type: Mapped[str] = mapped_column(String(24), index=True)
     subject_id: Mapped[str] = mapped_column(String(80), index=True)
     business_key: Mapped[str] = mapped_column(String(80), index=True)

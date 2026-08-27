@@ -25,6 +25,7 @@ from app.db.models import (
 )
 from app.db.platform import PlatformSession
 from app.retrieval.index_jobs import enqueue_all_sources, enqueue_index_job
+from app.tenancy.service import DEFAULT_TENANT_ID
 
 
 class KnowledgeNotFound(KeyError):
@@ -68,17 +69,27 @@ def _next_code(session, model, prefix: str) -> str:
     return f"{prefix}-{maximum + 1:03d}"
 
 
-def _default_source_id(session) -> int:
-    source = session.query(DataSource).filter_by(is_default=True).first()
+def _default_source_id(session, tenant_id: str = DEFAULT_TENANT_ID) -> int:
+    source = session.query(DataSource).filter_by(tenant_id=tenant_id, is_default=True).first()
+    if source is None:
+        source = session.query(DataSource).filter_by(tenant_id=tenant_id).order_by(DataSource.id).first()
     if source is None:
         raise KnowledgeValidation("尚未配置默认数据源")
     return source.id
 
 
-def _ensure_topic(session, topic_name: str, *, allow_global: bool = False) -> None:
+def _ensure_topic(
+    session,
+    topic_name: str,
+    *,
+    tenant_id: str = DEFAULT_TENANT_ID,
+    allow_global: bool = False,
+) -> None:
     if allow_global and topic_name == "全局":
         return
-    if session.query(KnowledgeTopic).filter_by(name=topic_name, enabled=True).first() is None:
+    if session.query(KnowledgeTopic).filter_by(
+        tenant_id=tenant_id, name=topic_name, enabled=True
+    ).first() is None:
         raise KnowledgeValidation(f"分析主题不存在或未启用：{topic_name}")
 
 
@@ -93,10 +104,12 @@ def _block_if_referenced(session, entity_type: str, entity_id: str) -> None:
         raise KnowledgeConflict(f"该知识项仍被 {len(references)} 个内容引用（{examples}），不能删除")
 
 
-def list_topics() -> list[dict]:
+def list_topics(tenant_id: str = DEFAULT_TENANT_ID) -> list[dict]:
     with PlatformSession() as session:
-        rows = session.query(KnowledgeTopic).order_by(KnowledgeTopic.code).all()
-        metric_rows = session.query(KnowledgeMetric.topic, KnowledgeMetric.name).filter_by(status="已发布").all()
+        rows = session.query(KnowledgeTopic).filter_by(tenant_id=tenant_id).order_by(KnowledgeTopic.code).all()
+        metric_rows = session.query(KnowledgeMetric.topic, KnowledgeMetric.name).filter_by(
+            tenant_id=tenant_id, status="已发布"
+        ).all()
     by_topic: dict[str, list[str]] = {}
     for topic, name in metric_rows:
         by_topic.setdefault(topic, []).append(name)
@@ -114,17 +127,19 @@ def list_topics() -> list[dict]:
     ]
 
 
-def create_topic(payload: dict) -> dict:
+def create_topic(payload: dict, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     code = str(payload.get("code", "")).strip().upper()
     name = str(payload.get("name", "")).strip()
     if not code or not name:
         raise KnowledgeValidation("主题编码和名称不能为空")
     with PlatformSession() as session:
         if session.query(KnowledgeTopic).filter(
+            KnowledgeTopic.tenant_id == tenant_id,
             (KnowledgeTopic.code == code) | (KnowledgeTopic.name == name)
         ).first():
             raise KnowledgeConflict("主题编码或名称已存在")
         row = KnowledgeTopic(
+            tenant_id=tenant_id,
             code=code,
             name=name,
             color=payload.get("color") or "blue",
@@ -134,18 +149,22 @@ def create_topic(payload: dict) -> dict:
         )
         session.add(row)
         session.commit()
-    write_audit(action=f"创建分析主题 {name}", resource=code, result="已记录", role="管理员")
-    return next(item for item in list_topics() if item["code"] == code)
+    write_audit(action=f"创建分析主题 {name}", resource=code, result="已记录", role="管理员", tenant_id=tenant_id)
+    return next(item for item in list_topics(tenant_id) if item["code"] == code)
 
 
-def update_topic(code: str, payload: dict) -> dict:
+def update_topic(code: str, payload: dict, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     with PlatformSession() as session:
-        row = session.query(KnowledgeTopic).filter_by(code=code).first()
+        row = session.query(KnowledgeTopic).filter_by(tenant_id=tenant_id, code=code).first()
         if row is None:
             raise KnowledgeNotFound(f"分析主题 {code} 不存在")
         old_name = row.name
         new_name = str(payload.get("name", old_name)).strip()
-        duplicate = session.query(KnowledgeTopic).filter(KnowledgeTopic.name == new_name, KnowledgeTopic.code != code).first()
+        duplicate = session.query(KnowledgeTopic).filter(
+            KnowledgeTopic.tenant_id == tenant_id,
+            KnowledgeTopic.name == new_name,
+            KnowledgeTopic.code != code,
+        ).first()
         if duplicate:
             raise KnowledgeConflict(f"分析主题名称已存在：{new_name}")
         row.name = new_name
@@ -157,31 +176,31 @@ def update_topic(code: str, payload: dict) -> dict:
         if "enabled" in payload and payload["enabled"] is not None:
             row.enabled = bool(payload["enabled"])
         if new_name != old_name:
-            session.query(BusinessObject).filter_by(topic=old_name).update({"topic": new_name})
-            session.query(BusinessRule).filter_by(scope=old_name).update({"scope": new_name})
-            session.query(KnowledgeMetric).filter_by(topic=old_name).update({"topic": new_name, "status": "待审核"})
-            enqueue_all_sources(session, reason=f"分析主题重命名：{old_name} → {new_name}")
+            session.query(BusinessObject).filter_by(tenant_id=tenant_id, topic=old_name).update({"topic": new_name})
+            session.query(BusinessRule).filter_by(tenant_id=tenant_id, scope=old_name).update({"scope": new_name})
+            session.query(KnowledgeMetric).filter_by(tenant_id=tenant_id, topic=old_name).update({"topic": new_name, "status": "待审核"})
+            enqueue_all_sources(session, tenant_id=tenant_id, reason=f"分析主题重命名：{old_name} → {new_name}")
         session.commit()
-    write_audit(action=f"修改分析主题 {code}", resource=new_name, result="已记录", role="管理员")
-    return next(item for item in list_topics() if item["code"] == code)
+    write_audit(action=f"修改分析主题 {code}", resource=new_name, result="已记录", role="管理员", tenant_id=tenant_id)
+    return next(item for item in list_topics(tenant_id) if item["code"] == code)
 
 
-def delete_topic(code: str) -> dict:
+def delete_topic(code: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     with PlatformSession() as session:
-        row = session.query(KnowledgeTopic).filter_by(code=code).first()
+        row = session.query(KnowledgeTopic).filter_by(tenant_id=tenant_id, code=code).first()
         if row is None:
             raise KnowledgeNotFound(f"分析主题 {code} 不存在")
         _block_if_referenced(session, "topic", code)
         dependencies = (
-            session.query(BusinessObject).filter_by(topic=row.name).count()
-            + session.query(BusinessRule).filter_by(scope=row.name).count()
-            + session.query(KnowledgeMetric).filter_by(topic=row.name).count()
+            session.query(BusinessObject).filter_by(tenant_id=tenant_id, topic=row.name).count()
+            + session.query(BusinessRule).filter_by(tenant_id=tenant_id, scope=row.name).count()
+            + session.query(KnowledgeMetric).filter_by(tenant_id=tenant_id, topic=row.name).count()
         )
         if dependencies:
             raise KnowledgeConflict(f"主题“{row.name}”下仍有 {dependencies} 个知识项，不能删除")
         session.delete(row)
         session.commit()
-    write_audit(action=f"删除分析主题 {code}", resource=code, result="已记录", role="管理员")
+    write_audit(action=f"删除分析主题 {code}", resource=code, result="已记录", role="管理员", tenant_id=tenant_id)
     return {"ok": True}
 
 
@@ -196,9 +215,13 @@ def _serialize_object(row: BusinessObject) -> dict:
     }
 
 
-def list_objects(keyword: str = "", topic: str | None = None) -> list[dict]:
+def list_objects(
+    keyword: str = "",
+    topic: str | None = None,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> list[dict]:
     with PlatformSession() as session:
-        rows = session.query(BusinessObject).order_by(BusinessObject.id).all()
+        rows = session.query(BusinessObject).filter_by(tenant_id=tenant_id).order_by(BusinessObject.id).all()
     text = keyword.strip().lower()
     return [
         _serialize_object(row)
@@ -207,19 +230,21 @@ def list_objects(keyword: str = "", topic: str | None = None) -> list[dict]:
     ]
 
 
-def create_object(payload: dict) -> dict:
+def create_object(payload: dict, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     object_id = str(payload.get("id", "")).strip()
     name = str(payload.get("name", "")).strip()
     topic = str(payload.get("topic", "全局")).strip()
     if not object_id or not name:
         raise KnowledgeValidation("业务对象ID和名称不能为空")
     with PlatformSession() as session:
-        _ensure_topic(session, topic, allow_global=True)
+        _ensure_topic(session, topic, tenant_id=tenant_id, allow_global=True)
         if session.query(BusinessObject).filter(
+            BusinessObject.tenant_id == tenant_id,
             (BusinessObject.id == object_id) | (BusinessObject.name == name)
         ).first():
             raise KnowledgeConflict("业务对象ID或名称已存在")
         row = BusinessObject(
+            tenant_id=tenant_id,
             id=object_id,
             name=name,
             topic=topic,
@@ -228,23 +253,27 @@ def create_object(payload: dict) -> dict:
             enabled=payload.get("enabled", True),
         )
         session.add(row)
-        enqueue_all_sources(session, reason=f"新增业务对象：{name}")
+        enqueue_all_sources(session, tenant_id=tenant_id, reason=f"新增业务对象：{name}")
         session.commit()
         result = _serialize_object(row)
-    write_audit(action=f"创建业务对象 {name}", resource=object_id, result="已记录", role="管理员")
+    write_audit(action=f"创建业务对象 {name}", resource=object_id, result="已记录", role="管理员", tenant_id=tenant_id)
     return result
 
 
-def update_object(object_id: str, payload: dict) -> dict:
+def update_object(object_id: str, payload: dict, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     with PlatformSession() as session:
-        row = session.query(BusinessObject).filter_by(id=object_id).first()
+        row = session.query(BusinessObject).filter_by(tenant_id=tenant_id, id=object_id).first()
         if row is None:
             raise KnowledgeNotFound(f"业务对象 {object_id} 不存在")
         old_name = row.name
         new_name = str(payload.get("name", old_name)).strip()
         topic = str(payload.get("topic", row.topic)).strip()
-        _ensure_topic(session, topic, allow_global=True)
-        duplicate = session.query(BusinessObject).filter(BusinessObject.name == new_name, BusinessObject.id != object_id).first()
+        _ensure_topic(session, topic, tenant_id=tenant_id, allow_global=True)
+        duplicate = session.query(BusinessObject).filter(
+            BusinessObject.tenant_id == tenant_id,
+            BusinessObject.name == new_name,
+            BusinessObject.id != object_id,
+        ).first()
         if duplicate:
             raise KnowledgeConflict(f"业务对象名称已存在：{new_name}")
         row.name = new_name
@@ -256,31 +285,35 @@ def update_object(object_id: str, payload: dict) -> dict:
         if "enabled" in payload and payload["enabled"] is not None:
             row.enabled = bool(payload["enabled"])
         if new_name != old_name:
-            for metric in session.query(KnowledgeMetric).all():
+            for metric in session.query(KnowledgeMetric).filter_by(tenant_id=tenant_id).all():
                 dimensions = _json_list(metric.dimensions_json)
                 if old_name in dimensions:
                     metric.dimensions_json = _dump_list(new_name if item == old_name else item for item in dimensions)
                     metric.status = "待审核"
-        enqueue_all_sources(session, reason=f"更新业务对象：{object_id}")
+        enqueue_all_sources(session, tenant_id=tenant_id, reason=f"更新业务对象：{object_id}")
         session.commit()
         result = _serialize_object(row)
-    write_audit(action=f"修改业务对象 {object_id}", resource=new_name, result="已记录", role="管理员")
+    write_audit(action=f"修改业务对象 {object_id}", resource=new_name, result="已记录", role="管理员", tenant_id=tenant_id)
     return result
 
 
-def delete_object(object_id: str) -> dict:
+def delete_object(object_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     with PlatformSession() as session:
-        row = session.query(BusinessObject).filter_by(id=object_id).first()
+        row = session.query(BusinessObject).filter_by(tenant_id=tenant_id, id=object_id).first()
         if row is None:
             raise KnowledgeNotFound(f"业务对象 {object_id} 不存在")
         _block_if_referenced(session, "object", object_id)
-        used_by = [metric.id for metric in session.query(KnowledgeMetric).all() if row.name in _json_list(metric.dimensions_json)]
+        used_by = [
+            metric.id
+            for metric in session.query(KnowledgeMetric).filter_by(tenant_id=tenant_id).all()
+            if row.name in _json_list(metric.dimensions_json)
+        ]
         if used_by:
             raise KnowledgeConflict(f"业务对象“{row.name}”仍被指标 {', '.join(used_by)} 作为分析维度引用，不能删除")
         session.delete(row)
-        enqueue_all_sources(session, reason=f"删除业务对象：{object_id}")
+        enqueue_all_sources(session, tenant_id=tenant_id, reason=f"删除业务对象：{object_id}")
         session.commit()
-    write_audit(action=f"删除业务对象 {object_id}", resource=object_id, result="已记录", role="管理员")
+    write_audit(action=f"删除业务对象 {object_id}", resource=object_id, result="已记录", role="管理员", tenant_id=tenant_id)
     return {"ok": True}
 
 
@@ -295,23 +328,27 @@ def _serialize_rule(row: BusinessRule) -> dict:
     }
 
 
-def list_rules(topic: str | None = None) -> list[dict]:
+def list_rules(topic: str | None = None, tenant_id: str = DEFAULT_TENANT_ID) -> list[dict]:
     with PlatformSession() as session:
-        rows = session.query(BusinessRule).order_by(BusinessRule.id).all()
+        rows = session.query(BusinessRule).filter_by(tenant_id=tenant_id).order_by(BusinessRule.id).all()
     return [_serialize_rule(row) for row in rows if not topic or row.scope == topic]
 
 
-def create_rule(payload: dict) -> dict:
+def create_rule(payload: dict, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     name = str(payload.get("name", "")).strip()
     scope = str(payload.get("scope", "全局")).strip()
     if not name:
         raise KnowledgeValidation("业务规则名称不能为空")
     with PlatformSession() as session:
-        _ensure_topic(session, scope, allow_global=True)
+        _ensure_topic(session, scope, tenant_id=tenant_id, allow_global=True)
         rule_id = str(payload.get("id") or _next_code(session, BusinessRule, "R")).strip()
-        if session.query(BusinessRule).filter((BusinessRule.id == rule_id) | (BusinessRule.name == name)).first():
+        if session.query(BusinessRule).filter(
+            BusinessRule.tenant_id == tenant_id,
+            (BusinessRule.id == rule_id) | (BusinessRule.name == name),
+        ).first():
             raise KnowledgeConflict("业务规则ID或名称已存在")
         row = BusinessRule(
+            tenant_id=tenant_id,
             id=rule_id,
             name=name,
             rule_type=payload.get("type") or "业务规则",
@@ -320,43 +357,43 @@ def create_rule(payload: dict) -> dict:
             enabled=payload.get("enabled", True),
         )
         session.add(row)
-        enqueue_all_sources(session, reason=f"新增业务规则：{name}")
+        enqueue_all_sources(session, tenant_id=tenant_id, reason=f"新增业务规则：{name}")
         session.commit()
         result = _serialize_rule(row)
-    write_audit(action=f"创建业务规则 {name}", resource=rule_id, result="已记录", role="管理员")
+    write_audit(action=f"创建业务规则 {name}", resource=rule_id, result="已记录", role="管理员", tenant_id=tenant_id)
     return result
 
 
-def update_rule(rule_id: str, payload: dict) -> dict:
+def update_rule(rule_id: str, payload: dict, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     with PlatformSession() as session:
-        row = session.query(BusinessRule).filter_by(id=rule_id).first()
+        row = session.query(BusinessRule).filter_by(tenant_id=tenant_id, id=rule_id).first()
         if row is None:
             raise KnowledgeNotFound(f"业务规则 {rule_id} 不存在")
         scope = str(payload.get("scope", row.scope)).strip()
-        _ensure_topic(session, scope, allow_global=True)
+        _ensure_topic(session, scope, tenant_id=tenant_id, allow_global=True)
         for key, attr in (("name", "name"), ("type", "rule_type"), ("content", "content")):
             if key in payload and payload[key] is not None:
                 setattr(row, attr, payload[key])
         row.scope = scope
         if "enabled" in payload and payload["enabled"] is not None:
             row.enabled = bool(payload["enabled"])
-        enqueue_all_sources(session, reason=f"更新业务规则：{rule_id}")
+        enqueue_all_sources(session, tenant_id=tenant_id, reason=f"更新业务规则：{rule_id}")
         session.commit()
         result = _serialize_rule(row)
-    write_audit(action=f"修改业务规则 {rule_id}", resource=rule_id, result="已记录", role="管理员")
+    write_audit(action=f"修改业务规则 {rule_id}", resource=rule_id, result="已记录", role="管理员", tenant_id=tenant_id)
     return result
 
 
-def delete_rule(rule_id: str) -> dict:
+def delete_rule(rule_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     with PlatformSession() as session:
-        row = session.query(BusinessRule).filter_by(id=rule_id).first()
+        row = session.query(BusinessRule).filter_by(tenant_id=tenant_id, id=rule_id).first()
         if row is None:
             raise KnowledgeNotFound(f"业务规则 {rule_id} 不存在")
         _block_if_referenced(session, "rule", rule_id)
         session.delete(row)
-        enqueue_all_sources(session, reason=f"删除业务规则：{rule_id}")
+        enqueue_all_sources(session, tenant_id=tenant_id, reason=f"删除业务规则：{rule_id}")
         session.commit()
-    write_audit(action=f"删除业务规则 {rule_id}", resource=rule_id, result="已记录", role="管理员")
+    write_audit(action=f"删除业务规则 {rule_id}", resource=rule_id, result="已记录", role="管理员", tenant_id=tenant_id)
     return {"ok": True}
 
 
@@ -366,9 +403,13 @@ def _source_names(value) -> list[str]:
     return [part.strip() for part in re.split(r"\s*[+，,]\s*", str(value or "")) if part.strip()]
 
 
-def _resolve_source_id(session, source_id: int | None = None) -> int:
-    resolved = int(source_id or _default_source_id(session))
-    if session.query(DataSource).filter_by(id=resolved).first() is None:
+def _resolve_source_id(
+    session,
+    source_id: int | None = None,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> int:
+    resolved = int(source_id or _default_source_id(session, tenant_id))
+    if session.query(DataSource).filter_by(id=resolved, tenant_id=tenant_id).first() is None:
         raise KnowledgeValidation(f"数据源 {resolved} 不存在")
     return resolved
 
@@ -538,10 +579,11 @@ def list_metrics(
     topic: str | None = None,
     status: str | None = None,
     source_id: int | None = None,
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> list[dict]:
     with PlatformSession() as session:
-        source_id = _resolve_source_id(session, source_id)
-        query = session.query(KnowledgeMetric).order_by(KnowledgeMetric.id)
+        source_id = _resolve_source_id(session, source_id, tenant_id)
+        query = session.query(KnowledgeMetric).filter_by(tenant_id=tenant_id).order_by(KnowledgeMetric.id)
         rows = query.all()
         text = keyword.strip().lower()
         return [
@@ -553,27 +595,38 @@ def list_metrics(
         ]
 
 
-def get_metric(metric_id: str, source_id: int | None = None) -> dict:
+def get_metric(
+    metric_id: str,
+    source_id: int | None = None,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> dict:
     with PlatformSession() as session:
-        source_id = _resolve_source_id(session, source_id)
-        row = session.query(KnowledgeMetric).filter_by(id=metric_id).first()
+        source_id = _resolve_source_id(session, source_id, tenant_id)
+        row = session.query(KnowledgeMetric).filter_by(tenant_id=tenant_id, id=metric_id).first()
         if row is None:
             raise KnowledgeNotFound(f"指标 {metric_id} 不存在")
         return _serialize_metric(session, row, source_id)
 
 
-def save_metric(payload: dict, metric_id: str | None = None) -> dict:
+def save_metric(
+    payload: dict,
+    metric_id: str | None = None,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> dict:
     name = str(payload.get("name", "")).strip()
     formula = str(payload.get("formula", "")).strip()
     topic = str(payload.get("topic", "")).strip()
     if not name or not formula or not topic:
         raise KnowledgeValidation("指标名称、主题和计算公式不能为空")
     with PlatformSession() as session:
-        _ensure_topic(session, topic)
-        source_id = _resolve_source_id(session, payload.get("sourceId"))
+        _ensure_topic(session, topic, tenant_id=tenant_id)
+        source_id = _resolve_source_id(session, payload.get("sourceId"), tenant_id)
         binding_data = _validate_metric_binding(session, payload, source_id)
-        row = session.query(KnowledgeMetric).filter_by(id=metric_id).first() if metric_id else None
-        duplicate = session.query(KnowledgeMetric).filter(KnowledgeMetric.name == name)
+        row = session.query(KnowledgeMetric).filter_by(tenant_id=tenant_id, id=metric_id).first() if metric_id else None
+        duplicate = session.query(KnowledgeMetric).filter(
+            KnowledgeMetric.tenant_id == tenant_id,
+            KnowledgeMetric.name == name,
+        )
         if row is not None:
             duplicate = duplicate.filter(KnowledgeMetric.id != row.id)
         if duplicate.first():
@@ -584,7 +637,14 @@ def save_metric(payload: dict, metric_id: str | None = None) -> dict:
             code = str(payload.get("id") or _next_code(session, KnowledgeMetric, "M")).strip()
             if session.query(KnowledgeMetric).filter_by(id=code).first():
                 raise KnowledgeConflict(f"指标ID已存在：{code}")
-            row = KnowledgeMetric(id=code, name=name, topic=topic, formula=formula, status="待审核")
+            row = KnowledgeMetric(
+                id=code,
+                tenant_id=tenant_id,
+                name=name,
+                topic=topic,
+                formula=formula,
+                status="待审核",
+            )
             session.add(row)
         else:
             canonical_changed = any(
@@ -673,14 +733,24 @@ def save_metric(payload: dict, metric_id: str | None = None) -> dict:
         session.commit()
         result = _serialize_metric(session, row, source_id)
     action = "创建指标" if created else "修改指标并退回待审核"
-    write_audit(action=f"{action} {name}", resource=result["id"], result="已记录", role="管理员")
+    write_audit(
+        action=f"{action} {name}",
+        resource=result["id"],
+        result="已记录",
+        role="管理员",
+        tenant_id=tenant_id,
+    )
     return result
 
 
-def publish_metric(metric_id: str, source_id: int | None = None) -> dict:
+def publish_metric(
+    metric_id: str,
+    source_id: int | None = None,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> dict:
     with PlatformSession() as session:
-        source_id = _resolve_source_id(session, source_id)
-        row = session.query(KnowledgeMetric).filter_by(id=metric_id).first()
+        source_id = _resolve_source_id(session, source_id, tenant_id)
+        row = session.query(KnowledgeMetric).filter_by(tenant_id=tenant_id, id=metric_id).first()
         if row is None:
             raise KnowledgeNotFound(f"指标 {metric_id} 不存在")
         binding = _binding_for_source(session, metric_id, source_id)
@@ -704,14 +774,18 @@ def publish_metric(metric_id: str, source_id: int | None = None) -> dict:
             enqueue_index_job(session, affected_source_id, mode="incremental", reason=f"发布指标：{row.name}")
         session.commit()
         result = _serialize_metric(session, row, source_id)
-    write_audit(action=f"发布指标 {row.name}", resource=metric_id, result="已记录", role="管理员")
+    write_audit(action=f"发布指标 {row.name}", resource=metric_id, result="已记录", role="管理员", tenant_id=tenant_id)
     return result
 
 
-def submit_metric_for_review(metric_id: str, source_id: int | None = None) -> dict:
+def submit_metric_for_review(
+    metric_id: str,
+    source_id: int | None = None,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> dict:
     with PlatformSession() as session:
-        source_id = _resolve_source_id(session, source_id)
-        row = session.query(KnowledgeMetric).filter_by(id=metric_id).first()
+        source_id = _resolve_source_id(session, source_id, tenant_id)
+        row = session.query(KnowledgeMetric).filter_by(tenant_id=tenant_id, id=metric_id).first()
         if row is None:
             raise KnowledgeNotFound(f"指标 {metric_id} 不存在")
         row.status = "待审核"
@@ -728,13 +802,13 @@ def submit_metric_for_review(metric_id: str, source_id: int | None = None) -> di
             enqueue_index_job(session, affected_source_id, mode="incremental", reason=f"指标退回审核：{row.name}")
         session.commit()
         result = _serialize_metric(session, row, source_id)
-    write_audit(action=f"指标退回待审核 {row.name}", resource=metric_id, result="已记录", role="管理员")
+    write_audit(action=f"指标退回待审核 {row.name}", resource=metric_id, result="已记录", role="管理员", tenant_id=tenant_id)
     return result
 
 
-def delete_metric(metric_id: str) -> dict:
+def delete_metric(metric_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     with PlatformSession() as session:
-        row = session.query(KnowledgeMetric).filter_by(id=metric_id).first()
+        row = session.query(KnowledgeMetric).filter_by(tenant_id=tenant_id, id=metric_id).first()
         if row is None:
             raise KnowledgeNotFound(f"指标 {metric_id} 不存在")
         _block_if_referenced(session, "metric", metric_id)
@@ -748,10 +822,14 @@ def delete_metric(metric_id: str) -> dict:
         for affected_source_id in affected_source_ids:
             enqueue_index_job(session, affected_source_id, mode="incremental", reason=f"删除指标：{metric_id}")
         session.commit()
-    write_audit(action=f"删除指标 {metric_id}", resource=metric_id, result="已记录", role="管理员")
+    write_audit(action=f"删除指标 {metric_id}", resource=metric_id, result="已记录", role="管理员", tenant_id=tenant_id)
     return {"ok": True}
 
 
-def get_metric_for_analysis(metric_id: str, source_id: int | None = None) -> dict:
+def get_metric_for_analysis(
+    metric_id: str,
+    source_id: int | None = None,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> dict:
     """阶段4/5调用入口：待审核指标可以返回，但必须携带强制提示。"""
-    return get_metric(metric_id, source_id=source_id)
+    return get_metric(metric_id, source_id=source_id, tenant_id=tenant_id)

@@ -26,10 +26,12 @@ from app.db.models import (
     AnalysisRun,
     AnalysisSession,
     AnalysisSkill,
+    DataSource,
     ExternalChatJob,
     PlatformFeatureFlag,
 )
 from app.db.platform import PlatformSession
+from app.tenancy.service import DEFAULT_TENANT_ID
 from app.config import settings
 
 
@@ -277,10 +279,17 @@ def retrieve_memories(
     *,
     session_id: str | None = None,
     run_id: str | None = None,
-    tenant_id: str = "default",
+    tenant_id: str | None = None,
     top_k: int | None = None,
 ) -> dict:
     with PlatformSession() as session:
+        if tenant_id is None:
+            tenant_id = session.query(DataSource.tenant_id).filter_by(id=source_id).scalar() or "default"
+            # Compatibility for pre-migration unit stores and interrupted upgrades.
+            if tenant_id == DEFAULT_TENANT_ID and not session.query(AgentMemory.id).filter_by(
+                tenant_id=tenant_id, source_id=source_id
+            ).first():
+                tenant_id = "default"
         setting = _setting(session)
         config = dict(setting.config_json or {})
         if not setting.enabled:
@@ -417,9 +426,14 @@ def _semantic_scores(session, question: str, tenant_id: str, source_id: int, use
         return {}
 
 
-def correct_memory(memory_id: str, content: str, *, user_id: str, admin: bool = False) -> dict:
+def correct_memory(
+    memory_id: str, content: str, *, user_id: str, admin: bool = False,
+    tenant_id: str = "default",
+) -> dict:
     with PlatformSession() as session:
-        old = session.query(AgentMemory).filter_by(id=memory_id).with_for_update().first()
+        old = session.query(AgentMemory).filter_by(
+            id=memory_id, tenant_id=tenant_id
+        ).with_for_update().first()
         if old is None or (not admin and old.user_id != user_id):
             raise MemoryNotFound(f"记忆 {memory_id} 不存在")
         if _normalize(content) == old.normalized_content:
@@ -445,9 +459,14 @@ def correct_memory(memory_id: str, content: str, *, user_id: str, admin: bool = 
         return _memory_payload(replacement)
 
 
-def forget_memory(memory_id: str, *, user_id: str, admin: bool = False) -> dict:
+def forget_memory(
+    memory_id: str, *, user_id: str, admin: bool = False,
+    tenant_id: str = "default",
+) -> dict:
     with PlatformSession() as session:
-        row = session.query(AgentMemory).filter_by(id=memory_id).with_for_update().first()
+        row = session.query(AgentMemory).filter_by(
+            id=memory_id, tenant_id=tenant_id
+        ).with_for_update().first()
         if row is None or (not admin and row.user_id != user_id):
             raise MemoryNotFound(f"记忆 {memory_id} 不存在")
         row.status = "deleted"
@@ -503,6 +522,7 @@ def capture_run(run_id: str, *, db_session=None) -> list[dict]:
             for candidate in extract_explicit_preferences(trigger.content):
                 created.append(remember(
                     candidate["content"], user_id=business_session.user_id, source_id=run.source_id,
+                    tenant_id=business_session.tenant_id,
                     memory_kind=candidate["kind"], title=candidate["title"], session_id=run.session_id,
                     channel=channel,
                     explicit=True, confidence=candidate["confidence"], importance=candidate["importance"],
@@ -519,6 +539,7 @@ def capture_run(run_id: str, *, db_session=None) -> list[dict]:
             content = f"问题：{trigger.content[:500]}\n结果：{(answer.content if answer else '分析成功')[:1000]}"
             created.append(remember(
                 content, user_id=business_session.user_id, source_id=run.source_id,
+                tenant_id=business_session.tenant_id,
                 memory_kind="episodic", title=trigger.content[:100], session_id=run.session_id,
                 channel=channel,
                 explicit=False, confidence=0.76, importance=0.56, status="active",
@@ -656,7 +677,7 @@ def claim_next_job(worker_id: str) -> str | None:
         return row.id
 
 
-def consolidate(*, tenant_id: str = "default") -> dict:
+def consolidate(*, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     with PlatformSession() as session:
         now = datetime.now()
         expired = (
@@ -677,9 +698,11 @@ def consolidate(*, tenant_id: str = "default") -> dict:
         return {"expired": len(expired), "activated": activated}
 
 
-def promote_to_skill(memory_id: str, *, reviewer: str) -> dict:
+def promote_to_skill(
+    memory_id: str, *, reviewer: str, tenant_id: str = DEFAULT_TENANT_ID
+) -> dict:
     with PlatformSession() as session:
-        row = session.query(AgentMemory).filter_by(id=memory_id).first()
+        row = session.query(AgentMemory).filter_by(id=memory_id, tenant_id=tenant_id).first()
         if row is None:
             raise MemoryNotFound(f"记忆 {memory_id} 不存在")
         if row.memory_kind not in {"episodic", "procedural"}:
@@ -709,15 +732,16 @@ def promote_to_skill(memory_id: str, *, reviewer: str) -> dict:
         return {"memoryId": row.id, "candidateSkillId": existing.id, "status": existing.status}
 
 
-def governance_summary() -> dict:
+def governance_summary(tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     with PlatformSession() as session:
-        counts = dict(session.query(AgentMemory.status, func.count(AgentMemory.id)).group_by(AgentMemory.status).all())
-        kinds = dict(session.query(AgentMemory.memory_kind, func.count(AgentMemory.id)).group_by(AgentMemory.memory_kind).all())
-        total_access = session.query(func.count(AgentMemoryAccessLog.id)).scalar() or 0
-        used_access = session.query(func.count(AgentMemoryAccessLog.id)).filter_by(used_in_context=True).scalar() or 0
+        tenant_memory_ids = session.query(AgentMemory.id).filter(AgentMemory.tenant_id == tenant_id)
+        counts = dict(session.query(AgentMemory.status, func.count(AgentMemory.id)).filter(AgentMemory.tenant_id == tenant_id).group_by(AgentMemory.status).all())
+        kinds = dict(session.query(AgentMemory.memory_kind, func.count(AgentMemory.id)).filter(AgentMemory.tenant_id == tenant_id).group_by(AgentMemory.memory_kind).all())
+        total_access = session.query(func.count(AgentMemoryAccessLog.id)).filter(AgentMemoryAccessLog.memory_id.in_(tenant_memory_ids)).scalar() or 0
+        used_access = session.query(func.count(AgentMemoryAccessLog.id)).filter(AgentMemoryAccessLog.memory_id.in_(tenant_memory_ids), AgentMemoryAccessLog.used_in_context.is_(True)).scalar() or 0
         setting = _setting(session)
         experiment = {"off": [], "on": []}
-        for run in session.query(AnalysisRun).filter(AnalysisRun.finished_at.is_not(None)).order_by(AnalysisRun.created_at.desc()).limit(500).all():
+        for run in session.query(AnalysisRun).join(AnalysisSession, AnalysisSession.id == AnalysisRun.session_id).filter(AnalysisSession.tenant_id == tenant_id, AnalysisRun.finished_at.is_not(None)).order_by(AnalysisRun.created_at.desc()).limit(500).all():
             variant = run.memory_experiment_variant if run.memory_experiment_variant in experiment else "off"
             duration_ms = None
             if run.started_at and run.finished_at:

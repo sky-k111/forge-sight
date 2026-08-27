@@ -11,10 +11,12 @@ def write_audit(
     detail: str = "",
     user_name: str = "演示用户",
     role: str = "业务人员",
+    tenant_id: str = "tenant-default",
 ) -> None:
     with PlatformSession() as session:
         session.add(
             AuditLog(
+                tenant_id=tenant_id,
                 user_name=user_name,
                 role=role,
                 action=action[:255],
@@ -26,10 +28,20 @@ def write_audit(
         session.commit()
 
 
-def list_audit_logs(result: str | None = None, keyword: str = "", limit: int = 100) -> list[dict]:
+def list_audit_logs(
+    result: str | None = None,
+    keyword: str = "",
+    limit: int = 100,
+    tenant_id: str = "tenant-default",
+) -> list[dict]:
     """返回与前端 SecurityPage 对齐的行结构。"""
     with PlatformSession() as session:
-        query = session.query(AuditLog).order_by(AuditLog.id.desc()).limit(limit)
+        query = (
+            session.query(AuditLog)
+            .filter(AuditLog.tenant_id == tenant_id)
+            .order_by(AuditLog.id.desc())
+            .limit(limit)
+        )
         rows = query.all()
 
     items = []

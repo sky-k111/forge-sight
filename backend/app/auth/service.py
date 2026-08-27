@@ -154,6 +154,9 @@ def external_identity_status_for(user: PlatformUser) -> dict:
 def user_payload(user: PlatformUser) -> dict:
     email_status = email_status_for(user)
     identity = external_identity_status_for(user)
+    from app.tenancy.service import list_user_tenants
+
+    tenants = list_user_tenants(user.id)
     return {
         "id": user.id,
         "username": user.username,
@@ -166,6 +169,11 @@ def user_payload(user: PlatformUser) -> dict:
         "externalIdentityBound": identity["bound"],
         "externalIdentityProvider": identity["provider"],
         "externalIdentityProviders": identity["providers"],
+        "tenants": tenants,
+        "defaultTenantId": next(
+            (item["id"] for item in tenants if item["isDefault"]),
+            tenants[0]["id"] if tenants else None,
+        ),
     }
 
 
@@ -202,10 +210,13 @@ def get_user_by_username(username: str) -> PlatformUser | None:
         return session.query(PlatformUser).filter(PlatformUser.username == username).first()
 
 
-def _provision_default_report_scope(session, user_id: str) -> None:
+def _provision_default_report_scope(
+    session, user_id: str, tenant_id: str = "tenant-default"
+) -> None:
     """Give an unconfigured business user the app's baseline report sources."""
 
     configured = session.query(DataScopePolicy.id).filter_by(
+        tenant_id=tenant_id,
         subject_type="user",
         subject_id=user_id,
         business_key="weekly_report",
@@ -215,13 +226,16 @@ def _provision_default_report_scope(session, user_id: str) -> None:
         return
     source_ids = [
         source_id
-        for (source_id,) in session.query(DataSource.id).order_by(DataSource.id)
+        for (source_id,) in session.query(DataSource.id)
+        .filter_by(tenant_id=tenant_id)
+        .order_by(DataSource.id)
     ]
     if not source_ids:
         return
     session.add(
         DataScopePolicy(
             id=new_id("dsp"),
+            tenant_id=tenant_id,
             subject_type="user",
             subject_id=user_id,
             business_key="weekly_report",
@@ -232,22 +246,31 @@ def _provision_default_report_scope(session, user_id: str) -> None:
     )
 
 
-def _provision_default_monitoring_scope(session, user_id: str) -> None:
+def _provision_default_monitoring_scope(
+    session, user_id: str, tenant_id: str = "tenant-default"
+) -> None:
     """Give an unconfigured business user baseline read access to monitoring alerts."""
 
     configured = session.query(DataScopePolicy.id).filter_by(
+        tenant_id=tenant_id,
         subject_type="user",
         subject_id=user_id,
         business_key="anomaly_monitoring",
     ).first()
     if configured is not None:
         return
-    source_ids = [source_id for (source_id,) in session.query(DataSource.id).order_by(DataSource.id)]
+    source_ids = [
+        source_id
+        for (source_id,) in session.query(DataSource.id)
+        .filter_by(tenant_id=tenant_id)
+        .order_by(DataSource.id)
+    ]
     if not source_ids:
         return
     session.add(
         DataScopePolicy(
             id=new_id("dsp"),
+            tenant_id=tenant_id,
             subject_type="user",
             subject_id=user_id,
             business_key="anomaly_monitoring",
@@ -269,8 +292,15 @@ def seed_default_report_scopes() -> None:
             )
         ]
         for user_id in user_ids:
-            _provision_default_report_scope(session, user_id)
-            _provision_default_monitoring_scope(session, user_id)
+            from app.db.models import TenantMembership
+
+            memberships = session.query(TenantMembership.tenant_id).filter_by(
+                user_id=user_id,
+                enabled=True,
+            ).all()
+            for (tenant_id,) in memberships or [("tenant-default",)]:
+                _provision_default_report_scope(session, user_id, tenant_id)
+                _provision_default_monitoring_scope(session, user_id, tenant_id)
         session.commit()
 
 
@@ -299,8 +329,11 @@ def register_user(username: str, password: str, display_name: str, email: str) -
     with PlatformSession() as session:
         session.add(user)
         session.flush()
-        _provision_default_report_scope(session, user.id)
-        _provision_default_monitoring_scope(session, user.id)
+        from app.tenancy.service import provision_private_tenant
+
+        membership = provision_private_tenant(session, user, display_name)
+        _provision_default_report_scope(session, user.id, membership.tenant_id)
+        _provision_default_monitoring_scope(session, user.id, membership.tenant_id)
         try:
             session.commit()
         except IntegrityError as exc:

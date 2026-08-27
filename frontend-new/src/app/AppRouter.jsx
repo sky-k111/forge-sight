@@ -36,6 +36,7 @@ const MessagesPage = lazy(() => import("../pages/business/MessagesPage"));
 const AdminOverviewPage = lazy(
   () => import("../pages/admin/AdminOverviewPage"),
 );
+const TenantManagementPage = lazy(() => import("../pages/admin/TenantManagementPage"));
 const KnowledgePage = lazy(() => import("../pages/admin/KnowledgePage"));
 const ResourcesPage = lazy(() => import("../pages/admin/ResourcesPage"));
 const MonitoringRulesPage = lazy(() => import("../pages/admin/MonitoringRulesPage"));
@@ -175,6 +176,7 @@ export default function AppRouter() {
                 element={<MessagesPage />}
               />
               <Route path="admin/overview" element={<AdminOverviewPage />} />
+              <Route path="admin/tenants" element={<TenantManagementPage />} />
               <Route path="admin/messages" element={<MessagesPage />} />
               <Route
                 path="admin/messages/:messageId"

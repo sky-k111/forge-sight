@@ -7,16 +7,20 @@ from app.config import settings
 from app.db.models import DataSource
 from app.db.platform import PlatformSession
 from app.gateway.adapters import SUPPORTED_TYPES, drop_engine, test_connection
+from app.tenancy.service import DEFAULT_TENANT_ID
 
 
 def seed_default_source() -> DataSource:
     """启动时确保默认数据源存在（取自 .env 的 BUSINESS_DB_URL）。"""
     with PlatformSession() as session:
-        source = session.query(DataSource).filter_by(is_default=True).first()
+        source = session.query(DataSource).filter_by(
+            tenant_id=DEFAULT_TENANT_ID, is_default=True
+        ).first()
         if source is not None:
             return source
         parsed = urlparse(settings.business_db_url)
         source = DataSource(
+            tenant_id=DEFAULT_TENANT_ID,
             name="华东制造数据底座",
             type="mysql",
             host=parsed.hostname or "127.0.0.1",
@@ -33,9 +37,14 @@ def seed_default_source() -> DataSource:
         return source
 
 
-def list_sources() -> list[dict]:
+def list_sources(tenant_id: str = DEFAULT_TENANT_ID) -> list[dict]:
     with PlatformSession() as session:
-        sources = session.query(DataSource).order_by(DataSource.id).all()
+        sources = (
+            session.query(DataSource)
+            .filter_by(tenant_id=tenant_id)
+            .order_by(DataSource.id)
+            .all()
+        )
         from app.retrieval.index_jobs import latest_job, serialize_job
 
         return [
@@ -56,12 +65,13 @@ def list_sources() -> list[dict]:
         ]
 
 
-def create_source(payload: dict) -> dict:
+def create_source(payload: dict, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     source_type = payload.get("type", "")
     if source_type not in SUPPORTED_TYPES:
         raise ValueError(f"不支持的数据源类型：{source_type}（当前支持 mysql / postgresql）")
     with PlatformSession() as session:
         source = DataSource(
+            tenant_id=tenant_id,
             name=payload["name"],
             type=source_type,
             host=payload.get("host", "127.0.0.1"),
@@ -80,9 +90,9 @@ def create_source(payload: dict) -> dict:
     return {"id": source_id}
 
 
-def test_source(source_id: int) -> dict:
+def test_source(source_id: int, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     with PlatformSession() as session:
-        source = session.query(DataSource).filter_by(id=source_id).first()
+        source = session.query(DataSource).filter_by(id=source_id, tenant_id=tenant_id).first()
         if source is None:
             raise KeyError("数据源不存在")
         ok, message = test_connection(source)
@@ -100,10 +110,10 @@ def test_source(source_id: int) -> dict:
     return {"ok": ok, "status": "连接正常" if ok else "连接失败", "message": message}
 
 
-def update_source(source_id: int, payload: dict) -> dict:
+def update_source(source_id: int, payload: dict, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     """修改已有数据源配置。password 传空表示不修改；连接参数变化后状态重置为未测试。"""
     with PlatformSession() as session:
-        source = session.query(DataSource).filter_by(id=source_id).first()
+        source = session.query(DataSource).filter_by(id=source_id, tenant_id=tenant_id).first()
         if source is None:
             raise KeyError("数据源不存在")
         connection_changed = False
@@ -129,6 +139,6 @@ def update_source(source_id: int, payload: dict) -> dict:
     return {"id": source_id}
 
 
-def get_source(source_id: int) -> DataSource | None:
+def get_source(source_id: int, tenant_id: str = DEFAULT_TENANT_ID) -> DataSource | None:
     with PlatformSession() as session:
-        return session.query(DataSource).filter_by(id=source_id).first()
+        return session.query(DataSource).filter_by(id=source_id, tenant_id=tenant_id).first()

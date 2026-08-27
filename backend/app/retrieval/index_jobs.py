@@ -98,8 +98,17 @@ def enqueue_index_job(session, source_id: int, *, mode: str, reason: str) -> Sem
     return job
 
 
-def enqueue_all_sources(session, *, mode: str = "incremental", reason: str) -> list[SemanticIndexJob]:
-    source_ids = [row[0] for row in session.query(DataSource.id).order_by(DataSource.id).all()]
+def enqueue_all_sources(
+    session,
+    *,
+    mode: str = "incremental",
+    reason: str,
+    tenant_id: str | None = None,
+) -> list[SemanticIndexJob]:
+    query = session.query(DataSource.id)
+    if tenant_id:
+        query = query.filter(DataSource.tenant_id == tenant_id)
+    source_ids = [row[0] for row in query.order_by(DataSource.id).all()]
     return [enqueue_index_job(session, source_id, mode=mode, reason=reason) for source_id in source_ids]
 
 

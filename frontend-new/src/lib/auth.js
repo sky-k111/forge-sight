@@ -1,5 +1,7 @@
 // 认证会话存储：token 与当前用户（localStorage）。
 // 纯存储层，不 import _http，避免循环依赖。
+import { syncActiveTenant } from "./tenant";
+
 const TOKEN_KEY = "forgesight:auth-token";
 const USER_KEY = "forgesight:auth-user";
 const REGISTRATION_BINDING_KEY = "forgesight:registration-binding-provider";
@@ -29,6 +31,7 @@ export function setSession(token, user) {
   try {
     window.localStorage.setItem(TOKEN_KEY, token);
     window.localStorage.setItem(USER_KEY, JSON.stringify(user));
+    syncActiveTenant(user);
   } catch {
     // 存储不可用时静默降级为演示模式
   }

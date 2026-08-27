@@ -205,14 +205,17 @@ def _validate_sql_expression(session, source_id: int, binding: dict) -> list[str
     return errors
 
 
-def _validate_payload(session, canonical: dict, binding: dict) -> dict:
+def _validate_payload(session, canonical: dict, binding: dict, tenant_id: str) -> dict:
     errors: list[str] = []
     warnings: list[str] = []
     if not canonical.get("name"):
         errors.append("缺少指标名称")
     if not canonical.get("formula"):
         errors.append("缺少企业统一业务公式")
-    if session.query(KnowledgeTopic).filter_by(name=canonical.get("topic")).first() is None:
+    if session.query(KnowledgeTopic).filter_by(
+        tenant_id=tenant_id,
+        name=canonical.get("topic"),
+    ).first() is None:
         errors.append(f"业务主题未登记：{canonical.get('topic') or '空'}")
     try:
         normalized = service._validate_metric_binding(session, {**canonical, **binding}, int(binding["sourceId"]))
@@ -305,7 +308,9 @@ def _generation_context(session, source_id: int) -> tuple[DataSource, str, dict[
         }
         for row in session.query(TableRelation).filter_by(source_id=source_id).all()
     ]
-    metric_rows = session.query(KnowledgeMetric).order_by(KnowledgeMetric.id).all()
+    metric_rows = session.query(KnowledgeMetric).filter_by(
+        tenant_id=source.tenant_id
+    ).order_by(KnowledgeMetric.id).all()
     bound_ids = {
         value for (value,) in session.query(MetricSourceBinding.metric_id).filter_by(source_id=source_id).all()
     }
@@ -323,7 +328,13 @@ def _generation_context(session, source_id: int) -> tuple[DataSource, str, dict[
             for table in tables
         ],
         "registeredRelations": relations,
-        "businessTopics": [value for (value,) in session.query(KnowledgeTopic.name).filter_by(enabled=True).all()],
+        "businessTopics": [
+            value
+            for (value,) in session.query(KnowledgeTopic.name).filter_by(
+                tenant_id=source.tenant_id,
+                enabled=True,
+            ).all()
+        ],
         "metricsMissingThisSourceBinding": [
             {
                 "id": row.id,
@@ -354,7 +365,12 @@ def generate_candidates(source_id: int) -> dict:
     discarded = 0
     with PlatformSession() as session:
         source = session.query(DataSource).filter_by(id=source_id).one()
-        existing_names = {value for (value,) in session.query(KnowledgeMetric.name).all()}
+        existing_names = {
+            value
+            for (value,) in session.query(KnowledgeMetric.name).filter_by(
+                tenant_id=source.tenant_id
+            ).all()
+        }
         for item in raw_items:
             if not isinstance(item, dict):
                 discarded += 1
@@ -370,7 +386,7 @@ def generate_candidates(source_id: int) -> dict:
                 discarded += 1
                 continue
             binding = _binding_payload(item, source)
-            validation = _validate_payload(session, canonical, binding)
+            validation = _validate_payload(session, canonical, binding, source.tenant_id)
             fingerprint = _fingerprint(source_id, target_id, canonical, binding)
             row = session.query(MetricCandidate).filter_by(source_id=source_id, fingerprint=fingerprint).first()
             if row is None:
@@ -408,15 +424,20 @@ def generate_candidates(source_id: int) -> dict:
         resource=f"data-source:{source_id}",
         result="已记录",
         role="管理员",
+        tenant_id=source.tenant_id,
     )
     return {"items": results, "generated": len(results), "discarded": discarded}
 
 
-def list_candidates(source_id: int, status: str | None = None) -> list[dict]:
+def list_candidates(
+    source_id: int,
+    status: str | None = None,
+    tenant_id: str = "tenant-default",
+) -> list[dict]:
     if status and status not in VALID_STATUSES:
         raise service.KnowledgeValidation(f"不支持的候选状态：{status}")
     with PlatformSession() as session:
-        service._resolve_source_id(session, source_id)
+        service._resolve_source_id(session, source_id, tenant_id)
         query = session.query(MetricCandidate).filter_by(source_id=source_id)
         if status:
             query = query.filter_by(status=status)
@@ -424,21 +445,33 @@ def list_candidates(source_id: int, status: str | None = None) -> list[dict]:
         return [_serialize(row) for row in rows]
 
 
-def accept_candidate(candidate_id: str, reviewer: str = "管理员") -> dict:
+def accept_candidate(
+    candidate_id: str,
+    reviewer: str = "管理员",
+    tenant_id: str = "tenant-default",
+) -> dict:
     with PlatformSession() as session:
         row = session.query(MetricCandidate).filter_by(id=candidate_id).first()
         if row is None:
             raise service.KnowledgeNotFound(f"口径候选 {candidate_id} 不存在")
+        source = session.query(DataSource).filter_by(id=row.source_id, tenant_id=tenant_id).first()
+        if source is None:
+            raise service.KnowledgeNotFound(f"口径候选 {candidate_id} 不存在")
         if row.status != "pending":
             raise service.KnowledgeConflict("只有待审核候选可以接受")
-        validation = _validate_payload(session, row.canonical_payload_json or {}, row.binding_payload_json or {})
+        validation = _validate_payload(
+            session,
+            row.canonical_payload_json or {},
+            row.binding_payload_json or {},
+            tenant_id,
+        )
         row.validation_json = validation
         session.commit()
         if not validation["valid"]:
             raise service.KnowledgeValidation("候选未通过自动校验：" + "；".join(validation["errors"]))
         metric_id = row.target_metric_id
         payload = {**(row.canonical_payload_json or {}), **(row.binding_payload_json or {})}
-    saved = service.save_metric(payload, metric_id=metric_id)
+    saved = service.save_metric(payload, metric_id=metric_id, tenant_id=tenant_id)
     with PlatformSession() as session:
         row = session.query(MetricCandidate).filter_by(id=candidate_id).first()
         row.status = "accepted"
@@ -453,14 +486,23 @@ def accept_candidate(candidate_id: str, reviewer: str = "管理员") -> dict:
         resource=saved["id"],
         result="已记录",
         role="管理员",
+        tenant_id=tenant_id,
     )
     return {"candidate": result, "metric": saved, "requiresPublish": True}
 
 
-def reject_candidate(candidate_id: str, reason: str = "", reviewer: str = "管理员") -> dict:
+def reject_candidate(
+    candidate_id: str,
+    reason: str = "",
+    reviewer: str = "管理员",
+    tenant_id: str = "tenant-default",
+) -> dict:
     with PlatformSession() as session:
         row = session.query(MetricCandidate).filter_by(id=candidate_id).first()
         if row is None:
+            raise service.KnowledgeNotFound(f"口径候选 {candidate_id} 不存在")
+        source = session.query(DataSource).filter_by(id=row.source_id, tenant_id=tenant_id).first()
+        if source is None:
             raise service.KnowledgeNotFound(f"口径候选 {candidate_id} 不存在")
         if row.status != "pending":
             raise service.KnowledgeConflict("只有待审核候选可以驳回")
@@ -476,5 +518,6 @@ def reject_candidate(candidate_id: str, reason: str = "", reviewer: str = "管�
         resource=candidate_id,
         result="已记录",
         role="管理员",
+        tenant_id=tenant_id,
     )
     return result

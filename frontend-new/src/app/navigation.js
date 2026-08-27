@@ -24,6 +24,7 @@ export const roleMenus = {
       label: "管理员工作台",
       items: [
         { id: "admin-overview", label: "治理工作台", icon: "overview" },
+        { id: "tenants", label: "企业与成员", icon: "shield" },
         {
           id: "data-semantic-governance",
           label: "数据与语义",
@@ -105,6 +106,11 @@ export const pageMeta = {
     eyebrow: "管理员工作区",
     title: "治理工作台",
     subtitle: "集中处理数据、语义、模型和平台治理事项",
+  },
+  tenants: {
+    eyebrow: "管理员工作区",
+    title: "企业与成员",
+    subtitle: "管理当前企业边界、成员角色与数据源隔离",
   },
   knowledge: {
     eyebrow: "管理员工作区",

@@ -21,10 +21,12 @@ from app.db.models import (
     KnowledgeMetric,
     KnowledgeTopic,
     MetricSourceBinding,
+    ModelingTask,
     TableField,
     TableRelation,
 )
 from app.db.platform import PlatformSession
+from app.tenancy.service import TenantContext, tenant_context, tenant_source_ids
 
 router = APIRouter(prefix="/api/overview", tags=["overview"])
 
@@ -36,10 +38,13 @@ TOPIC_ALIASES = {
 }
 
 
-def _source_or_default(session, source_id: int | None) -> DataSource | None:
+def _source_or_default(session, source_id: int | None, tenant_id: str) -> DataSource | None:
     if source_id is not None:
-        return session.query(DataSource).filter_by(id=source_id).first()
-    return session.query(DataSource).filter_by(is_default=True).first() or session.query(DataSource).first()
+        return session.query(DataSource).filter_by(id=source_id, tenant_id=tenant_id).first()
+    return (
+        session.query(DataSource).filter_by(tenant_id=tenant_id, is_default=True).first()
+        or session.query(DataSource).filter_by(tenant_id=tenant_id).first()
+    )
 
 
 def _canonical_topic(name: str) -> str:
@@ -93,9 +98,10 @@ def get_business_overview(
     sourceId: int | None = Query(default=None),
     userId: str = Query(default="local-test-user", min_length=1, max_length=64),
     user: dict | None = Depends(optional_user),
+    context: TenantContext = Depends(tenant_context),
 ):
     with PlatformSession() as session:
-        source = _source_or_default(session, sourceId)
+        source = _source_or_default(session, sourceId, context.tenant_id)
         if source is None:
             raise HTTPException(status_code=404, detail="尚未配置数据源")
 
@@ -104,7 +110,7 @@ def get_business_overview(
         verified_metric_ids = {item.metric_id for item in bindings if item.status == "已验证"}
         trusted_metrics = (
             session.query(KnowledgeMetric)
-            .filter(KnowledgeMetric.id.in_(verified_metric_ids), KnowledgeMetric.status == "已发布")
+            .filter(KnowledgeMetric.tenant_id == context.tenant_id, KnowledgeMetric.id.in_(verified_metric_ids), KnowledgeMetric.status == "已发布")
             .order_by(KnowledgeMetric.id)
             .all()
             if verified_metric_ids
@@ -116,7 +122,7 @@ def get_business_overview(
         for metric in trusted_metrics:
             metric_groups[_canonical_topic(metric.topic)].append(metric)
 
-        topic_rows = session.query(KnowledgeTopic).filter_by(enabled=True).order_by(KnowledgeTopic.code).all()
+        topic_rows = session.query(KnowledgeTopic).filter_by(tenant_id=context.tenant_id, enabled=True).order_by(KnowledgeTopic.code).all()
         topic_definitions = {_canonical_topic(item.name): item for item in topic_rows}
         topic_names = list(dict.fromkeys([*topic_definitions, *table_counts, *metric_groups]))
         topics = []
@@ -141,7 +147,7 @@ def get_business_overview(
         latest_scan = max((item.scanned_at for item in tables if item.scanned_at), default=None)
         update_dates = [item.data_updated for item in tables if item.data_updated]
         session_scope = session.query(AnalysisSession).filter_by(
-            source_id=source.id, user_id=effective_user_id(userId, user)
+            source_id=source.id, user_id=effective_user_id(userId, user), tenant_id=context.tenant_id
         )
         session_count = session_scope.count()
         sessions = (
@@ -222,39 +228,48 @@ def get_business_overview(
 
 
 @router.get("/admin")
-def get_admin_overview():
+def get_admin_overview(context: TenantContext = Depends(tenant_context)):
     """管理员治理总览：以指标、资源、模型与审计拦截的真实状态为事实。"""
     with PlatformSession() as session:
-        metrics = session.query(KnowledgeMetric).all()
+        source_ids = tenant_source_ids(session, context.tenant_id)
+        metrics = session.query(KnowledgeMetric).filter_by(tenant_id=context.tenant_id).all()
         pending_metrics = [item for item in metrics if item.status == "待审核"]
         published_count = sum(1 for item in metrics if item.status == "已发布")
         publish_rate = round(published_count * 100 / len(metrics)) if metrics else 0
 
-        table_count = session.query(DataTable).filter_by(registered=True).count()
-        relation_count = session.query(TableRelation).count()
-        unmapped_fields = session.query(TableField).filter(TableField.cn_name == "").count()
+        table_count = session.query(DataTable).filter(DataTable.source_id.in_(source_ids), DataTable.registered.is_(True)).count() if source_ids else 0
+        relation_count = session.query(TableRelation).filter(TableRelation.source_id.in_(source_ids)).count() if source_ids else 0
+        unmapped_fields = session.query(TableField).filter(TableField.source_id.in_(source_ids), TableField.cn_name == "").count() if source_ids else 0
 
-        model_total = session.query(GovernedModel).count()
-        model_published = session.query(GovernedModel).filter_by(status="published").count()
-        model_pending = session.query(GovernedModel).filter(
-            GovernedModel.status.in_(["pending", "reviewing"])
-        ).count()
+        tenant_models = session.query(GovernedModel).join(
+            ModelingTask,
+            ModelingTask.id == GovernedModel.task_id,
+        )
+        if source_ids:
+            tenant_models = tenant_models.filter(ModelingTask.source_id.in_(source_ids))
+            model_total = tenant_models.count()
+            model_published = tenant_models.filter(GovernedModel.status == "published").count()
+            model_pending = tenant_models.filter(
+                GovernedModel.status.in_(["pending", "reviewing"])
+            ).count()
+        else:
+            model_total = model_published = model_pending = 0
 
-        intercept_count = session.query(AuditLog).filter_by(result="已拦截").count()
+        intercept_count = session.query(AuditLog).filter_by(tenant_id=context.tenant_id, result="已拦截").count()
         intercept_records = (
             session.query(AuditLog)
-            .filter_by(result="已拦截")
+            .filter_by(tenant_id=context.tenant_id, result="已拦截")
             .order_by(AuditLog.created_at.desc())
             .limit(3)
             .all()
         )
         topic_rows = (
             session.query(KnowledgeTopic)
-            .filter_by(enabled=True)
+            .filter_by(tenant_id=context.tenant_id, enabled=True)
             .order_by(KnowledgeTopic.code)
             .all()
         )
-        latest_scan = session.query(func.max(DataTable.scanned_at)).scalar()
+        latest_scan = session.query(func.max(DataTable.scanned_at)).filter(DataTable.source_id.in_(source_ids)).scalar() if source_ids else None
 
         health = [
             {

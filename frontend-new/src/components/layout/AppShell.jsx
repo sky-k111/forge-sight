@@ -9,7 +9,9 @@ import { pageFromPath, roleFromPath, routeByPage } from "../../app/routeConfig";
 import { createSession, deleteSession, listSessions } from "../../api/analysis";
 import { fetchMe, logout as apiLogout } from "../../api/auth";
 import { getUnreadCount } from "../../api/messages";
+import { getCurrentTenant, listMyTenants } from "../../api/tenants";
 import { AUTH_EXPIRED_EVENT, getCachedUser, getToken, setSession } from "../../lib/auth";
+import { clearTenantWorkspaceState, getActiveTenantId, setActiveTenantId } from "../../lib/tenant";
 
 const users = {
   business: { name: "王敏", title: "生产部 · 业务分析", initials: "王" },
@@ -46,6 +48,8 @@ export default function AppShell() {
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [expandedItems, setExpandedItems] = useState(() => new Set(["analysis-center", "data-semantic-governance"]));
   const [unreadCount, setUnreadCount] = useState(0);
+  const [tenants, setTenants] = useState(() => cachedUser?.tenants ?? []);
+  const [activeTenant, setActiveTenant] = useState(null);
 
   useEffect(() => {
     const activeParent = roleMenus[role]
@@ -92,6 +96,21 @@ export default function AppShell() {
     const timer = window.setInterval(refreshUnread, 30000);
     window.addEventListener("forgesight:messages-changed", refreshUnread);
     return () => { cancelled = true; window.clearInterval(timer); window.removeEventListener("forgesight:messages-changed", refreshUnread); };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      getCurrentTenant(),
+      getToken() ? listMyTenants().catch(() => ({ items: cachedUser?.tenants ?? [] })) : Promise.resolve({ items: [] }),
+    ]).then(([current, memberships]) => {
+      if (cancelled) return;
+      setActiveTenant(current);
+      setTenants(memberships.items?.length ? memberships.items : [current]);
+    }).catch(() => {
+      if (!cancelled) setActiveTenant({ id: getActiveTenantId(), name: "当前企业", role: "member" });
+    });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -144,6 +163,14 @@ export default function AppShell() {
   const switchRole = (nextRole) => {
     setMobileNavOpen(false);
     navigate(nextRole === "admin" ? routeByPage["admin-overview"] : routeByPage.overview);
+  };
+
+  const switchTenant = (tenantId) => {
+    if (!tenantId || tenantId === activeTenant?.id) return;
+    setActiveTenantId(tenantId);
+    clearTenantWorkspaceState();
+    navigate(role === "admin" ? routeByPage["admin-overview"] : routeByPage.overview, { replace: true });
+    window.location.reload();
   };
 
   const createTask = async () => {
@@ -249,6 +276,9 @@ export default function AppShell() {
           onOpenMemory={() => navigate(routeByPage.memory)}
           onToggleEvidence={() => setEvidenceOpen((value) => !value)}
           onRoleChange={switchRole}
+          activeTenant={activeTenant}
+          tenants={tenants}
+          onTenantChange={switchTenant}
         />
         <main className={cn("min-h-0 flex-1", page === "analysis" ? "overflow-hidden" : "overflow-auto")}>
           <Suspense fallback={<RouteSkeleton />}>
@@ -631,7 +661,7 @@ function QueueItem({ dotClass, title, caption, count, onClick }) {
   );
 }
 
-function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, unreadCount, onToggleEvidence, onRoleChange, onOpenNavigation, onOpenMessages, onOpenMemory }) {
+function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, unreadCount, onToggleEvidence, onRoleChange, onOpenNavigation, onOpenMessages, onOpenMemory, activeTenant, tenants, onTenantChange }) {
   const meta = pageMeta[page] ?? pageMeta.overview;
   const [accountOpen, setAccountOpen] = useState(false);
   const accountMenuRef = useRef(null);
@@ -659,6 +689,7 @@ function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, unreadCount, o
         <h1 className="m-0 truncate text-lg font-semibold tracking-tight text-ink">{meta.title}</h1>
       </div>
       <div className="flex min-w-0 items-center gap-1.5 md:gap-3">
+        <TenantSwitcher activeTenant={activeTenant} tenants={tenants} onChange={onTenantChange} />
         {page === "analysis" && (
           <Button
             variant="secondary"
@@ -751,5 +782,62 @@ function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, unreadCount, o
         </div>
       </div>
     </header>
+  );
+}
+
+function TenantSwitcher({ activeTenant, tenants, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (event) => {
+      if (!ref.current?.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative hidden sm:block">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="group flex h-9 max-w-[230px] cursor-pointer items-center gap-2 rounded-control border border-line bg-surface px-2.5 text-left transition-colors hover:border-line-strong hover:bg-surface-2"
+      >
+        <span className="grid h-6 w-6 shrink-0 place-items-center rounded-tag bg-primary-soft text-primary"><Icon name="database" size={13} /></span>
+        <span className="min-w-0 flex-1">
+          <strong className="block truncate text-[11px] font-semibold text-ink">{activeTenant?.name ?? "正在确认企业"}</strong>
+          <small className="block text-[9px] text-muted">{activeTenant?.role === "owner" ? "企业所有者" : activeTenant?.role === "admin" ? "企业管理员" : "企业成员"}</small>
+        </span>
+        {tenants.length > 1 && <Icon name="chevron" size={13} className={cn("text-faint transition-transform", open && "rotate-90")} />}
+      </button>
+      {open && tenants.length > 1 && (
+        <div role="listbox" aria-label="切换企业空间" className="absolute right-0 top-11 z-50 w-72 overflow-hidden rounded-card border border-line bg-surface p-1.5 shadow-card-hover">
+          <div className="px-2.5 pb-1.5 pt-1 text-[10px] font-semibold text-muted">企业空间</div>
+          {tenants.map((tenant) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={tenant.id === activeTenant?.id}
+              key={tenant.id}
+              onClick={() => { setOpen(false); onChange(tenant.id); }}
+              className={cn(
+                "flex w-full cursor-pointer items-center gap-2.5 rounded-control px-2.5 py-2 text-left transition-colors hover:bg-surface-2",
+                tenant.id === activeTenant?.id && "bg-primary-soft",
+              )}
+            >
+              <span className={cn("h-2 w-2 shrink-0 rounded-full", tenant.id === activeTenant?.id ? "bg-primary" : "bg-line-strong")} />
+              <span className="min-w-0 flex-1">
+                <strong className="block truncate text-xs font-semibold text-ink">{tenant.name}</strong>
+                <small className="text-[10px] text-muted">{tenant.role === "owner" ? "所有者" : tenant.role === "admin" ? "管理员" : "成员"}</small>
+              </span>
+            </button>
+          ))}
+          <p className="mx-2.5 mt-1 border-t border-line py-2 text-[10px] leading-4 text-faint">切换后，数据源、调查记录、记忆与指标口径会同步切换。</p>
+        </div>
+      )}
+    </div>
   );
 }
