@@ -13,6 +13,7 @@ from app.auth.deps import (
 from app.config import settings
 from app.db.models import Report, ReportVersion
 from app.db.platform import PlatformSession
+from app.delivery.service import enqueue_report_pdf_delivery, serialize_delivery
 from app.reports import service
 from app.reports.contracts import ReportCreate, ReportPublish, ReportReviewAction, SubscriptionCreate
 from app.reports.files import (
@@ -124,12 +125,48 @@ def publish_report(report_id: str, payload: ReportPublish):
         _raise(exc)
 
 
-@router.post("/reports/{report_id}/deliveries/feishu")
-def push_report_to_feishu(report_id: str):
+@router.post(
+    "/reports/{report_id}/deliveries/{channel}",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def queue_report_pdf_delivery(
+    report_id: str,
+    channel: str,
+    user: dict = Depends(require_user),
+):
+    if channel not in {"feishu", "dingtalk"}:
+        raise HTTPException(status_code=400, detail="PDF 投递渠道仅支持飞书或钉钉")
+    user_name, role = current_user_display(user)
     try:
-        return service.deliver_to_feishu(report_id)
+        _authorize_report(report_id, user)
+        with PlatformSession() as session:
+            row = enqueue_report_pdf_delivery(
+                session,
+                report_id,
+                user["id"],
+                channel,
+            )
+            result = serialize_delivery(row)
+            session.commit()
+    except FileAccessDenied as exc:
+        raise HTTPException(status_code=404, detail="报告不存在或无权访问") from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         _raise(exc)
+    write_audit(
+        action="投递周报 PDF",
+        resource=f"report:{report_id}",
+        result="已记录",
+        detail=f"channel={channel}; delivery={result['id']}; status={result['status']}",
+        user_name=user_name,
+        role=role,
+    )
+    return result
 
 
 @router.get("/reports/{report_id}/export", response_class=HTMLResponse)

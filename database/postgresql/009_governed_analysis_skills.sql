@@ -68,10 +68,10 @@ CREATE TABLE IF NOT EXISTS analysis_skill_usage (
 CREATE INDEX IF NOT EXISTS ix_analysis_skill_usage_run_id ON analysis_skill_usage(run_id);
 CREATE INDEX IF NOT EXISTS ix_analysis_skill_usage_skill_id ON analysis_skill_usage(skill_id);
 
-INSERT INTO platform_feature_flag(key, enabled, config_json, updated_by)
+INSERT INTO platform_feature_flag(key, enabled, config_json, updated_by, updated_at)
 VALUES (
     'analysis_skill_enhancement', FALSE,
     '{"topK":2,"minimumScore":0.18,"candidateOnPositiveFeedback":true}'::jsonb,
-    'migration'
+    'migration', CURRENT_TIMESTAMP
 )
 ON CONFLICT (key) DO NOTHING;

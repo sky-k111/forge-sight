@@ -89,10 +89,10 @@ CREATE TABLE IF NOT EXISTS agent_memory_embedding (
 );
 CREATE INDEX IF NOT EXISTS ix_agent_memory_embedding_scope ON agent_memory_embedding (tenant_id, source_id, user_id);
 
-INSERT INTO platform_feature_flag (key, enabled, config_json, updated_by)
+INSERT INTO platform_feature_flag (key, enabled, config_json, updated_by, updated_at)
 VALUES (
     'agent_memory', FALSE,
     '{"variant":"off","topK":6,"minimumScore":0.16,"captureEpisodes":true,"captureExplicitPreferences":true,"retentionDays":180}'::jsonb,
-    'migration'
+    'migration', CURRENT_TIMESTAMP
 )
 ON CONFLICT (key) DO NOTHING;

@@ -31,6 +31,7 @@ from app.reports.repository import (
 SOURCE_LABELS = {
     "report-agent": "周报 Agent",
     "admin": "管理员公告",
+    "monitoring": "智能异常监控",
 }
 
 
@@ -323,6 +324,12 @@ def _primary_action(message) -> dict | None:
         return {
             "type": "open_announcement",
             "label": "查看公告",
+            "resourceId": message.related_id,
+        }
+    if message.message_type == "monitoring_alert":
+        return {
+            "type": "open_monitoring_alert",
+            "label": "查看警报",
             "resourceId": message.related_id,
         }
     return None
@@ -813,7 +820,7 @@ def get_user_message(
     card = serialize_message_card(message, recipient, now=now)
     detail = {
         **card,
-        "content": message.summary if message.message_type == "admin_announcement" else None,
+        "content": message.summary if message.message_type in {"admin_announcement", "monitoring_alert"} else None,
         "relatedType": message.related_type,
         "relatedId": message.related_id,
         "reportVersionId": message.report_version_id,

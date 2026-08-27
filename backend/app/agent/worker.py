@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 _stop = threading.Event()
 _thread: threading.Thread | None = None
 _worker_id = f"{socket.gethostname()}:{id(_stop)}"
+_monitoring_providers: dict | None = None
 
 
 def _claim_run() -> str | None:
@@ -76,6 +77,15 @@ def _run_message_worker_once() -> None:
         session.commit()
 
 
+def _run_delivery_event_worker_once() -> None:
+    from app.delivery.service import run_delivery_event_worker_once
+
+    run_delivery_event_worker_once(
+        PlatformSession,
+        f"delivery-event:{_worker_id}",
+    )
+
+
 def _run_mail_workers_once() -> None:
     from app.delivery.provider import (
         ProviderFailure,
@@ -86,13 +96,7 @@ def _run_mail_workers_once() -> None:
         block_deliveries_for_configuration,
         delivery_work_pending,
         resume_configuration_blocked_deliveries,
-        run_delivery_event_worker_once,
         run_delivery_worker_once,
-    )
-
-    run_delivery_event_worker_once(
-        PlatformSession,
-        f"mail-event:{_worker_id}",
     )
     configuration_fingerprint = mail_configuration_fingerprint(settings)
     with PlatformSession() as session:
@@ -142,7 +146,83 @@ def _run_mail_workers_once() -> None:
         )
 
 
+def _run_im_pdf_worker_once() -> None:
+    from app.delivery.im_provider import DingTalkPdfProvider, FeishuPdfProvider
+    from app.delivery.im_service import run_pdf_delivery_worker_once
+
+    providers = {
+        "feishu": FeishuPdfProvider(
+            settings.feishu_app_id,
+            settings.feishu_app_secret,
+            timeout_seconds=settings.mail_timeout_seconds,
+        ),
+        "dingtalk": DingTalkPdfProvider(
+            settings.dingtalk_client_id,
+            settings.dingtalk_client_secret,
+            settings.dingtalk_agent_id,
+            timeout_seconds=settings.mail_timeout_seconds,
+        ),
+    }
+    run_pdf_delivery_worker_once(
+        PlatformSession,
+        f"im-pdf:{_worker_id}",
+        providers,
+        storage_root=settings.report_storage_dir,
+        max_attempts=settings.im_pdf_max_attempts,
+        lease_seconds=max(
+            settings.im_pdf_worker_lease_seconds,
+            settings.mail_timeout_seconds * 3 + 30,
+        ),
+    )
+
+
+def _run_monitoring_workers_once() -> None:
+    """Run one durable monitoring task and one notification delivery cycle."""
+    from app.monitoring.delivery import run_delivery_worker_once, run_event_worker_once
+    from app.monitoring.provider import DingTalkAlertProvider, FeishuAlertProvider
+    from app.monitoring.worker import run_worker_once
+
+    run_worker_once(
+        PlatformSession,
+        worker_id=f"monitoring-query:{_worker_id}",
+        lease_seconds=settings.monitoring_worker_lease_seconds,
+    )
+    run_event_worker_once(
+        PlatformSession,
+        worker_id=f"monitoring-event:{_worker_id}",
+        lease_seconds=settings.monitoring_delivery_lease_seconds,
+    )
+    global _monitoring_providers
+    if _monitoring_providers is None:
+        _monitoring_providers = {}
+        if settings.feishu_app_id and settings.feishu_app_secret:
+            _monitoring_providers["feishu"] = FeishuAlertProvider(
+                settings.feishu_app_id,
+                settings.feishu_app_secret,
+            )
+        if settings.dingtalk_client_id and settings.dingtalk_client_secret and settings.dingtalk_agent_id:
+            _monitoring_providers["dingtalk"] = DingTalkAlertProvider(
+                settings.dingtalk_client_id,
+                settings.dingtalk_client_secret,
+                settings.dingtalk_agent_id,
+            )
+    providers = _monitoring_providers
+    if providers:
+        run_delivery_worker_once(
+            PlatformSession,
+            worker_id=f"monitoring-send:{_worker_id}",
+            providers=providers,
+            public_app_url=settings.public_app_url,
+            lease_seconds=settings.monitoring_delivery_lease_seconds,
+        )
+
+
 def _run_maintenance_cycle() -> None:
+    if settings.monitoring_worker_enabled:
+        try:
+            _run_monitoring_workers_once()
+        except Exception:  # noqa: BLE001 - 监控故障不能阻塞问析、报告或既有告警读取
+            log.exception("智能异常监测任务执行失败")
     if settings.report_scheduler_enabled:
         try:
             _run_report_scheduler_once()
@@ -156,11 +236,21 @@ def _run_maintenance_cycle() -> None:
         _run_message_worker_once()
     except Exception:  # noqa: BLE001 - 消息故障不能阻塞 Agent Run
         log.exception("站内消息事件处理失败")
+    if settings.mail_worker_enabled or settings.im_pdf_worker_enabled:
+        try:
+            _run_delivery_event_worker_once()
+        except Exception:  # noqa: BLE001 - 单个发布事件故障由 Outbox 重试处理
+            log.exception("外部投递事件展开失败")
     if settings.mail_worker_enabled:
         try:
             _run_mail_workers_once()
         except Exception:  # noqa: BLE001 - 邮件失败不能影响站内发布或 Agent Run
             log.exception("邮件投递处理失败")
+    if settings.im_pdf_worker_enabled:
+        try:
+            _run_im_pdf_worker_once()
+        except Exception:  # noqa: BLE001 - IM 平台故障不能影响报告发布与其他渠道
+            log.exception("飞书/钉钉周报 PDF 投递处理失败")
 
 
 def _loop() -> None:

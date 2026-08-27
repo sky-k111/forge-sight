@@ -11,6 +11,7 @@ from app.db.models import (
     DataScopePolicy,
     ExternalChatConversation,
     ExternalChatJob,
+    FeishuBinding,
     PlatformUser,
 )
 from app.integrations import feishu_p2p
@@ -127,6 +128,112 @@ def test_business_binding_uses_canonical_user_and_requires_source_scope(analysis
         assert conversation.platform_user_id == "usr-feishu"
         analysis = session.get(AnalysisSession, conversation.analysis_session_id)
         assert analysis.user_id == "usr-feishu"
+
+
+def test_oauth_database_binding_precedes_legacy_json(monkeypatch, analysis_session):
+    _seed_business_binding(analysis_session)
+    with analysis_session() as session:
+        session.add(
+            FeishuBinding(
+                id="fsb-oauth",
+                user_id="usr-feishu",
+                tenant_key="tenant_1",
+                open_id="ou_user",
+                source_id=1,
+                bind_status="bound",
+            )
+        )
+        session.commit()
+
+    accepted = feishu_p2p.accept_message(
+        _message(),
+        config=_config("{}"),
+        session_factory=analysis_session,
+    )
+    monkeypatch.setattr(
+        feishu_p2p.analysis_service,
+        "create_run",
+        lambda *_args, **_kwargs: {"runId": "run_oauth", "status": "queued"},
+    )
+    monkeypatch.setattr(
+        feishu_p2p.analysis_service,
+        "get_run",
+        lambda _run_id: {
+            "id": "run_oauth",
+            "status": "succeeded",
+            "assistantMessage": {"content": "数据库绑定已生效。"},
+            "usage": {},
+        },
+    )
+
+    reply = feishu_p2p.execute_job(
+        accepted.id,
+        config=_config("{}"),
+        session_factory=analysis_session,
+    )
+
+    assert "数据库绑定已生效" in reply
+    with analysis_session() as session:
+        conversation = session.get(
+            ExternalChatConversation,
+            session.get(ExternalChatJob, accepted.id).conversation_id,
+        )
+        assert conversation.platform_user_id == "usr-feishu"
+
+
+def test_oauth_binding_requires_selected_source(analysis_session):
+    _seed_business_binding(analysis_session)
+    with analysis_session() as session:
+        session.add(
+            FeishuBinding(
+                id="fsb-no-source",
+                user_id="usr-feishu",
+                tenant_key="tenant_1",
+                open_id="ou_user",
+                source_id=None,
+                bind_status="bound",
+            )
+        )
+        session.commit()
+
+    with pytest.raises(feishu_p2p.FeishuSourceRequired, match="选择可访问的数据源"):
+        feishu_p2p.accept_message(
+            _message(),
+            config=_config("{}"),
+            session_factory=analysis_session,
+        )
+
+
+def test_oauth_binding_uses_unique_identity_when_sdk_omits_tenant(analysis_session):
+    _seed_business_binding(analysis_session)
+    with analysis_session() as session:
+        session.add(
+            FeishuBinding(
+                id="fsb-missing-event-tenant",
+                user_id="usr-feishu",
+                tenant_key="oauth-tenant",
+                open_id="ou_user",
+                source_id=1,
+                bind_status="bound",
+            )
+        )
+        session.commit()
+    message = _message()
+    message.raw = {}
+
+    accepted = feishu_p2p.accept_message(
+        message,
+        config=_config("{}"),
+        session_factory=analysis_session,
+    )
+
+    assert accepted.created is True
+    with analysis_session() as session:
+        conversation = session.get(
+            ExternalChatConversation,
+            session.get(ExternalChatJob, accepted.id).conversation_id,
+        )
+        assert conversation.platform_user_id == "usr-feishu"
 
 
 def test_queued_feishu_job_rechecks_revoked_scope(analysis_session):

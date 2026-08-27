@@ -57,6 +57,12 @@ class Settings(BaseSettings):
 
     feishu_webhook_url: str = ""
     feishu_webhook_secret: str = ""
+    # 飞书企业自建应用网页 OAuth（动态绑定）；回调地址须在飞书开放平台登记。
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+    feishu_redirect_uri: str = ""
+    feishu_authorize_url: str = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
+    feishu_oauth_state_ttl_seconds: int = 600
     # 飞书企业自建应用机器人（单聊双向问析），与上面的群 Webhook 推送是两套能力。
     feishu_bot_enabled: bool = False
     feishu_bot_app_id: str = ""
@@ -67,6 +73,7 @@ class Settings(BaseSettings):
     feishu_bot_lease_seconds: int = 360
     feishu_bot_max_attempts: int = 3
     feishu_bot_max_concurrency: int = 4
+    feishu_bot_result_wait_seconds: int = 30
 
     # 钉钉企业内部应用：OAuth 负责账号绑定，Stream 负责双向问析。
     dingtalk_client_id: str = ""
@@ -81,7 +88,13 @@ class Settings(BaseSettings):
     dingtalk_bot_max_attempts: int = 3
     dingtalk_bot_max_concurrency: int = 4
     dingtalk_bot_result_wait_seconds: int = 30
-    public_app_url: str = "http://127.0.0.1:3001"
+    public_app_url: str = "http://127.0.0.1:5173"
+    im_pdf_worker_enabled: bool = True
+    im_pdf_max_attempts: int = 3
+    im_pdf_worker_lease_seconds: int = 90
+    monitoring_worker_enabled: bool = True
+    monitoring_worker_lease_seconds: int = 120
+    monitoring_delivery_lease_seconds: int = 90
 
     modeling_storage_dir: str = "modeling_artifacts"
     report_storage_dir: str = "report_artifacts"
@@ -93,6 +106,7 @@ class Settings(BaseSettings):
     auth_admin_password: str = "admin123"                     # 仅演示默认值，生产必改
     auth_admin_display_name: str = "系统管理员"
     auth_email_gate_enabled: bool = True
+    auth_external_identity_gate_enabled: bool = True  # 新注册业务账号须绑定钉钉或飞书
     auth_email_gate_allow_capture: bool = False  # 默认禁止捕获验证码；本地演示需在 .env 显式开启
     demo_mode_enabled: bool = False
 

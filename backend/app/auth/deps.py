@@ -5,12 +5,19 @@ from __future__ import annotations
 from fastapi import Depends, Header, HTTPException
 from starlette.responses import JSONResponse
 
-from app.auth.service import decode_token, get_user_by_username, user_payload
+from app.auth.service import (
+    decode_token,
+    external_identity_status_for,
+    get_user_by_username,
+    user_payload,
+)
 from app.config import settings
 
 PUBLIC_AUTH_PATHS = {
     "/api/auth/register",
     "/api/auth/login",
+    "/api/dingtalk/oauth/callback",
+    "/api/feishu/oauth/callback",
 }
 RESTRICTED_AUTH_PATHS = {
     "/api/auth/me",
@@ -18,6 +25,14 @@ RESTRICTED_AUTH_PATHS = {
     "/api/auth/email/challenges",
     "/api/auth/email/change",
     "/api/auth/email/verify",
+    "/api/dingtalk/oauth/start",
+    "/api/dingtalk/binding/me",
+    "/api/dingtalk/binding/sources",
+    "/api/dingtalk/binding/source",
+    "/api/feishu/oauth/start",
+    "/api/feishu/binding/me",
+    "/api/feishu/binding/sources",
+    "/api/feishu/binding/source",
 }
 
 
@@ -43,6 +58,18 @@ def email_gate_response(path: str, authorization: str | None) -> JSONResponse | 
             user = get_user_by_username(claims.get("sub", ""))
             if user is not None and not user.enabled:
                 user = None
+
+    if (
+        settings.auth_external_identity_gate_enabled
+        and user is not None
+        and user.external_identity_required
+        and not external_identity_status_for(user)["bound"]
+    ):
+        return _gate_error(
+            403,
+            "请先绑定钉钉或飞书账号",
+            "EXTERNAL_IDENTITY_BINDING_REQUIRED",
+        )
 
     if settings.auth_email_gate_enabled:
         if user is None:

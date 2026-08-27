@@ -1400,6 +1400,11 @@ class PlatformUser(Base):
         String(254), nullable=True, comment="邮箱唯一比较值"
     )
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    external_identity_required: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        comment="新注册业务账号必须绑定钉钉或飞书；历史账号默认豁免",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
@@ -1583,4 +1588,333 @@ class EmailVerificationEvent(Base):
     event_type: Mapped[str] = mapped_column(String(24))
     outcome: Mapped[str] = mapped_column(String(32), default="", server_default=text("''"))
     ip: Mapped[str] = mapped_column(String(45), default="", server_default=text("''"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+class FeishuBinding(Base):
+    """系统用户与飞书身份的绑定关系；不持久化 OAuth token。"""
+
+    __tablename__ = "feishu_binding"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_feishu_binding_user"),
+        Index(
+            "uq_feishu_binding_tenant_union",
+            "tenant_key",
+            "union_id",
+            unique=True,
+            postgresql_where=text("union_id IS NOT NULL"),
+            sqlite_where=text("union_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_feishu_binding_tenant_open",
+            "tenant_key",
+            "open_id",
+            unique=True,
+            postgresql_where=text("open_id IS NOT NULL"),
+            sqlite_where=text("open_id IS NOT NULL"),
+        ),
+        Index("ix_feishu_binding_status", "bind_status"),
+        CheckConstraint(
+            "union_id IS NOT NULL OR open_id IS NOT NULL",
+            name="ck_feishu_binding_identity",
+        ),
+        CheckConstraint(
+            "bind_status IN ('bound', 'unbound', 'disabled')",
+            name="ck_feishu_binding_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(40),
+        ForeignKey("platform_user.id", ondelete="CASCADE"),
+        index=True,
+    )
+    tenant_key: Mapped[str] = mapped_column(String(80), default="")
+    union_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    open_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    employee_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("data_source.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    mobile: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    display_name: Mapped[str] = mapped_column(String(100), default="")
+    avatar: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bind_status: Mapped[str] = mapped_column(String(24), default="bound")
+    last_auth_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class FeishuOAuthState(Base):
+    """飞书 OAuth state 防 CSRF、防重放记录。"""
+
+    __tablename__ = "feishu_oauth_state"
+    __table_args__ = (
+        UniqueConstraint("state_token", name="uq_feishu_oauth_state_token"),
+        Index("ix_feishu_oauth_state_user", "user_id"),
+        Index("ix_feishu_oauth_state_expires", "expires_at"),
+        CheckConstraint(
+            "purpose IN ('bind', 'login')",
+            name="ck_feishu_oauth_state_purpose",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        String(40),
+        ForeignKey("platform_user.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    state_token: Mapped[str] = mapped_column(String(128))
+    redirect_path: Mapped[str] = mapped_column(String(255), default="")
+    purpose: Mapped[str] = mapped_column(String(24), default="bind")
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class MonitoringRuleTemplate(Base):
+    """Versioned semantic monitoring template, independent of physical source fields."""
+
+    __tablename__ = "monitoring_rule_template"
+    __table_args__ = (
+        UniqueConstraint("code", "version", name="uq_monitoring_template_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    code: Mapped[str] = mapped_column(String(80), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    name: Mapped[str] = mapped_column(String(160))
+    topic: Mapped[str] = mapped_column(String(80), default="production")
+    description: Mapped[str] = mapped_column(Text, default="")
+    default_condition_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    default_quality_gate_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    status: Mapped[str] = mapped_column(String(24), default="published", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class MonitoringRule(Base):
+    """Published rule instance bound to one source and a structured query plan."""
+
+    __tablename__ = "monitoring_rule"
+    __table_args__ = (
+        UniqueConstraint("code", "version", "source_id", name="uq_monitoring_rule_version"),
+        Index("ix_monitoring_rule_template_ref", "template_code"),
+        CheckConstraint(
+            "status IN ('draft', 'published', 'paused', 'retired')",
+            name="ck_monitoring_rule_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    code: Mapped[str] = mapped_column(String(80), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    template_code: Mapped[str] = mapped_column(String(80))
+    source_id: Mapped[int] = mapped_column(Integer, ForeignKey("data_source.id", ondelete="RESTRICT"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    metric_name: Mapped[str] = mapped_column(String(120))
+    entity_type: Mapped[str] = mapped_column(String(80), default="source")
+    grain: Mapped[str] = mapped_column(String(24), default="day")
+    query_plan_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    condition_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    quality_gate_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    severity_policy_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    notification_policy_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    schedule_seconds: Mapped[int] = mapped_column(Integer, default=86400)
+    status: Mapped[str] = mapped_column(String(24), default="draft", index=True)
+    created_by: Mapped[str] = mapped_column(String(40), default="system")
+    published_by: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class MonitoringCursor(Base):
+    """Latest completed window per published rule for restart/reconciliation visibility."""
+
+    __tablename__ = "monitoring_cursor"
+    __table_args__ = (
+        UniqueConstraint("rule_id", name="uq_monitoring_cursor_rule"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("monitoring_rule.id", ondelete="CASCADE"), index=True
+    )
+    source_id: Mapped[int] = mapped_column(Integer, index=True)
+    logical_period: Mapped[str] = mapped_column(String(80), default="")
+    watermark_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    task_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class MonitoringTask(Base):
+    """Durable execution task claimed through a lease."""
+
+    __tablename__ = "monitoring_task"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_monitoring_task_idempotency"),
+        Index("ix_monitoring_task_claim", "status", "next_attempt_at", "lease_expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(String(40), ForeignKey("monitoring_rule.id", ondelete="CASCADE"), index=True)
+    rule_version: Mapped[int] = mapped_column(Integer)
+    logical_period: Mapped[str] = mapped_column(String(80))
+    window_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    window_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+    lease_owner: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    error_summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    result_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class MonitoringObservation(Base):
+    """Immutable-per-revision aggregate used to explain a rule evaluation."""
+
+    __tablename__ = "monitoring_observation"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_monitoring_observation_idempotency"),
+        Index("ix_monitoring_observation_rule_period", "rule_id", "logical_period"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(String(40), ForeignKey("monitoring_rule.id", ondelete="CASCADE"), index=True)
+    rule_version: Mapped[int] = mapped_column(Integer)
+    source_id: Mapped[int] = mapped_column(Integer, index=True)
+    logical_period: Mapped[str] = mapped_column(String(80))
+    entity_type: Mapped[str] = mapped_column(String(80))
+    entity_id: Mapped[str] = mapped_column(String(160))
+    entity_name: Mapped[str] = mapped_column(String(200), default="")
+    current_value: Mapped[float | None] = mapped_column(Numeric(24, 8), nullable=True)
+    baseline_value: Mapped[float | None] = mapped_column(Numeric(24, 8), nullable=True)
+    lower_bound: Mapped[float | None] = mapped_column(Numeric(24, 8), nullable=True)
+    upper_bound: Mapped[float | None] = mapped_column(Numeric(24, 8), nullable=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0)
+    quality_status: Mapped[str] = mapped_column(String(24), default="ok")
+    evaluation_state: Mapped[str] = mapped_column(String(24), index=True)
+    data_cutoff_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    details_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class MonitoringAlert(Base):
+    """Long-lived alert fact; lifecycle is exclusively rule-driven."""
+
+    __tablename__ = "monitoring_alert"
+    __table_args__ = (
+        UniqueConstraint("correlation_key", name="uq_monitoring_alert_correlation"),
+        CheckConstraint(
+            "status IN ('firing', 'recovering', 'resolved')",
+            name="ck_monitoring_alert_status",
+        ),
+        Index("ix_monitoring_alert_filter", "status", "severity", "last_seen_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(String(40), ForeignKey("monitoring_rule.id", ondelete="RESTRICT"), index=True)
+    rule_version: Mapped[int] = mapped_column(Integer)
+    source_id: Mapped[int] = mapped_column(Integer, index=True)
+    metric_name: Mapped[str] = mapped_column(String(120))
+    entity_type: Mapped[str] = mapped_column(String(80))
+    entity_id: Mapped[str] = mapped_column(String(160), index=True)
+    entity_name: Mapped[str] = mapped_column(String(200), default="")
+    title: Mapped[str] = mapped_column(String(240))
+    severity: Mapped[str] = mapped_column(String(16), default="medium", index=True)
+    status: Mapped[str] = mapped_column(String(24), default="firing", index=True)
+    correlation_key: Mapped[str] = mapped_column(String(160))
+    current_value: Mapped[float | None] = mapped_column(Numeric(24, 8), nullable=True)
+    baseline_value: Mapped[float | None] = mapped_column(Numeric(24, 8), nullable=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0)
+    pending_count: Mapped[int] = mapped_column(Integer, default=0)
+    recovery_count: Mapped[int] = mapped_column(Integer, default=0)
+    recurrence_count: Mapped[int] = mapped_column(Integer, default=0)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    latest_observation_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class AlertEvidence(Base):
+    """Frozen reference from an alert to its aggregate observation."""
+
+    __tablename__ = "monitoring_alert_evidence"
+    __table_args__ = (
+        UniqueConstraint("alert_id", "observation_id", name="uq_monitoring_alert_evidence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    alert_id: Mapped[str] = mapped_column(String(40), ForeignKey("monitoring_alert.id", ondelete="CASCADE"), index=True)
+    observation_id: Mapped[str] = mapped_column(String(40), ForeignKey("monitoring_observation.id", ondelete="CASCADE"), index=True)
+    evidence_type: Mapped[str] = mapped_column(String(32), default="observation")
+    snapshot_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AlertDelivery(Base):
+    """Delivery lifecycle separated from the alert business state."""
+
+    __tablename__ = "monitoring_alert_delivery"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_monitoring_alert_delivery_idempotency"),
+        Index("ix_monitoring_delivery_claim", "status", "next_attempt_at", "lease_expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    alert_id: Mapped[str] = mapped_column(String(40), ForeignKey("monitoring_alert.id", ondelete="CASCADE"), index=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    channel: Mapped[str] = mapped_column(String(24), index=True)
+    recipient_user_id: Mapped[str] = mapped_column(String(40), index=True)
+    recipient_address: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    lease_owner: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class MonitoringSourceContract(Base):
+    """Versioned ingestion semantics for incremental and reconciliation reads."""
+
+    __tablename__ = "monitoring_source_contract"
+    __table_args__ = (
+        UniqueConstraint("source_id", "table_name", "version", name="uq_monitoring_source_contract"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    source_id: Mapped[int] = mapped_column(Integer, ForeignKey("data_source.id", ondelete="CASCADE"), index=True)
+    table_name: Mapped[str] = mapped_column(String(160))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    ingestion_mode: Mapped[str] = mapped_column(String(24), default="append")
+    business_time_field: Mapped[str] = mapped_column(String(160))
+    updated_time_field: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    primary_key_fields_json: Mapped[list] = mapped_column(JSON_TYPE, default=list)
+    allowed_lateness_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    lookback_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    reconciliation_seconds: Mapped[int] = mapped_column(Integer, default=86400)
+    status: Mapped[str] = mapped_column(String(24), default="draft", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

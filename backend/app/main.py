@@ -13,10 +13,12 @@ from app.api import (
     datasources,
     deliveries,
     dingtalk,
+    feishu,
     gateway,
     knowledge,
     memory,
     messages,
+    monitoring,
     model_governance,
     modeling,
     operations,
@@ -61,6 +63,9 @@ def create_platform_tables():
 
     seed_admin()
     seed_default_report_scopes()
+    from app.monitoring.seed import seed_monitoring_baseline
+
+    seed_monitoring_baseline()
     try:
         from app.memory.worker import start_worker as start_memory_worker
 
@@ -134,12 +139,14 @@ app.add_middleware(
 app.include_router(security.router)
 app.include_router(auth.router)
 app.include_router(dingtalk.router)
+app.include_router(feishu.router)
 app.include_router(gateway.router)
 app.include_router(resources.router)
 app.include_router(datasources.router)
 app.include_router(deliveries.router)
 app.include_router(knowledge.router)
 app.include_router(messages.router)
+app.include_router(monitoring.router)
 app.include_router(retrieval.router)
 app.include_router(analysis.router)
 app.include_router(skills.router)

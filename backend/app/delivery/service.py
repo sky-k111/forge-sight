@@ -17,13 +17,16 @@ from app.agent.ids import new_id
 from app.db.models import (
     Announcement,
     DeliveryAttempt,
+    DingTalkBinding,
     DomainEventOutbox,
+    FeishuBinding,
     Message,
     MessageRecipient,
     PlatformUser,
     Report,
     ReportDelivery,
     ReportFile,
+    ReportSubscription,
     ReportVersion,
 )
 from app.delivery.provider import MailAttachment, MailProvider, OutgoingMail, ProviderFailure
@@ -32,6 +35,7 @@ from app.reports.repository import (
     claim_outbox_events,
     complete_outbox_event,
     fail_outbox_event,
+    get_or_create_message,
     resolve_audience_scope,
 )
 
@@ -126,6 +130,183 @@ def _existing_or_create_delivery(
         return session.query(ReportDelivery).filter_by(idempotency_key=key).one()
 
 
+def _subscription_channels(session: Session, message: Message) -> tuple[str, ...]:
+    """Expand one report subscription into concrete delivery transports."""
+
+    if message.message_type != "weekly_report":
+        return ("email",)
+    report = session.get(Report, message.related_id)
+    if report is None or not report.subscription_id:
+        return ("email",)
+    subscription = session.get(ReportSubscription, report.subscription_id)
+    value = (subscription.channel if subscription else "email").strip().lower()
+    return {
+        "email": ("email",),
+        "feishu": ("feishu",),
+        "dingtalk": ("dingtalk",),
+        "feishu_dingtalk": ("feishu", "dingtalk"),
+        "all": ("email", "feishu", "dingtalk"),
+    }.get(value, ("email",))
+
+
+def _im_address(
+    session: Session, channel: str, user_id: str
+) -> tuple[str | None, str | None]:
+    if channel == "feishu":
+        binding = session.query(FeishuBinding).filter_by(user_id=user_id).first()
+        if binding is None or binding.bind_status != "bound" or not binding.open_id:
+            return None, "binding_missing"
+        return binding.open_id, None
+    binding = session.query(DingTalkBinding).filter_by(user_id=user_id).first()
+    if binding is None or binding.bind_status != "bound" or not binding.union_id:
+        return None, "binding_missing"
+    return binding.union_id, None
+
+
+def _existing_or_create_im_delivery(
+    session: Session,
+    message: Message,
+    recipient: MessageRecipient,
+    channel: str,
+    now: datetime,
+) -> ReportDelivery:
+    key = f"{channel}:{message.id}:{recipient.user_id}"
+    existing = session.query(ReportDelivery).filter_by(idempotency_key=key).first()
+    if existing is not None:
+        return existing
+    report = session.get(Report, message.related_id)
+    address, reason = _im_address(session, channel, recipient.user_id)
+    user = session.get(PlatformUser, recipient.user_id)
+    if user is None or not user.enabled:
+        reason = "user_not_found" if user is None else "user_disabled"
+    if message.status != "published" or (message.expires_at and message.expires_at <= now):
+        reason = "message_unavailable"
+    if report is None or not _report_access_allowed(session, report, recipient.user_id, now):
+        reason = "data_scope_denied"
+    values = dict(
+        id=new_id("dlv"),
+        message_id=message.id,
+        report_id=message.related_id,
+        version_id=message.report_version_id,
+        subscription_id=report.subscription_id if report else None,
+        channel=channel,
+        status="suppressed" if reason else "queued",
+        attempt=1,
+        attempt_count=0,
+        recipient_user_id=recipient.user_id,
+        recipient_address_snapshot=address,
+        idempotency_key=key,
+        error_category=reason,
+        error_json={"reason": reason} if reason else None,
+        created_at=now,
+        updated_at=now,
+    )
+    try:
+        with session.begin_nested():
+            row = ReportDelivery(**values)
+            session.add(row)
+            session.flush()
+            return row
+    except IntegrityError:
+        return session.query(ReportDelivery).filter_by(idempotency_key=key).one()
+
+
+def enqueue_report_pdf_delivery(
+    session: Session,
+    report_id: str,
+    recipient_user_id: str,
+    channel: str,
+    *,
+    now: datetime | None = None,
+) -> ReportDelivery:
+    """Queue one authorized native-PDF delivery using the normal durable job table."""
+
+    if channel not in {"feishu", "dingtalk"}:
+        raise ValueError("PDF 投递渠道仅支持飞书或钉钉")
+    current = now or datetime.now()
+    report = session.query(Report).filter_by(id=report_id).with_for_update().first()
+    if report is None:
+        raise KeyError(f"报告 {report_id} 不存在")
+    version = session.get(ReportVersion, report.current_version_id)
+    if (
+        report.report_type != "weekly"
+        or report.status != "published"
+        or version is None
+        or version.report_id != report.id
+        or version.status != "published"
+    ):
+        raise ValueError("只有已发布周报可以投递 PDF")
+    user = session.get(PlatformUser, recipient_user_id)
+    if user is None or not user.enabled:
+        raise PermissionError("接收用户不存在或已停用")
+    if not _report_access_allowed(session, report, recipient_user_id, current):
+        raise PermissionError("当前用户的数据范围不允许投递此周报")
+
+    message = get_or_create_message(
+        session,
+        id=new_id("msg"),
+        message_type="weekly_report",
+        source="report-agent",
+        title=report.title,
+        summary=version.summary or "周报已发布，可查看本期完整内容。",
+        related_type="report",
+        related_id=report.id,
+        report_version_id=version.id,
+        priority="normal",
+        is_pinned=False,
+        status="published",
+        idempotency_key=f"inbox:report-version:{version.id}",
+        valid_from=current,
+        published_at=version.published_at or current,
+    )
+    recipient = (
+        session.query(MessageRecipient)
+        .filter_by(message_id=message.id, user_id=recipient_user_id)
+        .first()
+    )
+    if recipient is None:
+        try:
+            with session.begin_nested():
+                recipient = MessageRecipient(
+                    id=new_id("mrc"),
+                    message_id=message.id,
+                    user_id=recipient_user_id,
+                    message_status_snapshot="published",
+                    created_at=current,
+                )
+                session.add(recipient)
+                session.flush()
+        except IntegrityError:
+            recipient = (
+                session.query(MessageRecipient)
+                .filter_by(message_id=message.id, user_id=recipient_user_id)
+                .one()
+            )
+
+    delivery = _existing_or_create_im_delivery(
+        session, message, recipient, channel, current
+    )
+    if delivery.status in {
+        "failed",
+        "retry_wait",
+        "waiting_attachment",
+        "suppressed",
+        "blocked_configuration",
+    }:
+        address, reason = _im_address(session, channel, recipient_user_id)
+        if reason is None:
+            delivery.status = "queued"
+            delivery.recipient_address_snapshot = address
+            delivery.error_category = None
+            delivery.error_json = None
+            delivery.next_retry_at = current
+            delivery.lease_owner = None
+            delivery.lease_expires_at = None
+            delivery.updated_at = current
+    session.flush()
+    return delivery
+
+
 def consume_message_published_event(
     session: Session,
     event_id: str,
@@ -133,7 +314,7 @@ def consume_message_published_event(
     *,
     now: datetime | None = None,
 ) -> int:
-    """Expand N's single publication event into per-recipient email jobs."""
+    """Expand N's single publication event into per-recipient channel jobs."""
 
     current = now or datetime.now()
     event = session.query(DomainEventOutbox).filter_by(id=event_id).with_for_update().one()
@@ -152,7 +333,13 @@ def consume_message_published_event(
         .all()
     )
     for recipient in recipients:
-        _existing_or_create_delivery(session, message, recipient, current)
+        for channel in _subscription_channels(session, message):
+            if channel == "email":
+                _existing_or_create_delivery(session, message, recipient, current)
+            else:
+                _existing_or_create_im_delivery(
+                    session, message, recipient, channel, current
+                )
     complete_outbox_event(session, event.id, worker_id, now=current)
     return len(recipients)
 

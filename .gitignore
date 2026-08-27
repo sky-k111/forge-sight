@@ -19,6 +19,7 @@ coverage/
 output/
 report_artifacts/
 modeling_artifacts/
+ml_artifacts/
 
 # Local environment files
 .env
