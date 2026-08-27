@@ -620,6 +620,37 @@ CREATE INDEX IF NOT EXISTS ix_message_report_version_id ON message (report_versi
 CREATE INDEX IF NOT EXISTS ix_message_source ON message (source);
 CREATE INDEX IF NOT EXISTS ix_message_status ON message (status);
 
+CREATE TABLE IF NOT EXISTS metric_candidate (
+	id VARCHAR(36) NOT NULL,
+	source_id INTEGER NOT NULL,
+	candidate_kind VARCHAR(24) NOT NULL,
+	target_metric_id VARCHAR(20),
+	name VARCHAR(100) NOT NULL,
+	topic VARCHAR(50) NOT NULL,
+	canonical_payload_json JSONB NOT NULL,
+	binding_payload_json JSONB NOT NULL,
+	evidence_json JSONB NOT NULL,
+	validation_json JSONB NOT NULL,
+	confidence_score INTEGER NOT NULL,
+	status VARCHAR(20) NOT NULL,
+	fingerprint VARCHAR(64) NOT NULL,
+	generator_version VARCHAR(32) NOT NULL,
+	review_note TEXT NOT NULL,
+	reviewed_by VARCHAR(64),
+	accepted_metric_id VARCHAR(20),
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	reviewed_at TIMESTAMP WITHOUT TIME ZONE,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_metric_candidate_source_fingerprint UNIQUE (source_id, fingerprint),
+	CONSTRAINT ck_metric_candidate_kind CHECK (candidate_kind IN ('new_metric', 'source_binding')),
+	CONSTRAINT ck_metric_candidate_status CHECK (status IN ('pending', 'accepted', 'rejected', 'superseded')),
+	CONSTRAINT ck_metric_candidate_confidence CHECK (confidence_score BETWEEN 0 AND 100)
+);
+CREATE INDEX IF NOT EXISTS ix_metric_candidate_source_id ON metric_candidate (source_id);
+CREATE INDEX IF NOT EXISTS ix_metric_candidate_status ON metric_candidate (status);
+CREATE INDEX IF NOT EXISTS ix_metric_candidate_target_metric_id ON metric_candidate (target_metric_id);
+
 CREATE TABLE IF NOT EXISTS metric_field_binding (
 	id SERIAL NOT NULL,
 	binding_id INTEGER NOT NULL,

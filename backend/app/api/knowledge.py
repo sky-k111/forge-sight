@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.knowledge import service
+from app.knowledge import candidates, service
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
@@ -127,6 +127,35 @@ class MetricPayload(BaseModel):
     fieldMappings: list[dict] | None = None
     bindingNotes: str | None = None
     precision: str | None = None
+
+
+class CandidateReviewPayload(BaseModel):
+    reason: str = Field(default="", max_length=1000)
+    reviewer: str = Field(default="管理员", max_length=64)
+
+
+@router.get("/metric-candidates")
+def get_metric_candidates(
+    sourceId: int = Query(...),
+    status: str | None = Query(default=None),
+):
+    return _call(candidates.list_candidates, sourceId, status)
+
+
+@router.post("/metric-candidates/generate")
+def generate_metric_candidates(sourceId: int = Query(...)):
+    return _call(candidates.generate_candidates, sourceId)
+
+
+@router.post("/metric-candidates/{candidate_id}/accept")
+def accept_metric_candidate(candidate_id: str, payload: CandidateReviewPayload | None = None):
+    reviewer = payload.reviewer if payload else "管理员"
+    return _call(candidates.accept_candidate, candidate_id, reviewer)
+
+
+@router.post("/metric-candidates/{candidate_id}/reject")
+def reject_metric_candidate(candidate_id: str, payload: CandidateReviewPayload):
+    return _call(candidates.reject_candidate, candidate_id, payload.reason, payload.reviewer)
 
 
 @router.get("/metrics")

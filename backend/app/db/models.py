@@ -253,6 +253,46 @@ class MetricFieldBinding(Base):
     transform_expression: Mapped[str] = mapped_column(Text, default="", comment="单位换算或枚举归一表达式")
 
 
+class MetricCandidate(Base):
+    """AI 生成的指标/数据源绑定候选；候选永远不能直接成为已发布口径。"""
+
+    __tablename__ = "metric_candidate"
+    __table_args__ = (
+        UniqueConstraint("source_id", "fingerprint", name="uq_metric_candidate_source_fingerprint"),
+        CheckConstraint("candidate_kind IN ('new_metric', 'source_binding')", name="ck_metric_candidate_kind"),
+        CheckConstraint(
+            "status IN ('pending', 'accepted', 'rejected', 'superseded')",
+            name="ck_metric_candidate_status",
+        ),
+        CheckConstraint("confidence_score BETWEEN 0 AND 100", name="ck_metric_candidate_confidence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_id: Mapped[int] = mapped_column(Integer, index=True)
+    candidate_kind: Mapped[str] = mapped_column(
+        String(24), default="new_metric", comment="new_metric / source_binding"
+    )
+    target_metric_id: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    topic: Mapped[str] = mapped_column(String(50))
+    canonical_payload_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    binding_payload_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    evidence_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    validation_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    confidence_score: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(
+        String(20), default="pending", index=True, comment="pending / accepted / rejected / superseded"
+    )
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    generator_version: Mapped[str] = mapped_column(String(32), default="metric-candidate-v1")
+    review_note: Mapped[str] = mapped_column(Text, default="")
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    accepted_metric_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class KnowledgeReference(Base):
     """知识引用索引，用于阻止删除仍被分析模板、任务或其他知识项引用的内容。"""
 

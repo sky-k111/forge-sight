@@ -82,3 +82,19 @@ export function submitMetricForReview(id, sourceId) {
 export function deleteMetric(id) {
   return httpDelete(`/api/knowledge/metrics/${id}`);
 }
+
+export function listMetricCandidates({ sourceId, status } = {}) {
+  return httpGet(`/api/knowledge/metric-candidates${queryString({ sourceId, status })}`);
+}
+
+export function generateMetricCandidates(sourceId) {
+  return httpPost(`/api/knowledge/metric-candidates/generate${queryString({ sourceId })}`);
+}
+
+export function acceptMetricCandidate(id) {
+  return httpPost(`/api/knowledge/metric-candidates/${id}/accept`, { reviewer: "管理员" });
+}
+
+export function rejectMetricCandidate(id, reason = "") {
+  return httpPost(`/api/knowledge/metric-candidates/${id}/reject`, { reviewer: "管理员", reason });
+}

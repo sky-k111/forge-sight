@@ -2,7 +2,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
 import { Button, Card, EmptyState, ErrorNotice, Modal, PageFrame, RouteSkeleton, StatusPill } from "../../components/ui";
-import { deleteMetric, listMetrics, listObjects, listRules, listTopics, publishMetric, saveMetric } from "../../api/knowledge";
+import {
+  acceptMetricCandidate,
+  deleteMetric,
+  generateMetricCandidates,
+  listMetricCandidates,
+  listMetrics,
+  listObjects,
+  listRules,
+  listTopics,
+  publishMetric,
+  rejectMetricCandidate,
+  saveMetric,
+} from "../../api/knowledge";
 import { getSemanticIndexStatus, listSources } from "../../api/datasources";
 import SourceTypeMark from "../../components/ui/SourceTypeMark";
 
@@ -112,6 +124,8 @@ export default function KnowledgePage() {
   const [metricStatusFilter, setMetricStatusFilter] = useState("all");
   const [metricTopicFilter, setMetricTopicFilter] = useState("all");
   const [semanticIndex, setSemanticIndex] = useState(null);
+  const [candidateBusy, setCandidateBusy] = useState(false);
+  const [candidateActionId, setCandidateActionId] = useState(null);
 
   const load = async () => {
     setError(null);
@@ -120,9 +134,12 @@ export default function KnowledgePage() {
     try {
       const [sources, objects, rules, topics] = await Promise.all([listSources(), listObjects(), listRules(), listTopics()]);
       const sourceId = currentSourceId ?? sources.find((item) => item.isDefault)?.id ?? sources[0]?.id ?? null;
-      const metrics = await listMetrics({ sourceId });
+      const [metrics, candidates] = await Promise.all([
+        listMetrics({ sourceId }),
+        sourceId ? listMetricCandidates({ sourceId }) : Promise.resolve([]),
+      ]);
       setCurrentSourceId(sourceId);
-      setData({ metrics, objects, rules, topics, sources });
+      setData({ metrics, candidates, objects, rules, topics, sources });
       setSelectedMetricId((current) => current ?? metrics[0]?.id ?? null);
     } catch (nextError) {
       setError(nextError);
@@ -155,6 +172,11 @@ export default function KnowledgePage() {
     setSelectedMetricId(selectId ?? metrics[0]?.id ?? null);
   };
 
+  const refreshCandidates = async () => {
+    const candidates = currentSourceId ? await listMetricCandidates({ sourceId: currentSourceId }) : [];
+    setData((current) => ({ ...current, candidates }));
+  };
+
   const handleDelete = async (id) => {
     setActionError("");
     try {
@@ -169,8 +191,11 @@ export default function KnowledgePage() {
     setCurrentSourceId(sourceId);
     setActionError("");
     try {
-      const metrics = await listMetrics({ sourceId });
-      setData((current) => ({ ...current, metrics }));
+      const [metrics, candidates] = await Promise.all([
+        listMetrics({ sourceId }),
+        listMetricCandidates({ sourceId }),
+      ]);
+      setData((current) => ({ ...current, metrics, candidates }));
       setSelectedMetricId((current) => metrics.some((metric) => metric.id === current) ? current : metrics[0]?.id ?? null);
     } catch (nextError) {
       setActionError(nextError.message);
@@ -184,6 +209,39 @@ export default function KnowledgePage() {
       await refreshMetrics(id);
     } catch (nextError) {
       setActionError(nextError.message);
+    }
+  };
+
+  const handleGenerateCandidates = async () => {
+    if (!currentSourceId || candidateBusy) return;
+    setCandidateBusy(true);
+    setActionError("");
+    try {
+      await generateMetricCandidates(currentSourceId);
+      await refreshCandidates();
+      setTab("candidates");
+    } catch (nextError) {
+      setActionError(nextError.message);
+    } finally {
+      setCandidateBusy(false);
+    }
+  };
+
+  const handleCandidateReview = async (candidate, accepted) => {
+    setCandidateActionId(candidate.id);
+    setActionError("");
+    try {
+      if (accepted) {
+        const result = await acceptMetricCandidate(candidate.id);
+        await Promise.all([refreshMetrics(result.metric?.id), refreshCandidates()]);
+      } else {
+        await rejectMetricCandidate(candidate.id, "管理员审核未采纳");
+        await refreshCandidates();
+      }
+    } catch (nextError) {
+      setActionError(nextError.message);
+    } finally {
+      setCandidateActionId(null);
     }
   };
 
@@ -202,9 +260,11 @@ export default function KnowledgePage() {
   const linkedMetricCount = data?.metrics.filter((metric) => metric.source).length ?? 0;
   const linkedCoverage = data?.metrics.length ? Math.round((linkedMetricCount / data.metrics.length) * 100) : 0;
   const pendingCount = data?.metrics.filter((metric) => !metric.availableForAnalysis).length ?? 0;
+  const pendingCandidateCount = data?.candidates?.filter((candidate) => candidate.status === "pending").length ?? 0;
 
   const tabs = [
     { id: "metrics", label: "指标口径", count: data?.metrics.length },
+    { id: "candidates", label: "口径候选", count: pendingCandidateCount },
     { id: "objects", label: "业务对象", count: data?.objects.length },
     { id: "rules", label: "业务规则", count: data?.rules.length },
     { id: "topics", label: "分析主题", count: data?.topics.length },
@@ -233,6 +293,7 @@ export default function KnowledgePage() {
           <span><b className="mr-1 font-mono text-base font-semibold text-ink">{knowledgeCount}</b>知识项</span>
           <span><b className="mr-1 font-mono text-base font-semibold text-ink">{linkedCoverage}%</b>指标已关联数据</span>
           <span><b className="mr-1 font-mono text-base font-semibold text-amber">{pendingCount}</b>待审核或验证</span>
+          <span><b className="mr-1 font-mono text-base font-semibold text-primary">{pendingCandidateCount}</b>AI 候选</span>
         </div>
         <div className="ml-auto">
           <div className="mb-2 flex justify-end">
@@ -248,6 +309,9 @@ export default function KnowledgePage() {
             onChange={changeSource}
           />
         </div>
+        <Button onClick={handleGenerateCandidates} disabled={!currentSourceId || candidateBusy}>
+          <Icon name="refresh" size={14} />{candidateBusy ? "生成中" : "生成口径候选"}
+        </Button>
         <Button variant="primary" onClick={() => setEditor({})}><Icon name="plus" size={15} />新增知识</Button>
       </Card>
 
@@ -359,6 +423,15 @@ export default function KnowledgePage() {
           )}
         </div>
       )}
+      {tab === "candidates" && (
+        <MetricCandidates
+          items={data.candidates ?? []}
+          busyId={candidateActionId}
+          onGenerate={handleGenerateCandidates}
+          generating={candidateBusy}
+          onReview={handleCandidateReview}
+        />
+      )}
       {tab === "objects" && <KnowledgeObjects objects={data.objects} />}
       {tab === "rules" && <KnowledgeRules rules={data.rules} />}
       {tab === "topics" && <KnowledgeTopics topics={data.topics} onOpen={(topic) => { setTab("metrics"); setSearch(topic.name); }} />}
@@ -374,6 +447,123 @@ export default function KnowledgePage() {
         />
       )}
     </PageFrame>
+  );
+}
+
+function MetricCandidates({ items, busyId, onGenerate, generating, onReview }) {
+  const ordered = [...items].sort((left, right) => {
+    const weight = { pending: 0, accepted: 1, rejected: 2, superseded: 3 };
+    return (weight[left.status] ?? 9) - (weight[right.status] ?? 9);
+  });
+  const statusMeta = {
+    pending: { label: "待管理员确认", tone: "amber" },
+    accepted: { label: "已进入正式审核", tone: "green" },
+    rejected: { label: "已驳回", tone: "red" },
+    superseded: { label: "已被替代", tone: "blue" },
+  };
+  if (!ordered.length) {
+    return (
+      <Card className="grid min-h-[300px] place-items-center p-8">
+        <div className="grid max-w-md justify-items-center gap-3 text-center">
+          <span className="grid h-11 w-11 place-items-center rounded-full bg-primary-soft text-primary"><Icon name="knowledge" /></span>
+          <div>
+            <h3 className="text-base font-semibold text-ink">当前数据源还没有口径候选</h3>
+            <p className="mt-1 text-xs leading-5 text-muted">系统只基于已确认登记的表、字段和关联关系生成草案。候选接受后仍为待审核，不会自动发布给 Agent。</p>
+          </div>
+          <Button variant="primary" onClick={onGenerate} disabled={generating}>
+            <Icon name="refresh" size={14} />{generating ? "正在分析元数据" : "分析并生成候选"}
+          </Button>
+        </div>
+      </Card>
+    );
+  }
+  return (
+    <div className="grid gap-3.5">
+      <Card className="flex flex-wrap items-center gap-4 px-4 py-3">
+        <span className="grid h-9 w-9 place-items-center rounded-control bg-primary-soft text-primary"><Icon name="shield" /></span>
+        <div className="min-w-0 flex-1">
+          <h3 className="text-body font-semibold text-ink">AI 口径候选审核</h3>
+          <p className="mt-0.5 text-[11px] text-muted">先自动校验物理字段、SQL 表达式与跨表路径；接受后进入正式口径的待审核状态，发布仍需人工确认。</p>
+        </div>
+        <Button onClick={onGenerate} disabled={generating}><Icon name="refresh" size={14} />{generating ? "生成中" : "重新扫描"}</Button>
+      </Card>
+      <div className="grid gap-3 xl:grid-cols-2">
+        {ordered.map((candidate) => {
+          const valid = Boolean(candidate.validation?.valid);
+          const status = statusMeta[candidate.status] ?? statusMeta.pending;
+          const canonical = candidate.canonical ?? {};
+          const binding = candidate.binding ?? {};
+          const isBusy = busyId === candidate.id;
+          return (
+            <Card key={candidate.id} className="overflow-hidden">
+              <div className="flex items-start gap-3 border-b border-line px-4 py-3.5">
+                <span className={cn(
+                  "grid h-9 w-9 shrink-0 place-items-center rounded-control",
+                  valid ? "bg-teal-soft text-teal" : "bg-red-soft text-red",
+                )}>
+                  <Icon name={valid ? "check" : "alert"} size={17} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="truncate text-sm font-semibold text-ink">{candidate.name}</h3>
+                    <StatusPill tone={status.tone}>{status.label}</StatusPill>
+                    <span className="rounded-tag bg-surface-3 px-1.5 py-0.5 text-[10px] text-muted">
+                      {candidate.kind === "source_binding" ? `补充 ${candidate.targetMetricId} 绑定` : "新指标"}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-muted">{candidate.topic} · 证据置信度 {candidate.confidence}%</p>
+                </div>
+              </div>
+              <div className="grid gap-3 p-4">
+                <div>
+                  <span className="text-[10px] font-semibold tracking-wide text-faint">业务定义</span>
+                  <p className="mt-1 text-xs leading-5 text-ink-2">{canonical.definition || "未提供定义"}</p>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-control border border-line bg-surface-2 p-2.5">
+                    <span className="text-[10px] font-semibold text-muted">统一业务公式</span>
+                    <code className="mt-1 block break-words font-mono text-[11px] leading-5 text-ink">{canonical.formula || "—"}</code>
+                  </div>
+                  <div className="rounded-control border border-line bg-surface-2 p-2.5">
+                    <span className="text-[10px] font-semibold text-muted">当前数据源物理公式</span>
+                    <code className="mt-1 block break-words font-mono text-[11px] leading-5 text-ink">{binding.physicalFormula || "—"}</code>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5 text-[10px] text-muted">
+                  {(binding.sourceTables ?? []).map((table) => <span key={table} className="rounded-tag border border-line px-2 py-1 font-mono">{table}</span>)}
+                  {binding.bindingTimeField && <span className="rounded-tag border border-line px-2 py-1">时间：{binding.bindingTimeField}</span>}
+                </div>
+                <div className={cn(
+                  "rounded-control border px-3 py-2.5 text-[11px] leading-5",
+                  valid ? "border-teal/20 bg-teal-soft text-teal" : "border-red/20 bg-red-soft text-red",
+                )}>
+                  <strong className="block">{valid ? "自动校验通过" : "自动校验未通过"}</strong>
+                  {valid ? (
+                    <span>{candidate.evidence?.reason || "表、字段、公式与关联路径均来自已登记元数据。"}</span>
+                  ) : (
+                    <ul className="mt-1 list-disc pl-4">
+                      {(candidate.validation?.errors ?? ["候选信息不完整"]).map((error) => <li key={error}>{error}</li>)}
+                    </ul>
+                  )}
+                  {(candidate.validation?.warnings ?? []).map((warning) => <p key={warning} className="mt-1 text-amber">注意：{warning}</p>)}
+                </div>
+              </div>
+              {candidate.status === "pending" && (
+                <div className="flex items-center justify-between gap-3 border-t border-line bg-surface-2 px-4 py-3">
+                  <span className="text-[10px] text-faint">接受 ≠ 发布；仍需审核统一口径或验证当前数据源绑定</span>
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={() => onReview(candidate, false)} disabled={isBusy}>驳回</Button>
+                    <Button size="sm" variant="primary" onClick={() => onReview(candidate, true)} disabled={!valid || isBusy}>
+                      {isBusy ? "处理中" : "接受并进入正式审核"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

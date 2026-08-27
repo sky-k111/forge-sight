@@ -4,6 +4,7 @@ import cn from "../../lib/cn";
 import { Button, Card, EmptyState, ErrorNotice, Modal, PageFrame, RouteSkeleton, SectionHeader, StatusPill } from "../../components/ui";
 import { confirmTableSemantics, getTableFields, getTablePreview, listTables, listUnregisteredTables, suggestTableSemantics } from "../../api/resources";
 import { createSource, getSemanticIndexStatus, listSources, rebuildSemanticIndex, retrySemanticIndexJob, scanSource, testSource, updateSource } from "../../api/datasources";
+import { generateMetricCandidates } from "../../api/knowledge";
 import { buildSchemaLinkPath, getSchemaNodeStyle, SCHEMA_GRAPH_HEIGHT, SCHEMA_GRAPH_WIDTH } from "./schemaGraphLayout";
 import SourceTypeMark from "../../components/ui/SourceTypeMark";
 
@@ -242,9 +243,19 @@ export default function ResourcesPage() {
     setConfirming(true);
     try {
       const created = await confirmTableSemantics(suggestion.name, pendingSourceId, suggestion);
-      setIntegrated(created.name);
+      const remaining = unregistered.filter((table) => table.name !== created.name);
+      let notice = created.name;
+      if (remaining.length === 0) {
+        try {
+          const candidateResult = await generateMetricCandidates(pendingSourceId);
+          notice = `${created.name}；已生成 ${candidateResult.generated ?? 0} 项口径候选`;
+        } catch {
+          notice = `${created.name}；口径候选可在业务知识库中重试生成`;
+        }
+      }
+      setIntegrated(notice);
       setSuggestion(null);
-      setUnregistered((list) => list.filter((table) => table.name !== created.name));
+      setUnregistered(remaining);
       switchSource(pendingSourceId);
       setSelectedName(created.name);
       await refreshSemanticIndex();
