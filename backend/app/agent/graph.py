@@ -15,6 +15,7 @@ from langgraph.types import interrupt
 from app.agent.budgets import BudgetExceeded
 from app.agent.intent import build_intent_plan, build_request_route
 from app.agent.state import AnalysisState
+from app.agent.system_utility import build_system_utility_response
 from app.gateway.executor import ExecutionResult
 from app.gateway.sql_validator import SqlCheckResult, validate_dialect_compatibility
 
@@ -750,10 +751,20 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             "intent_kind": route["kind"],
             "analysis_question": route["analysisQuestion"],
             "direct_response": route["conversationResponse"],
+            "utility_question": route["utilityQuestion"],
             "request_segments": route["segments"],
             "blocked": False,
             "error": None,
         }
+
+    def system_utility(state: AnalysisState) -> dict:
+        response = build_system_utility_response(
+            state.get("utility_question", ""),
+            state.get("source_id"),
+        )
+        existing = str(state.get("direct_response") or "").strip()
+        combined = "\n\n".join(item for item in (existing, response) if item)
+        return {"direct_response": combined}
 
     def intent_guard(state: AnalysisState) -> dict:
         lowered = state.get("analysis_question", state["user_question"]).lower()
@@ -1270,7 +1281,12 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         return {"task_results": results, "task_index": state.get("task_index", 0) + 1}
 
     def after_route(state: AnalysisState) -> str:
+        if state.get("utility_question"):
+            return "system_utility"
         return END if not state.get("analysis_question") else "intent_guard"
+
+    def after_utility(state: AnalysisState) -> str:
+        return "intent_guard" if state.get("analysis_question") else END
 
     def after_guard(state: AnalysisState) -> str:
         return END if state.get("blocked") else "plan_tasks"
@@ -1304,6 +1320,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
 
     graph = StateGraph(AnalysisState)
     graph.add_node("route_request", route_request)
+    graph.add_node("system_utility", system_utility)
     graph.add_node("intent_guard", intent_guard)
     graph.add_node("plan_tasks", plan_tasks)
     graph.add_node("activate_task", activate_task)
@@ -1319,6 +1336,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
     graph.add_node("advance_task", advance_task)
     graph.add_edge(START, "route_request")
     graph.add_conditional_edges("route_request", after_route)
+    graph.add_conditional_edges("system_utility", after_utility)
     graph.add_conditional_edges("intent_guard", after_guard)
     graph.add_edge("plan_tasks", "activate_task")
     graph.add_edge("activate_task", "retrieve_memory")

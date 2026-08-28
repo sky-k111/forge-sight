@@ -13,6 +13,7 @@ from app.agent.intent import (
     is_deterministic_conversation,
     is_report_request,
 )
+from app.agent.system_utility import build_system_utility_response
 from app.config import settings
 from app.db.models import (
     AnalysisArtifact,
@@ -182,7 +183,7 @@ def create_run(
         ]
         request_kind = classify_request_kind(normalized_question, conversation_context)
         report_request = is_report_request(normalized_question)
-        inline_conversation = request_kind in {"conversation", "unknown"}
+        inline_conversation = request_kind in {"conversation", "utility", "unknown"}
         deterministic_conversation = (
             inline_conversation and is_deterministic_conversation(normalized_question)
         )
@@ -240,6 +241,7 @@ def create_run(
         )
         session.commit()
         run_id = run.id
+        run_source_id = parent.source_id
         accepted = _run_acceptance(run)
     if inline_conversation:
         # Known turns are model-free; open conversation gets one small model call.
@@ -252,6 +254,13 @@ def create_run(
 
         if report_request:
             execute_inline_report_clarification(run_id)
+        elif request_kind == "utility":
+            execute_inline_conversation(
+                run_id,
+                build_system_utility_response(normalized_question, run_source_id),
+                intent_kind="utility",
+                step_node="system_utility",
+            )
         elif request_kind == "unknown":
             execute_inline_route(run_id)
         else:

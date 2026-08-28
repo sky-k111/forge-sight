@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.agent.intent import build_intent_plan, build_request_route, classify_analysis_type, classify_request_kind
+from app.agent.system_utility import build_system_utility_response
 
 
 def test_obvious_smalltalk_is_routed_away_from_analysis():
@@ -14,6 +15,31 @@ def test_obvious_smalltalk_is_routed_away_from_analysis():
     assert classify_request_kind("明年下雨吗") == "conversation"
     assert classify_request_kind("分析最近 7 天的工序良率") == "analysis"
     assert classify_request_kind("什么是工序良率") == "analysis"
+
+
+def test_system_utility_is_deterministic_and_does_not_enter_analysis():
+    assert classify_request_kind("现在几点？") == "utility"
+    assert classify_request_kind("今天星期几？") == "utility"
+    assert classify_request_kind("当前使用哪个数据源？") == "utility"
+    assert classify_request_kind("数据更新到什么时候？") == "utility"
+
+    response = build_system_utility_response(
+        "现在几点？",
+        None,
+        now=datetime(2026, 8, 28, 9, 35, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+    assert "2026年08月28日 09:35" in response
+    assert "星期五" in response
+    assert "Asia/Shanghai" in response
+
+
+def test_mixed_utility_and_analysis_preserves_both_routes():
+    route = build_request_route("现在几点；分析最近 7 天的产量趋势")
+
+    assert route["kind"] == "mixed"
+    assert route["utilityQuestion"] == "现在几点"
+    assert route["analysisQuestion"] == "分析最近 7 天的产量趋势"
+    assert [item["kind"] for item in route["segments"]] == ["utility", "analysis"]
 
 
 def test_bare_report_request_asks_for_report_scope_instead_of_entering_data_analysis():

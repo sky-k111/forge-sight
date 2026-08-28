@@ -12,6 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.agent.ids import new_id
+from app.agent.system_utility import is_system_utility_request
 
 ANALYSIS_VERBS = (
     "分析", "统计", "比较", "对比", "查找", "查询", "找出", "查看", "计算", "汇总", "排名",
@@ -120,7 +121,16 @@ def is_deterministic_conversation(text: str) -> bool:
     """Whether a fast, model-free ForgeSight response fully covers this turn."""
 
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
-    return not normalized or _is_known_conversation(normalized)
+    return not normalized or _is_known_conversation(normalized) or _is_pure_system_utility(normalized)
+
+
+def _is_pure_system_utility(text: str) -> bool:
+    """Keep utility lookup deterministic without swallowing a real analysis ask."""
+
+    if not is_system_utility_request(text) or _has_analysis_verb(text):
+        return False
+    utility_safe_terms = {"数据", "数据库", "数据表", "字段"}
+    return not any(term in text for term in BUSINESS_TERMS if term not in utility_safe_terms)
 
 
 def classify_request_kind(
@@ -131,6 +141,8 @@ def classify_request_kind(
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
     if not normalized:
         return "conversation"
+    if _is_pure_system_utility(normalized):
+        return "utility"
     # A bare report request does not contain a metric, period, or data scope.
     # Keep it in the conversation path so it can ask for the missing report
     # parameters instead of falling through to semantic retrieval and returning
@@ -204,21 +216,24 @@ def build_request_route(
     for index, segment in enumerate(segments):
         local_kind = classify_request_kind(segment, conversation_context)
         kind = labels.get(index, local_kind)
-        if kind not in {"analysis", "conversation", "report"}:
+        if kind not in {"analysis", "conversation", "report", "utility"}:
             kind = "unknown"
         classified.append({"index": index, "text": segment, "kind": kind})
 
     analysis_parts = [item["text"] for item in classified if item["kind"] == "analysis"]
     conversation_parts = [item["text"] for item in classified if item["kind"] == "conversation"]
     report_parts = [item["text"] for item in classified if item["kind"] == "report"]
+    utility_parts = [item["text"] for item in classified if item["kind"] == "utility"]
     unknown_parts = [item for item in classified if item["kind"] == "unknown"]
     route_kind = (
         "mixed"
-        if analysis_parts and (conversation_parts or report_parts)
+        if analysis_parts and (conversation_parts or report_parts or utility_parts)
         else "analysis"
         if analysis_parts
         else "report"
         if report_parts
+        else "utility"
+        if utility_parts
         else "conversation"
     )
     return {
@@ -226,6 +241,8 @@ def build_request_route(
         "segments": classified,
         "unknownSegments": unknown_parts,
         "reportSegments": [item for item in classified if item["kind"] == "report"],
+        "utilitySegments": [item for item in classified if item["kind"] == "utility"],
+        "utilityQuestion": "；".join(utility_parts),
         "analysisQuestion": "；".join(analysis_parts),
         "conversationResponse": build_conversation_response(conversation_parts, mixed=bool(analysis_parts)),
     }

@@ -331,6 +331,32 @@ def test_known_role_question_is_completed_before_the_worker_poll(analysis_sessio
     assert "只读" in snapshot["assistantMessage"]["content"]
 
 
+def test_clock_utility_completes_inline_without_llm_or_sql(analysis_session):
+    created = service.create_session("系统工具测试", 1, "u-utility")
+
+    accepted = service.create_run(created["id"], "现在几点？", "utility-idem")
+    snapshot = service.get_run(accepted["runId"])
+
+    assert accepted["status"] == "succeeded"
+    assert snapshot["status"] == "succeeded"
+    assert snapshot["tasks"] == []
+    assert snapshot["usage"]["callCount"] == 0
+    assert [step["stepKey"] for step in snapshot["steps"]] == ["system.utility"]
+    assert "Asia/Shanghai" in snapshot["assistantMessage"]["content"]
+
+
+def test_scope_utility_reads_the_session_data_source(analysis_session):
+    created = service.create_session("范围工具测试", 1, "u-utility-scope")
+
+    accepted = service.create_run(created["id"], "当前使用哪个数据源？", "utility-scope-idem")
+    snapshot = service.get_run(accepted["runId"])
+
+    assert accepted["status"] == "succeeded"
+    assert snapshot["usage"]["callCount"] == 0
+    assert "阶段5测试数据源" in snapshot["assistantMessage"]["content"]
+    assert "phase5_test" in snapshot["assistantMessage"]["content"]
+
+
 def test_chat_report_request_creates_report_with_session_scope(analysis_session, monkeypatch):
     from app.reports import service as report_service
 

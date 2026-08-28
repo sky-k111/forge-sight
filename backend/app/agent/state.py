@@ -15,6 +15,7 @@ class AnalysisState(TypedDict, total=False):
     memory_context: dict[str, Any]
     intent_kind: str
     direct_response: str
+    utility_question: str
     request_segments: list[dict[str, Any]]
     preclassified_route_labels: dict[int, str]
     preclassified_route_responses: dict[int, str]

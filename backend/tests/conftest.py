@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 from app.agent import runner as runner_service
 from app.agent import service as analysis_service
 from app.agent import usage as usage_service
+from app.agent import system_utility as system_utility_service
 from app.api import analysis as analysis_api
 from app.config import settings
 from app.db import platform as platform_db
@@ -141,6 +142,7 @@ def analysis_session(monkeypatch):
     monkeypatch.setattr(analysis_service, "PlatformSession", session_factory)
     monkeypatch.setattr(usage_service, "PlatformSession", session_factory)
     monkeypatch.setattr(runner_service, "PlatformSession", session_factory)
+    monkeypatch.setattr(system_utility_service, "PlatformSession", session_factory)
     # HTTP 守卫（租户/归属校验）在 API 模块内开自己的会话，必须指向同一测试库。
     monkeypatch.setattr(analysis_api, "PlatformSession", session_factory)
     with session_factory() as session:

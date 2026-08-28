@@ -59,6 +59,7 @@ TERMINAL_STATUSES = {"succeeded", "failed", "blocked", "cancelled"}
 
 NODE_META = {
     "route_request": ("intent.route", 0, "判断问题类型"),
+    "system_utility": ("system.utility", 1, "读取系统与数据范围"),
     "intent_guard": ("intent.guard", 1, "检查只读分析边界"),
     "plan_tasks": ("intent.parse", 2, "理解并拆解业务问题"),
     "retrieve_memory": ("memory.retrieve", 3, "召回相关记忆"),
@@ -631,7 +632,13 @@ def _mark_unexpected_failure(run_id: str, exc: Exception) -> None:
         session.commit()
 
 
-def execute_inline_conversation(run_id: str, direct_response: str | None = None) -> dict:
+def execute_inline_conversation(
+    run_id: str,
+    direct_response: str | None = None,
+    *,
+    intent_kind: str = "conversation",
+    step_node: str = "route_request",
+) -> dict:
     """Complete a non-data turn without entering retrieval/SQL worker stages."""
 
     with PlatformSession() as session:
@@ -690,7 +697,7 @@ def execute_inline_conversation(run_id: str, direct_response: str | None = None)
             )
 
     update = {
-        "intent_kind": "conversation",
+        "intent_kind": intent_kind,
         "analysis_question": "",
         "direct_response": response,
         "tasks": [],
@@ -698,7 +705,7 @@ def execute_inline_conversation(run_id: str, direct_response: str | None = None)
         "error": None,
     }
     state.update(update)
-    _persist_update(run_id, "route_request", update, state)
+    _persist_update(run_id, step_node, update, state)
     _finish_run(run_id, state)
     return {"runId": run_id, "status": "succeeded"}
 
