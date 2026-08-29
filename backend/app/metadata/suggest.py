@@ -26,23 +26,37 @@ def _parse_json(text: str) -> dict:
     return json.loads(text)
 
 
-def suggest_table_semantics(table_name: str, source_id: int) -> dict:
+def _resolve_table(session, table_name: str, source_id: int, schema_name: str | None) -> DataTable:
+    query = session.query(DataTable).filter_by(source_id=source_id, name=table_name)
+    if schema_name is not None:
+        query = query.filter_by(schema_name=schema_name)
+    rows = query.all()
+    if len(rows) > 1:
+        raise ValueError("存在同名表，请指定 schemaName")
+    if not rows:
+        qualified = f"{schema_name}.{table_name}" if schema_name else table_name
+        raise KeyError(f"数据表 {qualified} 不存在")
+    return rows[0]
+
+
+def suggest_table_semantics(table_name: str, source_id: int, schema_name: str | None = None) -> dict:
     with PlatformSession() as session:
-        table = session.query(DataTable).filter_by(source_id=source_id, name=table_name).first()
-        if table is None:
-            raise KeyError(f"数据表 {table_name} 不存在")
+        table = _resolve_table(session, table_name, source_id, schema_name)
         fields = (
             session.query(TableField)
-            .filter_by(source_id=source_id, table_name=table_name)
+            .filter_by(source_id=source_id, schema_name=table.schema_name, table_name=table_name)
             .order_by(TableField.ordinal)
             .all()
         )
         field_desc = "\n".join(
             f"- {f.name} ({f.data_type}) 样例: {f.sample_value or '无'}" for f in fields
         )
-        context = f"表名: {table.name}\n行数: {table.row_count}\n字段:\n{field_desc}"
+        qualified_name = f"{table.schema_name}.{table.name}" if table.schema_name else table.name
+        context = f"表名: {qualified_name}\n行数: {table.row_count}\n字段:\n{field_desc}"
         existing = session.query(DataTable).filter_by(source_id=source_id, registered=True).all()
-        existing_desc = "、".join(f"{t.name}（{t.cn_name}）" for t in existing) or "无"
+        existing_desc = "、".join(
+            f"{f'{t.schema_name}.' if t.schema_name else ''}{t.name}（{t.cn_name}）" for t in existing
+        ) or "无"
 
     raw = chat(
         _SYSTEM,
@@ -52,6 +66,8 @@ def suggest_table_semantics(table_name: str, source_id: int) -> dict:
     result = _parse_json(raw)
     return {
         "name": table_name,
+        "schemaName": schema_name or table.schema_name,
+        "qualifiedName": qualified_name,
         "cn": result.get("cn", table_name),
         "topic": result.get("topic", "未分类"),
         "confidence": min(max(float(result.get("confidence", 0.5)), 0), 1),
@@ -63,19 +79,24 @@ def suggest_table_semantics(table_name: str, source_id: int) -> dict:
     }
 
 
-def confirm_table_semantics(table_name: str, source_id: int, suggestion: dict) -> dict:
+def confirm_table_semantics(
+    table_name: str,
+    source_id: int,
+    suggestion: dict,
+    schema_name: str | None = None,
+) -> dict:
     """管理员确认后登记：表进入资源目录并对问析可见（加入白名单）。"""
     with PlatformSession() as session:
-        table = session.query(DataTable).filter_by(source_id=source_id, name=table_name).first()
-        if table is None:
-            raise KeyError(f"数据表 {table_name} 不存在")
+        table = _resolve_table(session, table_name, source_id, schema_name)
         table.cn_name = suggestion.get("cn") or table.cn_name
         table.topic = suggestion.get("topic") or table.topic
         table.registered = True
         # 字段中文名一并采纳
         cn_map = {item["name"]: item["cn"] for item in suggestion.get("fieldSuggestions", []) if item.get("cn")}
         if cn_map:
-            for field in session.query(TableField).filter_by(source_id=source_id, table_name=table_name):
+            for field in session.query(TableField).filter_by(
+                source_id=source_id, schema_name=table.schema_name, table_name=table_name
+            ):
                 if field.name in cn_map:
                     field.cn_name = cn_map[field.name]
         from app.retrieval.index_jobs import enqueue_index_job
@@ -84,11 +105,13 @@ def confirm_table_semantics(table_name: str, source_id: int, suggestion: dict) -
             session,
             source_id,
             mode="incremental",
-            reason=f"确认数据表语义：{table_name}",
+            reason=f"确认数据表语义：{f'{table.schema_name}.' if table.schema_name else ''}{table_name}",
         )
         session.commit()
         return {
             "name": table.name,
+            "schemaName": table.schema_name,
+            "qualifiedName": f"{table.schema_name}.{table.name}" if table.schema_name else table.name,
             "cn": table.cn_name,
             "topic": table.topic,
             "rows": f"{table.row_count:,}",

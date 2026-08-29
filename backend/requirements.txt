@@ -6,6 +6,8 @@ SQLAlchemy==2.0.51
 PyMySQL==1.2.0
 psycopg2-binary==2.9.12
 psycopg[binary,pool]==3.3.4
+pyodbc==5.3.0
+oracledb==3.4.2
 pydantic-settings==2.15.0
 reportlab==5.0.0
 openpyxl==3.1.5

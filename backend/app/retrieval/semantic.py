@@ -162,29 +162,31 @@ def collect_documents(session, source_id: int) -> list[SemanticDocument]:
 
     tables = session.query(DataTable).filter_by(source_id=source_id, registered=True).all()
     fields = session.query(TableField).filter_by(source_id=source_id).order_by(TableField.ordinal).all()
-    by_table: dict[str, list[TableField]] = {}
+    by_table: dict[tuple[str, str], list[TableField]] = {}
     for field in fields:
-        by_table.setdefault(field.table_name, []).append(field)
+        by_table.setdefault((field.schema_name, field.table_name), []).append(field)
     for table in tables:
+        qualified_name = f"{table.schema_name}.{table.name}" if table.schema_name else table.name
         field_text = "；".join(
             f"{field.name}（{field.cn_name or field.comment or field.name}）"
-            for field in by_table.get(table.name, [])
+            for field in by_table.get((table.schema_name, table.name), [])
         )
         documents.append(
             SemanticDocument(
                 source_id=source_id,
                 object_type="table",
-                object_id=table.name,
+                object_id=qualified_name,
                 topic=table.topic,
                 content="\n".join(
                     (
-                        f"数据表：{table.name}",
+                        f"数据表：{qualified_name}",
+                        f"Schema：{table.schema_name}",
                         f"业务名称：{table.cn_name or table.comment or table.name}",
                         f"分析主题：{table.topic}",
                         f"字段：{field_text}",
                     )
                 ),
-                metadata={"registered": True},
+                metadata={"registered": True, "schemaName": table.schema_name, "tableName": table.name},
             )
         )
 

@@ -5,6 +5,14 @@ export async function listSources() {
   return httpGet("/api/datasources");
 }
 
+export async function listSourceTypes() {
+  return httpGet("/api/datasources/types");
+}
+
+export async function listSourceSchemas(sourceId) {
+  return httpGet(`/api/datasources/${sourceId}/schemas`);
+}
+
 export async function createSource(payload) {
   return httpPost("/api/datasources", payload);
 }

@@ -39,6 +39,14 @@ class RetrievalNotFound(KeyError):
     pass
 
 
+def _table_key(schema_name: str, table_name: str) -> str:
+    return f"{schema_name}.{table_name}" if schema_name else table_name
+
+
+def _relation_key(schema_name: str, table_name: str) -> str:
+    return _table_key(schema_name, table_name)
+
+
 TOPIC_SIGNALS = {
     "生产分析": ("生产", "产量", "工单", "完工", "排产", "工序", "产线"),
     "质量分析": ("质量", "良率", "合格", "不良", "缺陷", "检验", "返工", "抽检"),
@@ -390,9 +398,9 @@ def _direct_table_candidates(
     semantic_ids = {str(item["objectId"]) for item in semantic_hits}
     tables = session.query(DataTable).filter_by(source_id=source_id, registered=True).all()
     fields = session.query(TableField).filter_by(source_id=source_id).order_by(TableField.ordinal).all()
-    by_table: dict[str, list[TableField]] = {}
+    by_table: dict[tuple[str, str], list[TableField]] = {}
     for field in fields:
-        by_table.setdefault(field.table_name, []).append(field)
+        by_table.setdefault((field.schema_name, field.table_name), []).append(field)
     candidates = []
     for table in tables:
         table_score, table_matched = _score_terms(question, [
@@ -402,7 +410,8 @@ def _direct_table_candidates(
             (table.topic, 3),
         ])
         field_matches = []
-        for field in by_table.get(table.name, []):
+        qualified_name = _table_key(table.schema_name, table.name)
+        for field in by_table.get((table.schema_name, table.name), []):
             field_score, matched = _best_term_score(
                 question, [(field.cn_name, 6), (field.comment, 5), (field.name, 4)]
             )
@@ -411,11 +420,11 @@ def _direct_table_candidates(
         field_matches.sort(key=lambda item: -item[0])
         score = table_score + sum(item[0] for item in field_matches[:2])
         matched = [*table_matched, *(term for _points, labels in field_matches[:2] for term in labels)]
-        if score or table.name in semantic_ids:
+        if score or qualified_name in semantic_ids or table.name in semantic_ids:
             candidates.append(
                 {
                     "table": table,
-                    "candidateId": table.name,
+                    "candidateId": qualified_name,
                     "score": score,
                     "lexicalScore": score,
                     "tableScore": table_score,
@@ -444,10 +453,12 @@ def _direct_table_candidates(
 def _relation_graph(relations: list[TableRelation], registered: set[str]) -> dict[str, list[tuple[str, TableRelation]]]:
     graph: dict[str, list[tuple[str, TableRelation]]] = {}
     for relation in relations:
-        if relation.from_table not in registered or relation.to_table not in registered:
+        from_key = _relation_key(relation.from_schema, relation.from_table)
+        to_key = _relation_key(relation.to_schema, relation.to_table)
+        if from_key not in registered or to_key not in registered:
             continue
-        graph.setdefault(relation.from_table, []).append((relation.to_table, relation))
-        graph.setdefault(relation.to_table, []).append((relation.from_table, relation))
+        graph.setdefault(from_key, []).append((to_key, relation))
+        graph.setdefault(to_key, []).append((from_key, relation))
     return graph
 
 
@@ -470,7 +481,8 @@ def _shortest_path(graph: dict[str, list[tuple[str, TableRelation]]], start: str
 
 
 def _select_tables(
-    metric_items: list[dict], direct_items: list[dict], relations: list[TableRelation], registered: set[str], max_tables: int
+    metric_items: list[dict], direct_items: list[dict], relations: list[TableRelation],
+    registered: set[str], aliases: dict[str, str], max_tables: int,
 ) -> tuple[list[str], list[TableRelation], dict[str, list[str]]]:
     selected: list[str] = []
     reasons: dict[str, list[str]] = {}
@@ -485,16 +497,16 @@ def _select_tables(
 
     for item in metric_items:
         for table_name in item["tables"]:
-            add(table_name, f"指标：{item['metric'].name}")
+            add(aliases.get(table_name, table_name), f"指标：{item['metric'].name}")
     anchors = list(selected)
     direct_targets = []
     for item in direct_items:
         table = item["table"]
-        table_name = table.name
+        table_name = _table_key(table.schema_name, table.name)
         if metric_items and table_name not in selected:
             is_dimension_resource = (
                 table.topic == "主数据"
-                or table_name.lower().startswith("dim_")
+                or table.name.lower().startswith("dim_")
                 or "主数据" in f"{table.cn_name}{table.comment}"
             )
             if not is_dimension_resource or item["tableScore"] <= 0:
@@ -515,7 +527,10 @@ def _select_tables(
             if path and (not best_path or len(path) < len(best_path)):
                 best_path = path
         for relation in best_path:
-            for name in (relation.from_table, relation.to_table):
+            for name in (
+                _relation_key(relation.from_schema, relation.from_table),
+                _relation_key(relation.to_schema, relation.to_table),
+            ):
                 add(name, "已登记关联路径")
             if relation not in path_relations:
                 path_relations.append(relation)
@@ -524,7 +539,8 @@ def _select_tables(
     included_relations = [
         relation
         for relation in relations
-        if relation.from_table in selected_set and relation.to_table in selected_set
+        if _relation_key(relation.from_schema, relation.from_table) in selected_set
+        and _relation_key(relation.to_schema, relation.to_table) in selected_set
     ]
     for relation in path_relations:
         if relation not in included_relations:
@@ -543,7 +559,7 @@ def _field_payload(
 ) -> list[dict]:
     fields = (
         session.query(TableField)
-        .filter_by(source_id=source_id, table_name=table.name)
+        .filter_by(source_id=source_id, schema_name=table.schema_name, table_name=table.name)
         .order_by(TableField.ordinal)
         .all()
     )
@@ -562,9 +578,10 @@ def _field_payload(
             if mapping.table_name == table.name:
                 require(mapping.field_name, f"指标字段：{mapping.semantic_field}")
     for relation in relations:
-        if relation.from_table == table.name:
+        table_key = _table_key(table.schema_name, table.name)
+        if _relation_key(relation.from_schema, relation.from_table) == table_key:
             require(relation.from_field, "关联字段")
-        if relation.to_table == table.name:
+        if _relation_key(relation.to_schema, relation.to_table) == table_key:
             require(relation.to_field, "关联字段")
 
     scored = []
@@ -680,11 +697,19 @@ def build_context_package(
         metric_items = metric_items[:max_metrics]
         direct_items = _direct_table_candidates(session, question, source.id, semantic_table_hits)
         table_rows = session.query(DataTable).filter_by(source_id=source.id, registered=True).all()
-        table_by_name = {row.name: row for row in table_rows}
+        table_by_name = {_table_key(row.schema_name, row.name): row for row in table_rows}
+        name_counts: dict[str, int] = {}
+        for row in table_rows:
+            name_counts[row.name] = name_counts.get(row.name, 0) + 1
+        aliases = {
+            row.name: _table_key(row.schema_name, row.name)
+            for row in table_rows
+            if name_counts[row.name] == 1
+        }
         registered = set(table_by_name)
         relation_rows = session.query(TableRelation).filter_by(source_id=source.id).all()
         table_names, selected_relations, reasons = _select_tables(
-            metric_items, direct_items, relation_rows, registered, max_tables
+            metric_items, direct_items, relation_rows, registered, aliases, max_tables
         )
 
         tables = []
@@ -702,11 +727,14 @@ def build_context_package(
             tables.append(
                 {
                     "name": table.name,
+                    "schemaName": table.schema_name,
+                    "qualifiedName": _table_key(table.schema_name, table.name),
+                    "objectType": table.object_type,
                     "semanticName": table.cn_name or table.comment or table.name,
                     "topic": table.topic,
                     "comment": table.comment,
                     "primaryKey": table.primary_key,
-                    "reasons": reasons.get(table.name, []),
+                    "reasons": reasons.get(table_name, []),
                     "fields": fields,
                 }
             )
@@ -785,18 +813,40 @@ def build_context_package(
                 item["semanticScore"] = rule_fusion[item["id"]]["semanticScore"]
         rules.sort(key=lambda item: (-item["relevanceScore"], item["id"]))
 
-        relation_payload = [
-            {
+        relation_payload = []
+        for row in selected_relations:
+            item = {
                 "fromTable": row.from_table,
                 "fromField": row.from_field,
                 "toTable": row.to_table,
                 "toField": row.to_field,
                 "source": row.source,
             }
-            for row in selected_relations
-        ]
+            # 旧的单 schema 数据源保持原契约；只有物理身份确实需要时才扩展限定信息。
+            if row.from_schema or row.to_schema:
+                item.update(
+                    {
+                        "fromSchema": row.from_schema,
+                        "fromQualifiedTable": _relation_key(row.from_schema, row.from_table),
+                        "toSchema": row.to_schema,
+                        "toQualifiedTable": _relation_key(row.to_schema, row.to_table),
+                    }
+                )
+            if row.constraint_name:
+                item["constraintName"] = row.constraint_name
+            relation_payload.append(item)
         metric_payload = [_serialize_metric(item) for item in metric_items]
-        allowed_columns = {table["name"]: [field["name"] for field in table["fields"]] for table in tables}
+        allowed_columns = {
+            table["qualifiedName"]: [field["name"] for field in table["fields"]]
+            for table in tables
+        }
+        for table in tables:
+            if name_counts.get(table["name"], 0) == 1:
+                allowed_columns[table["name"]] = allowed_columns[table["qualifiedName"]]
+        allowed_tables = [table["qualifiedName"] for table in tables]
+        allowed_tables.extend(
+            table["name"] for table in tables if name_counts.get(table["name"], 0) == 1
+        )
         status = "ready" if metric_payload else "no_metric_match" if tables else "no_match"
         diagnostics = (
             _no_match_diagnostics(session, question, source.id, table_rows)
@@ -862,7 +912,7 @@ def build_context_package(
                 "readOnly": True,
                 "allowUnregisteredTables": False,
                 "allowUnregisteredRelations": False,
-                "allowedTables": table_names,
+                "allowedTables": list(dict.fromkeys(allowed_tables)),
                 "allowedColumns": allowed_columns,
                 "joinPaths": relation_payload,
                 "instruction": "SQL 只能使用本上下文包列出的表、字段、指标物理公式和关联路径。",

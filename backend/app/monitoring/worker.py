@@ -24,6 +24,8 @@ from app.db.models import (
 )
 from app.db.platform import PlatformSession
 from app.gateway.executor import execute_readonly
+from app.gateway.adapters import get_adapter
+from app.gateway.connectors.base import PhysicalTableRef
 from app.monitoring.service import record_observation
 
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -38,7 +40,7 @@ def _identifier(value: Any, label: str) -> str:
 
 def _quote(value: str, source_type: str) -> str:
     checked = _identifier(value, "字段或表名")
-    return f'"{checked}"' if source_type == "postgresql" else f"`{checked}`"
+    return get_adapter(source_type).quote_identifier(checked)
 
 
 def _validate_registered_plan(session: Session, rule: MonitoringRule) -> tuple[DataSource, dict]:
@@ -47,9 +49,14 @@ def _validate_registered_plan(session: Session, rule: MonitoringRule) -> tuple[D
         raise ValueError("规则数据源不存在")
     plan = rule.query_plan_json or {}
     table = _identifier(plan.get("table"), "queryPlan.table")
-    registered = session.query(DataTable).filter_by(
-        source_id=source.id, name=table, registered=True
-    ).first()
+    schema_name = str(plan.get("schemaName") or "").strip()
+    query = session.query(DataTable).filter_by(source_id=source.id, name=table, registered=True)
+    if schema_name:
+        query = query.filter_by(schema_name=schema_name)
+    registered_rows = query.all()
+    if len(registered_rows) > 1:
+        raise PermissionError("监控规则引用了同名表，请在 queryPlan 中指定 schemaName")
+    registered = registered_rows[0] if registered_rows else None
     if registered is None:
         raise PermissionError("监控规则引用了未登记表")
     required = {
@@ -65,12 +72,13 @@ def _validate_registered_plan(session: Session, rule: MonitoringRule) -> tuple[D
     registered_fields = {
         row[0]
         for row in session.query(TableField.name).filter_by(
-            source_id=source.id, table_name=table
+            source_id=source.id, schema_name=registered.schema_name, table_name=table
         ).all()
     }
     missing = required - registered_fields
     if missing:
         raise PermissionError(f"监控规则引用了未登记字段：{sorted(missing)}")
+    plan = {**plan, "schemaName": registered.schema_name}
     return source, plan
 
 
@@ -93,7 +101,10 @@ def compile_query(
 
     source, plan = _validate_registered_plan(session, rule)
     quote = lambda value: _quote(value, source.type)
-    table = quote(plan["table"])
+    schema_name = str(plan.get("schemaName") or "").strip()
+    table = get_adapter(source.type).qualify_table(
+        PhysicalTableRef(schema_name, _identifier(plan["table"], "queryPlan.table"))
+    )
     time_field = quote(plan["timeField"])
     kind = plan["kind"]
     if kind == "freshness":

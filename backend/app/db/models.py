@@ -65,7 +65,7 @@ class Tenant(Base):
 
 
 class DataSource(Base):
-    """数据源连接（当前支持 mysql / postgresql）。密码为演示环境明文存储，生产必须加密。"""
+    """Tenant-scoped business datasource and connector configuration."""
 
     __tablename__ = "data_source"
 
@@ -74,12 +74,16 @@ class DataSource(Base):
         String(40), ForeignKey("tenant.id", ondelete="RESTRICT"), default="tenant-default", index=True
     )
     name: Mapped[str] = mapped_column(String(100), comment="数据源名称，如 华东制造数据底座")
-    type: Mapped[str] = mapped_column(String(20), comment="mysql / postgresql")
+    type: Mapped[str] = mapped_column(String(20), comment="mysql / postgresql / mariadb / sqlserver / oracle")
     host: Mapped[str] = mapped_column(String(100), default="127.0.0.1")
     port: Mapped[int] = mapped_column(Integer, default=3306)
     db_name: Mapped[str] = mapped_column(String(64), comment="数据库名")
     username: Mapped[str] = mapped_column(String(64), comment="只读账号")
     password: Mapped[str] = mapped_column(String(128), default="")
+    schema_names: Mapped[list] = mapped_column("schema_names_json", JSON_TYPE, default=list)
+    config_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    credential_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    connection_revision: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str] = mapped_column(String(20), default="未测试", comment="未测试 / 连接正常 / 连接失败")
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, comment="默认数据源")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
@@ -114,11 +118,13 @@ class DataTable(Base):
     """已登记的数据表（资源目录）。业务库真实结构来自扫描，中文语义可人工修正。"""
 
     __tablename__ = "data_table"
-    __table_args__ = (UniqueConstraint("source_id", "name", name="uq_source_table"),)
+    __table_args__ = (UniqueConstraint("source_id", "schema_name", "name", name="uq_source_schema_table"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     source_id: Mapped[int] = mapped_column(Integer, default=1, index=True, comment="所属数据源")
+    schema_name: Mapped[str] = mapped_column(String(128), default="", index=True, comment="物理 Schema")
     name: Mapped[str] = mapped_column(String(64), comment="物理表名")
+    object_type: Mapped[str] = mapped_column(String(20), default="table", comment="table / view / materialized_view")
     cn_name: Mapped[str] = mapped_column(String(100), default="", comment="中文名")
     topic: Mapped[str] = mapped_column(String(20), default="", comment="业务主题：生产/质量/设备/库存/主数据")
     row_count: Mapped[int] = mapped_column(Integer, default=0, comment="行数")
@@ -136,12 +142,14 @@ class TableField(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     source_id: Mapped[int] = mapped_column(Integer, default=1, index=True, comment="所属数据源")
+    schema_name: Mapped[str] = mapped_column(String(128), default="", index=True, comment="所属 Schema")
     table_name: Mapped[str] = mapped_column(String(64), index=True, comment="所属表")
     name: Mapped[str] = mapped_column(String(64), comment="字段名")
     cn_name: Mapped[str] = mapped_column(String(100), default="", comment="中文名（来自字段注释，可修正）")
     data_type: Mapped[str] = mapped_column(String(40), default="", comment="数据类型")
     ordinal: Mapped[int] = mapped_column(Integer, default=0, comment="字段顺序")
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否主键")
+    ref_schema: Mapped[str] = mapped_column(String(128), default="", comment="外键指向的 Schema")
     ref_table: Mapped[str] = mapped_column(String(64), default="", comment="外键指向的表")
     comment: Mapped[str] = mapped_column(String(255), default="", comment="字段注释")
     sample_value: Mapped[str] = mapped_column(String(100), default="", comment="样例值")
@@ -154,10 +162,13 @@ class TableRelation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     source_id: Mapped[int] = mapped_column(Integer, default=1, index=True, comment="所属数据源")
+    from_schema: Mapped[str] = mapped_column(String(128), default="", comment="来源 Schema")
     from_table: Mapped[str] = mapped_column(String(64), comment="来源表")
     from_field: Mapped[str] = mapped_column(String(64), comment="来源字段")
+    to_schema: Mapped[str] = mapped_column(String(128), default="", comment="目标 Schema")
     to_table: Mapped[str] = mapped_column(String(64), comment="目标表")
     to_field: Mapped[str] = mapped_column(String(64), comment="目标字段")
+    constraint_name: Mapped[str] = mapped_column(String(160), default="", comment="数据库约束名")
     source: Mapped[str] = mapped_column(String(20), default="扫描", comment="来源：扫描 / 推导 / 人工")
 
 
@@ -277,7 +288,7 @@ class MetricTableBinding(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     binding_id: Mapped[int] = mapped_column(Integer, index=True)
-    table_name: Mapped[str] = mapped_column(String(64))
+    table_name: Mapped[str] = mapped_column(String(260), comment="schema.table 限定名；单 schema 可保留裸表名")
     role: Mapped[str] = mapped_column(String(30), default="事实表", comment="事实表 / 维表 / 明细表")
 
 
@@ -290,7 +301,7 @@ class MetricFieldBinding(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     binding_id: Mapped[int] = mapped_column(Integer, index=True)
     semantic_field: Mapped[str] = mapped_column(String(80), comment="如 合格数量、投入数量、统计时间")
-    table_name: Mapped[str] = mapped_column(String(64))
+    table_name: Mapped[str] = mapped_column(String(260), comment="schema.table 限定名；单 schema 可保留裸表名")
     field_name: Mapped[str] = mapped_column(String(64))
     transform_expression: Mapped[str] = mapped_column(Text, default="", comment="单位换算或枚举归一表达式")
 

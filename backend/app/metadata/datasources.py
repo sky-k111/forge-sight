@@ -6,7 +6,13 @@ from app.audit.service import write_audit
 from app.config import settings
 from app.db.models import DataSource
 from app.db.platform import PlatformSession
-from app.gateway.adapters import SUPPORTED_TYPES, drop_engine, test_connection
+from app.gateway.adapters import (
+    SUPPORTED_TYPES,
+    discover_schemas,
+    drop_engine,
+    test_connection,
+    type_descriptors,
+)
 from app.tenancy.service import DEFAULT_TENANT_ID
 
 
@@ -28,6 +34,8 @@ def seed_default_source() -> DataSource:
             db_name=parsed.path.lstrip("/"),
             username=parsed.username or "",
             password=parsed.password or "",
+            schema_names=[parsed.path.lstrip("/")],
+            config_json={},
             status="连接正常",
             is_default=True,
         )
@@ -57,6 +65,9 @@ def list_sources(tenant_id: str = DEFAULT_TENANT_ID) -> list[dict]:
                 "port": s.port,
                 "database": s.db_name,
                 "username": s.username,
+                "schemas": s.schema_names or [],
+                "config": s.config_json or {},
+                "maturity": SUPPORTED_TYPES.get(s.type, {}).get("maturity", "beta"),
                 "status": s.status,
                 "isDefault": s.is_default,
                 "semanticIndex": serialize_job(latest_job(session, s.id)),
@@ -68,7 +79,7 @@ def list_sources(tenant_id: str = DEFAULT_TENANT_ID) -> list[dict]:
 def create_source(payload: dict, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     source_type = payload.get("type", "")
     if source_type not in SUPPORTED_TYPES:
-        raise ValueError(f"不支持的数据源类型：{source_type}（当前支持 mysql / postgresql）")
+        raise ValueError(f"不支持的数据源类型：{source_type}（当前支持 {' / '.join(SUPPORTED_TYPES)}）")
     with PlatformSession() as session:
         source = DataSource(
             tenant_id=tenant_id,
@@ -79,6 +90,8 @@ def create_source(payload: dict, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
             db_name=payload["database"],
             username=payload["username"],
             password=payload.get("password", ""),
+            schema_names=payload.get("schemas") or [],
+            config_json=payload.get("config") or {},
             status="未测试",
             is_default=False,
         )
@@ -87,7 +100,7 @@ def create_source(payload: dict, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
         session.refresh(source)
         source_id = source.id
     write_audit(action=f"登记数据源 {payload['name']}", resource=payload["database"], result="已记录", role="管理员")
-    return {"id": source_id}
+    return {"id": source_id, "status": "未测试"}
 
 
 def test_source(source_id: int, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
@@ -107,7 +120,13 @@ def test_source(source_id: int, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     )
     if not ok:
         drop_engine(source_id)
-    return {"ok": ok, "status": "连接正常" if ok else "连接失败", "message": message}
+    schemas = discover_schemas(source) if ok else []
+    return {
+        "ok": ok,
+        "status": "连接正常" if ok else "连接失败",
+        "message": message,
+        "schemas": schemas,
+    }
 
 
 def update_source(source_id: int, payload: dict, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
@@ -117,7 +136,10 @@ def update_source(source_id: int, payload: dict, tenant_id: str = DEFAULT_TENANT
         if source is None:
             raise KeyError("数据源不存在")
         connection_changed = False
-        for field, attr in (("name", "name"), ("host", "host"), ("database", "db_name"), ("username", "username")):
+        for field, attr in (
+            ("name", "name"), ("type", "type"), ("host", "host"),
+            ("database", "db_name"), ("username", "username"),
+        ):
             new_value = payload.get(field)
             if new_value and getattr(source, attr) != new_value:
                 if attr != "name":
@@ -129,12 +151,19 @@ def update_source(source_id: int, payload: dict, tenant_id: str = DEFAULT_TENANT
         if payload.get("password") and source.password != payload["password"]:
             source.password = payload["password"]
             connection_changed = True
+        if "schemas" in payload and (payload.get("schemas") or []) != (source.schema_names or []):
+            source.schema_names = payload.get("schemas") or []
+            connection_changed = True
+        if "config" in payload and (payload.get("config") or {}) != (source.config_json or {}):
+            source.config_json = payload.get("config") or {}
+            connection_changed = True
         if connection_changed:
             source.status = "未测试"
+            source.connection_revision = int(source.connection_revision or 1) + 1
         session.commit()
         name, db_name = source.name, source.db_name
     if connection_changed:
-        drop_engine(source_id)
+        drop_engine(source_id, tenant_id)
     write_audit(action=f"修改数据源配置 {name}", resource=db_name, result="已记录", role="管理员")
     return {"id": source_id}
 
@@ -142,3 +171,16 @@ def update_source(source_id: int, payload: dict, tenant_id: str = DEFAULT_TENANT
 def get_source(source_id: int, tenant_id: str = DEFAULT_TENANT_ID) -> DataSource | None:
     with PlatformSession() as session:
         return session.query(DataSource).filter_by(id=source_id, tenant_id=tenant_id).first()
+
+
+def list_source_types() -> list[dict]:
+    from dataclasses import asdict
+
+    return [asdict(item) for item in type_descriptors()]
+
+
+def list_source_schemas(source_id: int, tenant_id: str = DEFAULT_TENANT_ID) -> list[str]:
+    source = get_source(source_id, tenant_id)
+    if source is None:
+        raise KeyError("数据源不存在")
+    return discover_schemas(source)

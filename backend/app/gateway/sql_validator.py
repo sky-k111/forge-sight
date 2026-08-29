@@ -27,7 +27,20 @@ _FORBIDDEN_NODES = (
 )
 
 # 危险函数（可写文件、执行命令、拖慢数据库）
-_FORBIDDEN_FUNCTIONS = {"LOAD_FILE", "INTO_OUTFILE", "SLEEP", "BENCHMARK"}
+_FORBIDDEN_FUNCTIONS = {
+    "LOAD_FILE", "INTO_OUTFILE", "SLEEP", "BENCHMARK", "PG_READ_FILE",
+    "PG_READ_BINARY_FILE", "PG_LS_DIR", "XP_CMDSHELL", "UTL_FILE",
+}
+
+_DIALECTS = {
+    "mysql": "mysql",
+    "mariadb": "mysql",
+    "postgres": "postgres",
+    "postgresql": "postgres",
+    "sqlserver": "tsql",
+    "mssql": "tsql",
+    "oracle": "oracle",
+}
 
 
 @dataclass
@@ -42,7 +55,7 @@ def validate_dialect_compatibility(sql: str, dialect: str) -> SqlCheckResult:
     """Reject common cross-dialect constructs before asking the database to EXPLAIN."""
     normalized_dialect = (dialect or "mysql").strip().lower()
     upper_sql = sql.upper()
-    if normalized_dialect == "mysql":
+    if normalized_dialect in {"mysql", "mariadb"}:
         unsupported = [
             (r"\bFULL\s+(?:OUTER\s+)?JOIN\b", "MySQL 不支持 FULL OUTER JOIN，请改用 LEFT JOIN/UNION 组合"),
             (r"\bILIKE\b", "MySQL 不支持 ILIKE，请使用 LIKE"),
@@ -55,24 +68,41 @@ def validate_dialect_compatibility(sql: str, dialect: str) -> SqlCheckResult:
             (r"\bDATE_FORMAT\s*\(", "PostgreSQL 不支持 DATE_FORMAT，请使用 TO_CHAR 或 DATE_TRUNC"),
             (r"\bIFNULL\s*\(", "PostgreSQL 不支持 IFNULL，请使用 COALESCE"),
         ]
+    elif normalized_dialect in {"sqlserver", "mssql", "tsql"}:
+        unsupported = [
+            (r"`[^`]+`", "SQL Server 不支持 MySQL 反引号标识符"),
+            (r"\bLIMIT\s+\d+", "SQL Server 不支持 LIMIT，请使用 TOP 或 OFFSET/FETCH"),
+            (r"\bILIKE\b", "SQL Server 不支持 ILIKE，请使用 LIKE"),
+        ]
+    elif normalized_dialect == "oracle":
+        unsupported = [
+            (r"`[^`]+`", "Oracle 不支持 MySQL 反引号标识符"),
+            (r"\bLIMIT\s+\d+", "Oracle 不支持 LIMIT，请使用 FETCH FIRST 或 ROWNUM"),
+            (r"\bILIKE\b", "Oracle 不支持 ILIKE，请使用 LIKE"),
+        ]
     else:
-        return SqlCheckResult(ok=True, checks=[f"数据库方言：{dialect or 'unknown'}"])
+        return SqlCheckResult(ok=False, reason=f"未注册的数据库方言：{dialect or 'unknown'}")
 
     for pattern, reason in unsupported:
         if re.search(pattern, upper_sql, flags=re.IGNORECASE):
             return SqlCheckResult(ok=False, reason=reason)
-    label = "PostgreSQL" if normalized_dialect in {"postgres", "postgresql"} else "MySQL"
+    label = {
+        "postgres": "PostgreSQL", "postgresql": "PostgreSQL",
+        "mysql": "MySQL", "mariadb": "MariaDB",
+        "sqlserver": "SQL Server", "mssql": "SQL Server", "tsql": "SQL Server",
+        "oracle": "Oracle",
+    }.get(normalized_dialect, normalized_dialect)
     return SqlCheckResult(ok=True, checks=[f"数据库方言：{label}"])
 
 
-def validate_sql(sql: str, allowed_tables: set[str]) -> SqlCheckResult:
+def validate_sql(sql: str, allowed_tables: set[str], dialect: str = "mysql") -> SqlCheckResult:
     """校验 SQL 是否允许在业务库执行。allowed_tables 来自已登记元数据。"""
     sql = sql.strip().rstrip(";")
     if not sql:
         return SqlCheckResult(ok=False, reason="SQL 为空")
 
     try:
-        statements = sqlglot.parse(sql, read="mysql")
+        statements = sqlglot.parse(sql, read=_DIALECTS.get(dialect.lower(), dialect.lower()))
     except sqlglot.errors.ParseError as exc:
         return SqlCheckResult(ok=False, reason=f"SQL 语法错误：{exc}")
 
@@ -92,6 +122,8 @@ def validate_sql(sql: str, allowed_tables: set[str]) -> SqlCheckResult:
 
     if root.args.get("into") is not None:
         return SqlCheckResult(ok=False, reason="禁止 SELECT INTO 写文件/写表")
+    if re.search(r"\bFOR\s+UPDATE\b|\bLOCK\s+IN\s+SHARE\s+MODE\b", sql, flags=re.IGNORECASE):
+        return SqlCheckResult(ok=False, reason="禁止带锁查询")
 
     for func in root.find_all(exp.Func):
         # 已知函数 sql_name() 直接可用；未识别函数被解析为 Anonymous，名字在 .name
@@ -99,9 +131,16 @@ def validate_sql(sql: str, allowed_tables: set[str]) -> SqlCheckResult:
         if func_name in _FORBIDDEN_FUNCTIONS:
             return SqlCheckResult(ok=False, reason=f"检测到危险函数：{func_name}")
 
-    cte_names = {cte.alias for cte in root.find_all(exp.CTE)}
-    tables = sorted({table.name for table in root.find_all(exp.Table)} - cte_names)
-    unknown = [name for name in tables if name not in allowed_tables]
+    cte_names = {cte.alias.lower() for cte in root.find_all(exp.CTE)}
+    table_nodes = [table for table in root.find_all(exp.Table) if table.name.lower() not in cte_names]
+    tables = sorted(
+        {
+            f"{table.db}.{table.name}" if table.db else table.name
+            for table in table_nodes
+        }
+    )
+    allowed = {name.lower() for name in allowed_tables}
+    unknown = [name for name in tables if name.lower() not in allowed]
     if unknown:
         return SqlCheckResult(
             ok=False,

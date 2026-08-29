@@ -1,22 +1,17 @@
-"""元数据扫描：从数据源读取真实结构，登记入平台库。
+"""Datasource metadata scanning through the registered adapter contract."""
 
-原则：表结构只以 information_schema 为权威来源，禁止凭约定编造；
-中文名优先取 schema.sql（默认数据源）或数据库 COMMENT，推导的部分（主题、关系）单独标注来源。
-"""
+from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
 
-from sqlalchemy import text
-
 from app.db.models import DataSource, DataTable, TableField, TableRelation
 from app.db.platform import PlatformSession
-from app.gateway.adapters import get_engine
+from app.gateway.adapters import get_adapter, get_engine
+from app.gateway.connectors.base import PhysicalTableRef, TableMetadata
 
-# schema.sql 是默认数据源字段注释的权威来源（建库时客户端编码问题会导致 information_schema 中的注释变成问号）
 SCHEMA_SQL_PATH = Path(__file__).resolve().parents[3] / "database" / "mysql" / "001_schema.sql"
 
-# 表名前缀 → 业务主题（仅用于默认分类，管理员可改）
 TOPIC_BY_PREFIX = {
     "mes_": "生产",
     "qms_": "质量",
@@ -25,19 +20,16 @@ TOPIC_BY_PREFIX = {
     "dim_": "主数据",
 }
 
-# PostgreSQL 只扫描该 schema，避免系统表混入
-PG_SCHEMA = "public"
-
 
 def derive_topic(table_name: str) -> str:
     for prefix, topic in TOPIC_BY_PREFIX.items():
-        if table_name.startswith(prefix):
+        if table_name.lower().startswith(prefix):
             return topic
     return "未分类"
 
 
 def load_schema_comments(path: Path = SCHEMA_SQL_PATH) -> dict[str, dict]:
-    """从 schema.sql 解析表注释与字段注释：{表名: {"comment": ..., "fields": {字段: 注释}}}"""
+    """Parse comments from the bundled MySQL schema for the official demo source."""
     import re
 
     comments: dict[str, dict] = {}
@@ -63,195 +55,177 @@ def load_schema_comments(path: Path = SCHEMA_SQL_PATH) -> dict[str, dict]:
     return comments
 
 
-def _scalar(conn, sql: str, params: dict | None = None):
-    return conn.execute(text(sql), params or {}).scalar()
+def _primary_field(table: TableMetadata) -> str:
+    return next((column.name for column in table.columns if column.is_primary), "")
 
 
-def _inspect_mysql(conn, db_name: str):
-    tables = conn.execute(
-        text(
-            "SELECT table_name, table_comment FROM information_schema.tables "
-            "WHERE table_schema = :schema AND table_type = 'BASE TABLE' ORDER BY table_name"
-        ),
-        {"schema": db_name},
-    ).all()
-    columns = conn.execute(
-        text(
-            "SELECT table_name, column_name, column_type, column_comment, ordinal_position, column_key "
-            "FROM information_schema.columns WHERE table_schema = :schema "
-            "ORDER BY table_name, ordinal_position"
-        ),
-        {"schema": db_name},
-    ).all()
-    foreign_keys = conn.execute(
-        text(
-            "SELECT table_name, column_name, referenced_table_name, referenced_column_name "
-            "FROM information_schema.key_column_usage "
-            "WHERE table_schema = :schema AND referenced_table_name IS NOT NULL"
-        ),
-        {"schema": db_name},
-    ).all()
-    fields = {}
-    for table_name, col_name, col_type, comment, ordinal, col_key in columns:
-        fields.setdefault(table_name, []).append(
-            {"name": col_name, "type": col_type, "comment": comment or "", "ordinal": ordinal,
-             "is_primary": col_key == "PRI"}
-        )
-    fk_map = {(t, c): (rt, rc) for t, c, rt, rc in foreign_keys}
-    return tables, fields, fk_map
-
-
-def _inspect_postgresql(conn):
-    tables = conn.execute(
-        text(
-            "SELECT table_name, '' FROM information_schema.tables "
-            "WHERE table_schema = :schema AND table_type = 'BASE TABLE' ORDER BY table_name"
-        ),
-        {"schema": PG_SCHEMA},
-    ).all()
-    columns = conn.execute(
-        text(
-            "SELECT table_name, column_name, data_type, '', ordinal_position, '' "
-            "FROM information_schema.columns WHERE table_schema = :schema "
-            "ORDER BY table_name, ordinal_position"
-        ),
-        {"schema": PG_SCHEMA},
-    ).all()
-    primary_keys = conn.execute(
-        text(
-            "SELECT kcu.table_name, kcu.column_name "
-            "FROM information_schema.table_constraints tc "
-            "JOIN information_schema.key_column_usage kcu "
-            "  ON tc.constraint_name = kcu.constraint_name AND tc.table_name = kcu.table_name "
-            "WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = :schema"
-        ),
-        {"schema": PG_SCHEMA},
-    ).all()
-    foreign_keys = conn.execute(
-        text(
-            "SELECT tc.table_name, kcu.column_name, ccu.table_name, ccu.column_name "
-            "FROM information_schema.table_constraints tc "
-            "JOIN information_schema.key_column_usage kcu "
-            "  ON tc.constraint_name = kcu.constraint_name AND tc.table_name = kcu.table_name "
-            "JOIN information_schema.constraint_column_usage ccu "
-            "  ON tc.constraint_name = ccu.constraint_name "
-            "WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = :schema"
-        ),
-        {"schema": PG_SCHEMA},
-    ).all()
-    pk_set = {(t, c) for t, c in primary_keys}
-    fields = {}
-    for table_name, col_name, col_type, _comment, ordinal, _ in columns:
-        fields.setdefault(table_name, []).append(
-            {"name": col_name, "type": col_type, "comment": "", "ordinal": ordinal,
-             "is_primary": (table_name, col_name) in pk_set}
-        )
-    fk_map = {(t, c): (rt, rc) for t, c, rt, rc in foreign_keys}
-    return tables, fields, fk_map
+def _format_sample(value) -> str:
+    if isinstance(value, (datetime, date)):
+        return str(value)
+    return str(value)[:100]
 
 
 def scan_source(source: DataSource, auto_register: bool = False) -> dict:
-    """扫描指定数据源并刷新平台库登记。返回扫描摘要。
+    """Scan one datasource and refresh its physical catalog.
 
-    auto_register=True 仅用于首次初始化；此后发现的新表一律为「待确认」状态，
-    必须经管理员确认（可走 AI 语义推荐）才对问析可见。
+    Physical metadata is automatic. Business semantics remain candidates until an
+    administrator confirms them, so connector automation never publishes a metric
+    definition by itself.
     """
+    adapter = get_adapter(source.type)
     engine = get_engine(source)
     with engine.connect() as conn:
-        if source.type == "mysql":
-            tables, fields_by_table, fk_map = _inspect_mysql(conn, source.db_name)
-        elif source.type == "postgresql":
-            tables, fields_by_table, fk_map = _inspect_postgresql(conn)
-        else:
-            raise ValueError(f"不支持的数据源类型：{source.type}")
+        snapshot = adapter.inspect_metadata(conn, source)
 
-    table_names = {name for name, _ in tables}
-    primary_keys = {name: _primary_field(fields_by_table, name) for name in table_names}
+    tables_by_key = {(item.ref.schema, item.ref.name): item for item in snapshot.tables}
+    primary_keys = {key: _primary_field(item) for key, item in tables_by_key.items()}
+    fk_map: dict[tuple[str, str, str], tuple[str, str, str]] = {}
+    relations: list[tuple[str, str, str, str, str, str, str, str]] = []
+    for foreign_key in snapshot.foreign_keys:
+        source_key = (
+            foreign_key.from_table.schema,
+            foreign_key.from_table.name,
+            foreign_key.from_column,
+        )
+        fk_map[source_key] = (
+            foreign_key.to_table.schema,
+            foreign_key.to_table.name,
+            foreign_key.to_column,
+        )
+        relations.append(
+            (
+                foreign_key.from_table.schema,
+                foreign_key.from_table.name,
+                foreign_key.from_column,
+                foreign_key.to_table.schema,
+                foreign_key.to_table.name,
+                foreign_key.to_column,
+                "扫描",
+                foreign_key.constraint_name,
+            )
+        )
 
-    relations: list[tuple[str, str, str, str, str]] = []
-    for (table, field_name), (ref_table, ref_field) in sorted(fk_map.items()):
-        relations.append((table, field_name, ref_table, ref_field, "扫描"))
-    # 命名约定推导：xxx_id 字段指向以其为主键的表（补充未声明外键的关系）
-    for table_name in table_names:
-        for fld in fields_by_table.get(table_name, []):
-            if (table_name, fld["name"]) in fk_map or not fld["name"].endswith("_id"):
+    # A conservative naming fallback, limited to the same schema. It is marked as
+    # inferred evidence and never confused with a real database constraint.
+    for (schema, table_name), table in tables_by_key.items():
+        for column in table.columns:
+            source_key = (schema, table_name, column.name)
+            if source_key in fk_map or not column.name.lower().endswith("_id"):
                 continue
-            for target, pk in primary_keys.items():
-                if target != table_name and pk == fld["name"]:
-                    relations.append((table_name, fld["name"], target, pk, "推导"))
-                    fk_map[(table_name, fld["name"])] = (target, pk)
+            for (target_schema, target_name), primary_key in primary_keys.items():
+                if target_schema != schema or target_name == table_name or primary_key != column.name:
+                    continue
+                fk_map[source_key] = (target_schema, target_name, primary_key)
+                relations.append(
+                    (schema, table_name, column.name, target_schema, target_name, primary_key, "推导", "")
+                )
+                break
 
     scanned_at = datetime.now()
-    summary = {"tables": 0, "fields": 0, "relations": len(relations)}
-    # schema.sql 注释只对默认数据源（forge_sight 官方库）适用
-    schema_comments = load_schema_comments() if source.is_default else {}
+    summary = {
+        "tables": 0,
+        "fields": 0,
+        "relations": len(relations),
+        "schemas": sorted({item.ref.schema for item in snapshot.tables}),
+        "warnings": list(snapshot.warnings),
+    }
+    schema_comments = load_schema_comments() if source.is_default and source.type == "mysql" else {}
 
     with PlatformSession() as session:
         first_scan = session.query(DataTable.id).filter_by(source_id=source.id).first() is None
-        for table_name, comment in tables:
-            fields = fields_by_table.get(table_name, [])
-            pk = primary_keys.get(table_name) or ""
-            table_comment = schema_comments.get(table_name, {}).get("comment") or comment or ""
+        scanned_keys = {(item.ref.schema, item.ref.name) for item in snapshot.tables}
+        # Schema 范围收窄或物理表删除后，历史目录保留用于证据回看，但立即退出问析白名单。
+        for stale in session.query(DataTable).filter_by(source_id=source.id).all():
+            if (stale.schema_name, stale.name) not in scanned_keys:
+                stale.registered = False
+        for table in snapshot.tables:
+            ref = table.ref
+            official_comments = schema_comments.get(ref.name, {})
+            table_comment = official_comments.get("comment") or table.comment or ""
+            row_count = 0
+            sample_row: dict = {}
+            data_updated = ""
+            try:
+                with engine.connect() as conn:
+                    row_count = adapter.count_rows(conn, ref)
+                    samples = adapter.preview_table(conn, ref, 1)
+                    sample_row = samples[0] if samples else {}
+                    data_updated = adapter.infer_data_updated(conn, ref, table.columns)
+            except Exception as exc:  # noqa: BLE001 - one protected object must not abort the catalog scan
+                summary["warnings"].append(
+                    f"{ref.qualified_name} 样例或行数读取失败：{type(exc).__name__}"
+                )
 
-            with engine.connect() as conn:
-                row_count = _scalar(conn, f"SELECT COUNT(*) FROM `{table_name}`" if source.type == "mysql"
-                                    else f'SELECT COUNT(*) FROM "{table_name}"')
-                quote = "`" if source.type == "mysql" else '"'
-                sample_row = conn.execute(
-                    text(f"SELECT * FROM {quote}{table_name}{quote} LIMIT 1")
-                ).mappings().first()
-                data_updated = _infer_data_updated(conn, table_name, fields, quote)
-
-            existing = session.query(DataTable).filter_by(source_id=source.id, name=table_name).first()
+            existing = (
+                session.query(DataTable)
+                .filter_by(source_id=source.id, schema_name=ref.schema, name=ref.name)
+                .first()
+            )
             if existing is None:
-                existing = DataTable(name=table_name, source_id=source.id, registered=auto_register)
+                existing = DataTable(
+                    source_id=source.id,
+                    schema_name=ref.schema,
+                    name=ref.name,
+                    registered=auto_register,
+                )
                 session.add(existing)
+            existing.object_type = ref.object_type
             existing.comment = table_comment
             if not existing.cn_name or "?" in existing.cn_name:
-                existing.cn_name = table_comment or table_name
-            existing.topic = existing.topic or derive_topic(table_name)
-            existing.row_count = row_count or 0
-            existing.primary_key = pk
+                existing.cn_name = table_comment or ref.name
+            existing.topic = existing.topic or derive_topic(ref.name)
+            existing.row_count = row_count
+            existing.primary_key = _primary_field(table)
             existing.data_updated = data_updated
             existing.scanned_at = scanned_at
 
-            session.query(TableField).filter_by(source_id=source.id, table_name=table_name).delete()
-            field_comments = schema_comments.get(table_name, {}).get("fields", {})
-            for fld in fields:
-                sample = ""
-                if sample_row is not None and fld["name"] in sample_row:
-                    sample = _format_sample(sample_row[fld["name"]])
-                ref = fk_map.get((table_name, fld["name"]))
-                cn_name = field_comments.get(fld["name"]) or fld["comment"]
+            (
+                session.query(TableField)
+                .filter_by(source_id=source.id, schema_name=ref.schema, table_name=ref.name)
+                .delete()
+            )
+            field_comments = official_comments.get("fields", {})
+            for column in table.columns:
+                relation = fk_map.get((ref.schema, ref.name, column.name))
+                cn_name = field_comments.get(column.name) or column.comment or ""
                 session.add(
                     TableField(
                         source_id=source.id,
-                        table_name=table_name,
-                        name=fld["name"],
+                        schema_name=ref.schema,
+                        table_name=ref.name,
+                        name=column.name,
                         cn_name=cn_name,
-                        data_type=fld["type"],
-                        ordinal=fld["ordinal"],
-                        is_primary=fld["is_primary"],
-                        ref_table=ref[0] if ref else "",
+                        data_type=column.data_type,
+                        ordinal=column.ordinal,
+                        is_primary=column.is_primary,
+                        ref_schema=relation[0] if relation else "",
+                        ref_table=relation[1] if relation else "",
                         comment=cn_name,
-                        sample_value=sample,
+                        sample_value=_format_sample(sample_row[column.name]) if column.name in sample_row else "",
                     )
                 )
             summary["tables"] += 1
-            summary["fields"] += len(fields)
+            summary["fields"] += len(table.columns)
 
         session.query(TableRelation).filter_by(source_id=source.id).delete()
-        for from_table, from_field, to_table, to_field, source_kind in relations:
+        for (
+            from_schema, from_table, from_field, to_schema, to_table,
+            to_field, source_kind, constraint_name,
+        ) in relations:
             session.add(
                 TableRelation(
                     source_id=source.id,
+                    from_schema=from_schema,
                     from_table=from_table,
                     from_field=from_field,
+                    to_schema=to_schema,
                     to_table=to_table,
                     to_field=to_field,
+                    constraint_name=constraint_name,
                     source=source_kind,
                 )
             )
+
         from app.retrieval.index_jobs import enqueue_index_job, serialize_job
 
         index_job = enqueue_index_job(
@@ -263,37 +237,12 @@ def scan_source(source: DataSource, auto_register: bool = False) -> dict:
         session.commit()
 
     summary["semanticIndexJob"] = serialize_job(index_job)
-
     return summary
 
 
 def scan_default_source(auto_register: bool = False) -> dict:
-    """扫描默认数据源（启动时自动首次扫描用）。"""
     with PlatformSession() as session:
         source = session.query(DataSource).filter_by(is_default=True).first()
     if source is None:
-        return {"tables": 0, "fields": 0, "relations": 0}
+        return {"tables": 0, "fields": 0, "relations": 0, "schemas": [], "warnings": []}
     return scan_source(source, auto_register=auto_register)
-
-
-def _primary_field(fields_by_table: dict, table_name: str) -> str | None:
-    for fld in fields_by_table.get(table_name, []):
-        if fld["is_primary"]:
-            return fld["name"]
-    return None
-
-
-def _infer_data_updated(conn, table_name: str, fields: list, quote: str = "`") -> str:
-    """取第一个 date/datetime 字段的 MAX 作为数据新鲜度。"""
-    for fld in fields:
-        if fld["type"].startswith(("date", "timestamp", "datetime")):
-            value = _scalar(conn, f"SELECT MAX({quote}{fld['name']}{quote}) FROM {quote}{table_name}{quote}")
-            if value is not None:
-                return str(value)[:10]
-    return ""
-
-
-def _format_sample(value) -> str:
-    if isinstance(value, (datetime, date)):
-        return str(value)
-    return str(value)[:100]

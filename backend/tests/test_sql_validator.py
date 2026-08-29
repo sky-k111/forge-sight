@@ -65,3 +65,35 @@ def test_postgresql_allows_full_outer_join():
         "postgresql",
     )
     assert result.ok
+
+
+def test_schema_qualified_table_is_checked_as_physical_identity():
+    result = validate_sql(
+        'SELECT "order_id" FROM "sales"."orders"',
+        {"sales.orders"},
+        "postgres",
+    )
+    assert result.ok
+    assert result.tables == ["sales.orders"]
+
+
+def test_same_bare_table_in_wrong_schema_is_rejected():
+    result = validate_sql(
+        'SELECT * FROM "archive"."orders"',
+        {"sales.orders"},
+        "postgres",
+    )
+    assert not result.ok
+    assert "archive.orders" in result.reason
+
+
+def test_sqlserver_limit_is_rejected_before_execution():
+    result = validate_dialect_compatibility("SELECT * FROM orders LIMIT 10", "sqlserver")
+    assert not result.ok
+    assert "TOP" in result.reason
+
+
+def test_locked_select_is_rejected():
+    result = validate_sql("SELECT * FROM mes_process_output FOR UPDATE", TABLES)
+    assert not result.ok
+    assert "锁" in result.reason

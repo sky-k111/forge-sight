@@ -1,73 +1,82 @@
-"""数据源适配层：按数据源类型构建只读连接。
+"""Compatibility facade for registered database connectors and engine pools."""
 
-借鉴 datafoundry data-gateway 的适配器思路：
-- 每种类型一个适配实现（当前 mysql / postgresql）
-- 连接级只读与超时强制设置（PG: READ ONLY 事务 + statement_timeout；MySQL: 会话只读 + MAX_EXECUTION_TIME）
-- 引擎按数据源缓存，避免每次重建连接池
-"""
+from __future__ import annotations
 
-from urllib.parse import quote_plus
+from copy import copy
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
-from app.config import settings
 from app.db.models import DataSource
+from app.gateway.connectors import get_adapter, supported_types, type_descriptors
 
-SUPPORTED_TYPES = {
-    "mysql": {"label": "MySQL", "default_port": 3306},
-    "postgresql": {"label": "PostgreSQL", "default_port": 5432},
-}
+SUPPORTED_TYPES = supported_types()
+_engines: dict[tuple[str, int, int], Engine] = {}
 
-_engines: dict[int, Engine] = {}
+
+def _cache_key(source: DataSource) -> tuple[str, int, int]:
+    return (source.tenant_id or "tenant-default", int(source.id or 0), int(source.connection_revision or 1))
 
 
 def build_url(source: DataSource) -> str:
-    password = quote_plus(source.password)
-    if source.type == "mysql":
-        return (
-            f"mysql+pymysql://{source.username}:{password}"
-            f"@{source.host}:{source.port}/{source.db_name}?charset=utf8mb4"
-        )
-    if source.type == "postgresql":
-        return f"postgresql+psycopg2://{source.username}:{password}@{source.host}:{source.port}/{source.db_name}"
-    raise ValueError(f"不支持的数据源类型：{source.type}（当前支持 mysql / postgresql）")
-
-
-def _apply_readonly(engine: Engine, source_type: str) -> None:
-    @event.listens_for(engine, "connect")
-    def _set_readonly(dbapi_connection, _record):
-        cursor = dbapi_connection.cursor()
-        if source_type == "mysql":
-            cursor.execute("SET SESSION TRANSACTION READ ONLY")
-            cursor.execute(f"SET SESSION MAX_EXECUTION_TIME = {settings.sql_timeout_seconds * 1000}")
-        else:  # postgresql
-            cursor.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
-            cursor.execute(f"SET statement_timeout = {settings.sql_timeout_seconds * 1000}")
-        cursor.close()
+    """Return a password-masked URL for diagnostics and tests."""
+    return get_adapter(source.type).build_url(source).render_as_string(hide_password=True)
 
 
 def get_engine(source: DataSource) -> Engine:
-    if source.id not in _engines:
-        engine = create_engine(build_url(source), pool_pre_ping=True, pool_size=5)
-        _apply_readonly(engine, source.type)
-        _engines[source.id] = engine
-    return _engines[source.id]
-
-
-def drop_engine(source_id: int) -> None:
-    engine = _engines.pop(source_id, None)
+    key = _cache_key(source)
+    engine = _engines.get(key)
     if engine is not None:
-        engine.dispose()
+        return engine
+    adapter = get_adapter(source.type)
+    engine = create_engine(
+        adapter.build_url(source),
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=5,
+        pool_recycle=1800,
+    )
+    adapter.configure_engine(engine, source)
+    _engines[key] = engine
+    return engine
+
+
+def drop_engine(source_id: int, tenant_id: str | None = None) -> None:
+    doomed = [
+        key for key in _engines
+        if key[1] == source_id and (tenant_id is None or key[0] == tenant_id)
+    ]
+    for key in doomed:
+        _engines.pop(key).dispose()
 
 
 def test_connection(source: DataSource) -> tuple[bool, str]:
-    """测试连接可用性与只读性。返回 (是否成功, 说明)。"""
+    """Test connectivity through the same pooled engine used by the gateway."""
     try:
-        engine = get_engine(source)
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return True, "连接正常"
-    except Exception as exc:  # noqa: BLE001 - 连接失败原因需返回给管理员
-        drop_engine(source.id)
-        return False, f"{type(exc).__name__}: {exc}"[:300]
+        result = get_adapter(source.type).test_connection(get_engine(source), source)
+        details = result.message
+        if result.server_version:
+            details += f"；版本 {result.server_version}"
+        if result.warnings:
+            details += "；" + "；".join(result.warnings)
+        if not result.ok:
+            drop_engine(source.id, source.tenant_id)
+        return result.ok, details[:500]
+    except Exception as exc:  # noqa: BLE001 - driver/import failures are admin-facing
+        drop_engine(source.id, source.tenant_id)
+        return False, f"{type(exc).__name__}: {exc}"[:500]
+
+
+def discover_schemas(source: DataSource) -> list[str]:
+    adapter = get_adapter(source.type)
+    discovery_source = copy(source)
+    # 发现候选不能被已保存的允许范围短路；扫描时仍使用原 source 的白名单。
+    discovery_source.schema_names = []
+    with get_engine(source).connect() as conn:
+        return adapter.list_schemas(conn, discovery_source)
+
+
+__all__ = [
+    "SUPPORTED_TYPES", "build_url", "discover_schemas", "drop_engine", "get_adapter", "get_engine",
+    "test_connection", "type_descriptors",
+]

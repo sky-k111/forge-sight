@@ -13,8 +13,8 @@ from app.audit.service import write_audit
 from app.config import settings
 from app.db.models import DataSource, DataTable
 from app.db.platform import PlatformSession
-from app.gateway.adapters import get_engine
-from app.gateway.sql_validator import validate_sql
+from app.gateway.adapters import get_adapter, get_engine
+from app.gateway.sql_validator import validate_dialect_compatibility, validate_sql
 
 
 @dataclass
@@ -39,10 +39,19 @@ def get_default_source() -> DataSource:
 
 
 def fetch_registered_tables(source_id: int) -> set[str]:
-    """白名单：该数据源下已登记的表。"""
+    """Schema-aware whitelist; bare names are allowed only when unambiguous."""
     with PlatformSession() as session:
-        rows = session.query(DataTable.name).filter_by(source_id=source_id, registered=True).all()
-    return {row[0] for row in rows}
+        rows = (
+            session.query(DataTable.schema_name, DataTable.name)
+            .filter_by(source_id=source_id, registered=True)
+            .all()
+        )
+    result = {f"{schema}.{name}" if schema else name for schema, name in rows}
+    counts: dict[str, int] = {}
+    for _schema, name in rows:
+        counts[name] = counts.get(name, 0) + 1
+    result.update(name for name, count in counts.items() if count == 1)
+    return result
 
 
 def execute_readonly(
@@ -55,7 +64,11 @@ def execute_readonly(
     if source is None:
         source = get_default_source()
 
-    check = validate_sql(sql, fetch_registered_tables(source.id))
+    adapter = get_adapter(source.type)
+    dialect_check = validate_dialect_compatibility(sql, source.type)
+    if not dialect_check.ok:
+        return ExecutionResult(ok=False, error=dialect_check.reason)
+    check = validate_sql(sql, fetch_registered_tables(source.id), adapter.sqlglot_dialect)
     if not check.ok:
         write_audit(
             action=action,
@@ -69,8 +82,9 @@ def execute_readonly(
     started = time.perf_counter()
     try:
         engine = get_engine(source)
+        execution_sql = adapter.apply_row_limit(sql, settings.sql_max_rows + 1)
         with engine.connect() as conn:
-            cursor = conn.execute(text(sql))
+            cursor = conn.execute(text(execution_sql))
             columns = list(cursor.keys())
             raw = cursor.fetchmany(settings.sql_max_rows + 1)
     except Exception as exc:  # noqa: BLE001 - 执行失败需转化为可理解的错误返回
@@ -99,5 +113,5 @@ def execute_readonly(
         duration_ms=duration_ms,
         truncated=truncated,
         tables=check.tables,
-        checks=check.checks,
+        checks=check.checks + dialect_check.checks + [f"服务端限行：{settings.sql_max_rows + 1}"],
     )

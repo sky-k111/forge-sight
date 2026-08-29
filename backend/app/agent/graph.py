@@ -17,6 +17,7 @@ from app.agent.intent import build_intent_plan, build_request_route
 from app.agent.state import AnalysisState
 from app.agent.system_utility import build_system_utility_response
 from app.gateway.executor import ExecutionResult
+from app.gateway.connectors import get_adapter
 from app.gateway.sql_validator import SqlCheckResult, validate_dialect_compatibility
 
 WRITE_TERMS = (
@@ -32,7 +33,7 @@ RETRIEVAL_HISTORY_ITEMS = 2
 class GraphDependencies:
     retrieve_context: Callable[[str, int], dict[str, Any]]
     generate_text: Callable[[AnalysisState, str, str, str], str]
-    validate_sql: Callable[[str, set[str]], SqlCheckResult]
+    validate_sql: Callable[..., SqlCheckResult]
     execute_sql: Callable[[str, int], ExecutionResult]
     explain_sql: Callable[[str, int], Any] | None = None
     retrieve_skills: Callable[[str, int], dict[str, Any]] | None = None
@@ -66,6 +67,30 @@ _MODELING_SKIP_COLUMN_TOKENS = (
     "id", "日期", "时间", "date", "time", "created", "updated", "序号", "备注", "说明",
 )
 MODELING_SAMPLE_LIMIT = 10000
+
+
+def _validate_for_dialect(
+    deps: GraphDependencies,
+    sql: str,
+    allowed: set[str],
+    dialect: str,
+) -> SqlCheckResult:
+    """Keep older test doubles compatible while production passes the real dialect."""
+    try:
+        return deps.validate_sql(sql, allowed, get_adapter(dialect).sqlglot_dialect)
+    except TypeError:
+        return deps.validate_sql(sql, allowed)
+
+
+def _quoted_name(value: str, dialect: str) -> str:
+    return get_adapter(dialect).quote_identifier(value)
+
+
+def _context_table_name(table: dict, dialect: str) -> str:
+    schema = str(table.get("schemaName") or table.get("schema") or "").strip()
+    name = str(table.get("name") or "").strip()
+    quoted = _quoted_name(name, dialect)
+    return f"{_quoted_name(schema, dialect)}.{quoted}" if schema else quoted
 
 
 def _detect_modeling_task_type(question: str) -> str:
@@ -414,6 +439,8 @@ def _confidence_assessment(state: AnalysisState) -> dict[str, Any]:
     validation_score = 100 if state.get("validation", {}).get("ok") else 0
     task_score = int(state.get("validation", {}).get("taskComplianceScore", 100 if validation_score else 0))
     execution = state.get("execution", {})
+    cost_gate = state.get("validation", {}).get("costGate", {})
+    cost_gate_degraded = bool(cost_gate.get("degraded"))
     execution_score, completeness_issues, completeness_cap = _result_completeness_assessment(state)
     score = round(
         metric_score * 0.35
@@ -424,6 +451,8 @@ def _confidence_assessment(state: AnalysisState) -> dict[str, Any]:
     )
     if inferred:
         score = min(score, 78)
+    if cost_gate_degraded:
+        score = min(score, 82)
     if completeness_cap is not None:
         score = min(score, completeness_cap)
     level = "high" if score >= 85 else "medium" if score >= 65 else "low"
@@ -433,6 +462,7 @@ def _confidence_assessment(state: AnalysisState) -> dict[str, Any]:
         "SQL 已通过只读、表字段白名单和语法校验。" if validation_score else "SQL 尚未通过完整校验。",
         "SQL 已覆盖用户指定的时间、维度和展示约束。" if task_score >= 90 else "SQL 对用户任务约束的覆盖不完整。",
         "查询已成功执行。" if execution.get("ok") else "查询尚未成功执行。",
+        cost_gate.get("reason", "") if cost_gate_degraded else "",
         *completeness_issues,
     ]
     return {
@@ -448,6 +478,7 @@ def _confidence_assessment(state: AnalysisState) -> dict[str, Any]:
         },
         "reasons": [item for item in reasons if item],
         "cappedByInferredMetric": inferred,
+        "cappedByCostGateDegraded": cost_gate_degraded,
         "cappedByIncompleteResult": completeness_cap is not None,
         "completenessIssues": completeness_issues,
     }
@@ -979,14 +1010,18 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         if not features:
             return {"error": {"code": "MODELING_NO_FEATURES", "message": "该表没有可用于建模的特征列"}}
         select_columns = [*features, target_field] if target_field else features
-        quoted = ", ".join(f"`{column}`" for column in select_columns)
-        sql = f"SELECT {quoted} FROM `{table['name']}` LIMIT {MODELING_SAMPLE_LIMIT}"
-        check = deps.validate_sql(sql, allowed)
+        dialect = str(context.get("source", {}).get("type") or "mysql").lower()
+        quoted = ", ".join(_quoted_name(column, dialect) for column in select_columns)
+        table_sql = _context_table_name(table, dialect)
+        sql = get_adapter(dialect).apply_row_limit(
+            f"SELECT {quoted} FROM {table_sql}", MODELING_SAMPLE_LIMIT
+        )
+        check = _validate_for_dialect(deps, sql, allowed, dialect)
         if not check.ok:
             return {"error": {"code": "MODELING_SQL_REJECTED", "message": f"取数 SQL 未通过白名单校验：{check.reason}"}}
         sample_count = None
         count_result = deps.execute_sql(
-            f"SELECT COUNT(*) AS n FROM `{table['name']}`", state["source_id"]
+            f"SELECT COUNT(*) AS n FROM {table_sql}", state["source_id"]
         )
         if count_result.ok and count_result.rows:
             try:
@@ -1033,12 +1068,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             repair = f"\n上一次失败：{json.dumps(state['error'], ensure_ascii=False)}。请修复，不要重复原 SQL。"
         infer_metric = state["semantic_context"].get("coverage", {}).get("status") == "no_metric_match"
         dialect = str(state["semantic_context"].get("source", {}).get("type") or "mysql").lower()
-        dialect_instruction = (
-            "目标数据库为 MySQL。禁止使用 FULL OUTER JOIN、ILIKE、DATE_TRUNC 和 PostgreSQL 的 :: 转换；"
-            "需要模拟全连接时使用 LEFT JOIN 与反向 LEFT JOIN 的 UNION ALL。"
-            if dialect == "mysql"
-            else "目标数据库为 PostgreSQL。禁止使用 MySQL 的反引号、DATE_FORMAT 和 IFNULL。"
-        )
+        dialect_instruction = get_adapter(dialect).dialect_prompt()
         system = (
             "你是企业数据底座的只读 SQL 生成器。只能使用上下文列出的表、字段和关联路径，不使用未登记资源。"
             "analysisSkills 只是经审核的分析程序建议：适用时遵循其前置条件、步骤和输出要求；"
@@ -1126,14 +1156,14 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         if state.get("error") or not state.get("sql"):
             return {}
         allowed = set(state["semantic_context"].get("executionPolicy", {}).get("allowedTables", []))
-        result = deps.validate_sql(state["sql"], allowed)
+        dialect = str(state["semantic_context"].get("source", {}).get("type") or "mysql")
+        result = _validate_for_dialect(deps, state["sql"], allowed, dialect)
         payload = asdict(result)
         if not result.ok:
             return {
                 "validation": payload,
                 "error": {"code": "SQL_VALIDATION_FAILED", "message": result.reason, "retryable": True},
             }
-        dialect = str(state["semantic_context"].get("source", {}).get("type") or "mysql")
         dialect_check = validate_dialect_compatibility(state["sql"], dialect)
         payload["checks"] = [*payload.get("checks", []), *dialect_check.checks]
         if not dialect_check.ok:

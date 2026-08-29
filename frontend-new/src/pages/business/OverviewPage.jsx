@@ -38,7 +38,13 @@ function formatTime(value) {
 }
 
 function sourceTypeLabel(type) {
-  return { mysql: "MySQL", postgresql: "PostgreSQL" }[type] ?? String(type || "数据源").toUpperCase();
+  return {
+    mysql: "MySQL",
+    postgresql: "PostgreSQL",
+    mariadb: "MariaDB",
+    sqlserver: "SQL Server",
+    oracle: "Oracle",
+  }[type] ?? String(type || "数据源").toUpperCase();
 }
 
 function compactNumber(value) {

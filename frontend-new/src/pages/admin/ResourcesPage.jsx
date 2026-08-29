@@ -2,34 +2,45 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
 import { Button, Card, EmptyState, ErrorNotice, Modal, PageFrame, RouteSkeleton, SectionHeader, StatusPill } from "../../components/ui";
-import { confirmTableSemantics, getTableFields, getTablePreview, listTables, listUnregisteredTables, suggestTableSemantics } from "../../api/resources";
-import { createSource, getSemanticIndexStatus, listSources, rebuildSemanticIndex, retrySemanticIndexJob, scanSource, testSource, updateSource } from "../../api/datasources";
+import { confirmTableSemantics, getTableFields, getTablePreview, listRelations, listTables, listUnregisteredTables, suggestTableSemantics } from "../../api/resources";
+import { createSource, getSemanticIndexStatus, listSources, listSourceTypes, rebuildSemanticIndex, retrySemanticIndexJob, scanSource, testSource, updateSource } from "../../api/datasources";
 import { generateMetricCandidates } from "../../api/knowledge";
 import { buildSchemaLinkPath, getSchemaNodeStyle, SCHEMA_GRAPH_HEIGHT, SCHEMA_GRAPH_WIDTH } from "./schemaGraphLayout";
 import SourceTypeMark from "../../components/ui/SourceTypeMark";
 
-const EMPTY_FORM = { name: "", type: "", host: "127.0.0.1", port: "", database: "", username: "", password: "" };
-
-// 已支持的数据源类型（对齐后端 SUPPORTED_TYPES：mysql / postgresql），图标为真实数据库 logo
-const SOURCE_TYPE_META = {
-  mysql: { label: "MySQL", description: "关系型数据库，制造业务库常用。默认端口 3306。" },
-  postgresql: { label: "PostgreSQL", description: "对象关系型数据库。默认端口 5432。" },
+const EMPTY_FORM = {
+  name: "", type: "", host: "127.0.0.1", port: "", database: "", username: "", password: "",
+  schemas: "", config: {},
 };
 
-// 规划中类型：仅展示扩展能力，不可选择
-const UPCOMING_TYPE_META = {
-  sqlserver: { label: "SQL Server", description: "Microsoft 企业级数据库，适配器规划中。" },
-  oracle: { label: "Oracle", description: "Oracle 企业级数据库，适配器规划中。" },
+// 后端类型目录不可用时的可恢复降级值；正常情况下能力与成熟度由 Adapter Registry 返回。
+const FALLBACK_SOURCE_TYPES = [
+  { type: "mysql", label: "MySQL", default_port: 3306, maturity: "stable" },
+  { type: "postgresql", label: "PostgreSQL", default_port: 5432, maturity: "stable" },
+  { type: "mariadb", label: "MariaDB", default_port: 3306, maturity: "stable" },
+  { type: "sqlserver", label: "SQL Server", default_port: 1433, maturity: "beta" },
+  { type: "oracle", label: "Oracle", default_port: 1521, maturity: "beta" },
+];
+
+const TYPE_DESCRIPTIONS = {
+  mysql: "制造业 ERP、MES 与业务系统常见数据库。",
+  postgresql: "支持多 Schema、注释与物化视图的分析型关系数据库。",
+  mariadb: "兼容 MySQL 生态的开源关系数据库。",
+  sqlserver: "Microsoft 企业数据库；需安装 ODBC Driver 18。",
+  oracle: "大型企业核心业务数据库；使用 Service Name 连接。",
 };
 
 const inputClass = "h-9 w-full rounded-control border border-line bg-surface px-2.5 text-xs font-normal text-ink outline-none transition placeholder:text-faint focus:border-primary/50 focus:ring-2 focus:ring-primary/25";
+const tableIdentity = (table) => table?.qualifiedName ?? (table?.schemaName ? `${table.schemaName}.${table.name}` : table?.name ?? "");
 
 export default function ResourcesPage() {
   const [tables, setTables] = useState(null);
+  const [relations, setRelations] = useState([]);
   const [error, setError] = useState(null);
   const [sources, setSources] = useState([]);
+  const [sourceTypes, setSourceTypes] = useState(FALLBACK_SOURCE_TYPES);
   const [currentSourceId, setCurrentSourceId] = useState(null);
-  const [selectedName, setSelectedName] = useState("mes_process_output");
+  const [selectedName, setSelectedName] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
   const [connectorOpen, setConnectorOpen] = useState(false);
   const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
@@ -38,6 +49,7 @@ export default function ResourcesPage() {
   const [editNotice, setEditNotice] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [awaitingSchemaSelection, setAwaitingSchemaSelection] = useState(false);
   const [pendingSourceId, setPendingSourceId] = useState(null);
   const [unregistered, setUnregistered] = useState([]);
   const [search, setSearch] = useState("");
@@ -53,15 +65,29 @@ export default function ResourcesPage() {
   const load = useCallback(() => {
     setError(null);
     setTables(null);
-    listTables(currentSourceId ? { sourceId: currentSourceId } : {})
-      .then(setTables)
+    Promise.all([
+      listTables(currentSourceId ? { sourceId: currentSourceId } : {}),
+      listRelations(currentSourceId),
+    ])
+      .then(([nextTables, nextRelations]) => {
+        setTables(nextTables);
+        setRelations(nextRelations);
+      })
       .catch(setError);
   }, [currentSourceId]);
 
   useEffect(load, [load]);
   useEffect(() => {
     listSources().then(setSources).catch(() => setSources([]));
+    listSourceTypes().then((items) => {
+      if (Array.isArray(items) && items.length) setSourceTypes(items);
+    }).catch(() => setSourceTypes(FALLBACK_SOURCE_TYPES));
   }, []);
+
+  const sourceTypeMeta = useMemo(
+    () => Object.fromEntries(sourceTypes.map((item) => [item.type, item])),
+    [sourceTypes],
+  );
 
   const indexSourceId = currentSourceId ?? sources.find((source) => source.isDefault)?.id ?? sources[0]?.id;
   useEffect(() => {
@@ -115,7 +141,7 @@ export default function ResourcesPage() {
     }),
     [search, tables, tableTopicFilter],
   );
-  const selectedTable = tables?.find((table) => table.name === selectedName) ?? tables?.[0];
+  const selectedTable = tables?.find((table) => tableIdentity(table) === selectedName) ?? tables?.[0];
   const currentSource = sources.find((source) => source.id === currentSourceId) ?? sources.find((source) => source.isDefault);
 
   const switchSource = (id) => {
@@ -132,6 +158,7 @@ export default function ResourcesPage() {
     setEditingId(null);
     setEditNotice("");
     setTestResult(null);
+    setAwaitingSchemaSelection(false);
     setSuggestion(null);
     setUnregistered([]);
     setConnectorOpen(true);
@@ -147,10 +174,13 @@ export default function ResourcesPage() {
       database: source.database,
       username: source.username,
       password: "",
+      schemas: (source.schemas ?? []).join(", "),
+      config: source.config ?? {},
     });
     setEditingId(source.id);
     setEditNotice("");
     setTestResult(null);
+    setAwaitingSchemaSelection(false);
     setSuggestion(null);
     setUnregistered([]);
     setConnectorOpen(true);
@@ -168,6 +198,8 @@ export default function ResourcesPage() {
         database: form.database,
         username: form.username,
         password: form.password || undefined,
+        schemas: form.schemas.split(",").map((item) => item.trim()).filter(Boolean),
+        config: form.config,
       });
       setSources(await listSources());
       setEditNotice("配置已保存");
@@ -214,14 +246,24 @@ export default function ResourcesPage() {
     setUnregistered([]);
     setSuggestion(null);
     try {
-      const created = await createSource({ ...form, port: form.port ? Number(form.port) : undefined });
+      const created = await createSource({
+        ...form,
+        port: form.port ? Number(form.port) : undefined,
+        schemas: form.schemas.split(",").map((item) => item.trim()).filter(Boolean),
+      });
       setPendingSourceId(created.id);
       const result = await testSource(created.id);
       setTestResult(result);
       if (result.ok) {
-        await scanSource(created.id);
-        setUnregistered(await listUnregisteredTables(created.id));
-        setSources(await listSources());
+        const requested = form.schemas.split(",").map((item) => item.trim()).filter(Boolean);
+        if (requested.length || !(result.schemas?.length)) {
+          await scanSource(created.id);
+          setUnregistered(await listUnregisteredTables(created.id));
+          setSources(await listSources());
+        } else {
+          setAwaitingSchemaSelection(true);
+          setForm((value) => ({ ...value, schemas: (result.schemas ?? []).slice(0, 1).join(", ") }));
+        }
       }
     } catch (err) {
       setTestResult({ ok: false, message: err.message });
@@ -230,10 +272,34 @@ export default function ResourcesPage() {
     }
   };
 
-  const runSuggest = async (tableName) => {
+  const toggleDiscoveredSchema = (schema) => {
+    const selected = new Set(form.schemas.split(",").map((item) => item.trim()).filter(Boolean));
+    if (selected.has(schema)) selected.delete(schema);
+    else selected.add(schema);
+    setForm((value) => ({ ...value, schemas: [...selected].join(", ") }));
+  };
+
+  const confirmSchemasAndScan = async () => {
+    const selected = form.schemas.split(",").map((item) => item.trim()).filter(Boolean);
+    if (!pendingSourceId || !selected.length) return;
+    setTesting(true);
+    try {
+      await updateSource(pendingSourceId, { schemas: selected });
+      await scanSource(pendingSourceId);
+      setUnregistered(await listUnregisteredTables(pendingSourceId));
+      setSources(await listSources());
+      setAwaitingSchemaSelection(false);
+    } catch (err) {
+      setTestResult((value) => ({ ...value, ok: false, message: err.message }));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const runSuggest = async (table) => {
     setSuggesting(true);
     try {
-      setSuggestion(await suggestTableSemantics(tableName, pendingSourceId));
+      setSuggestion(await suggestTableSemantics(table.name, pendingSourceId, table.schemaName));
     } finally {
       setSuggesting(false);
     }
@@ -242,22 +308,27 @@ export default function ResourcesPage() {
   const confirmIntegration = async () => {
     setConfirming(true);
     try {
-      const created = await confirmTableSemantics(suggestion.name, pendingSourceId, suggestion);
-      const remaining = unregistered.filter((table) => table.name !== created.name);
-      let notice = created.name;
+      const created = await confirmTableSemantics(
+        suggestion.name,
+        pendingSourceId,
+        suggestion.schemaName,
+        suggestion,
+      );
+      const remaining = unregistered.filter((table) => tableIdentity(table) !== tableIdentity(created));
+      let notice = created.qualifiedName ?? created.name;
       if (remaining.length === 0) {
         try {
           const candidateResult = await generateMetricCandidates(pendingSourceId);
-          notice = `${created.name}；已生成 ${candidateResult.generated ?? 0} 项口径候选`;
+          notice = `${created.qualifiedName ?? created.name}；已生成 ${candidateResult.generated ?? 0} 项口径候选`;
         } catch {
-          notice = `${created.name}；口径候选可在业务知识库中重试生成`;
+          notice = `${created.qualifiedName ?? created.name}；口径候选可在业务知识库中重试生成`;
         }
       }
       setIntegrated(notice);
       setSuggestion(null);
       setUnregistered(remaining);
       switchSource(pendingSourceId);
-      setSelectedName(created.name);
+      setSelectedName(tableIdentity(created));
       await refreshSemanticIndex();
     } finally {
       setConfirming(false);
@@ -384,38 +455,29 @@ export default function ResourcesPage() {
                 </Button>
               </div>
               <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                {Object.entries(SOURCE_TYPE_META).map(([type, meta]) => (
+                {sourceTypes.map((meta) => (
                   <button
                     type="button"
-                    key={type}
-                    onClick={() => setForm((value) => ({ ...value, type }))}
+                    key={meta.type}
+                    onClick={() => setForm((value) => ({
+                      ...value,
+                      type: meta.type,
+                      port: String(meta.default_port ?? ""),
+                      config: meta.type === "sqlserver"
+                        ? { driver: "ODBC Driver 18 for SQL Server", encrypt: true, trustServerCertificate: false }
+                        : meta.type === "oracle" ? { serviceName: "" } : {},
+                    }))}
                     className="group flex cursor-pointer items-start gap-3 rounded-card border border-line bg-surface p-3 text-left transition hover:border-primary/40 hover:bg-primary-soft/40 hover:shadow-card-hover"
                   >
-                    <SourceTypeMark type={type} className="h-11 w-11 rounded-card" />
+                    <SourceTypeMark type={meta.type} className="h-11 w-11 rounded-card" />
                     <span className="min-w-0 flex-1">
                       <strong className="block text-body font-semibold text-ink">{meta.label}</strong>
-                      <code className="block font-mono text-[10px] text-faint">{type}</code>
-                      <small className="mt-1 block text-[11px] leading-relaxed text-muted">{meta.description}</small>
+                      <code className="block font-mono text-[10px] text-faint">{meta.type}</code>
+                      <small className="mt-1 block text-[11px] leading-relaxed text-muted">{TYPE_DESCRIPTIONS[meta.type]}</small>
+                      <span className={cn("mt-2 inline-flex rounded-tag border px-1.5 py-px text-[9px] font-semibold", meta.maturity === "stable" ? "border-green/20 bg-green-soft text-green" : "border-amber/25 bg-amber-soft text-amber")}>{meta.maturity === "stable" ? "稳定适配" : "Beta 适配"}</span>
                     </span>
                     <Icon name="chevron" size={14} className="mt-1 shrink-0 text-faint transition group-hover:translate-x-0.5 group-hover:text-primary" />
                   </button>
-                ))}
-                {Object.entries(UPCOMING_TYPE_META).map(([type, meta]) => (
-                  <div
-                    key={type}
-                    aria-disabled="true"
-                    className="flex cursor-not-allowed items-start gap-3 rounded-card border border-dashed border-line bg-surface-2 p-3 opacity-70"
-                  >
-                    <SourceTypeMark type={type} className="h-11 w-11 rounded-card" />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2">
-                        <strong className="block text-body font-semibold text-muted">{meta.label}</strong>
-                        <span className="rounded-tag border border-line bg-surface px-1.5 py-px text-[10px] font-semibold text-faint">待支持</span>
-                      </span>
-                      <code className="block font-mono text-[10px] text-faint">{type}</code>
-                      <small className="mt-1 block text-[11px] leading-relaxed text-faint">{meta.description}</small>
-                    </span>
-                  </div>
                 ))}
               </div>
               <p className="mt-3 flex items-center gap-1.5 text-[11px] text-faint">
@@ -436,7 +498,7 @@ export default function ResourcesPage() {
                     {editingId == null ? "新建数据连接 · 第 2 步" : "数据源配置管理"}
                   </span>
                   <h3 className="mt-0.5 text-base font-semibold tracking-tight text-ink">
-                    {editingId == null ? `配置 ${SOURCE_TYPE_META[form.type].label} 连接` : `管理「${form.name}」`}
+                    {editingId == null ? `配置 ${sourceTypeMeta[form.type]?.label ?? form.type} 连接` : `管理「${form.name}」`}
                   </h3>
                   <p className="mt-0.5 text-xs text-muted">
                     {editingId == null ? "连接成功后自动扫描表、字段、主外键和少量样例值。" : "修改连接参数后请重新测试连接；密码留空表示不修改。"}
@@ -464,7 +526,7 @@ export default function ResourcesPage() {
                     </label>
                     <label className="grid gap-1.5 text-[11px] font-semibold text-muted">
                       端口
-                      <input value={form.port} onChange={updateForm("port")} placeholder={form.type === "postgresql" ? "5432" : "3306"} className={cn(inputClass, "font-mono")} />
+                      <input value={form.port} onChange={updateForm("port")} placeholder={String(sourceTypeMeta[form.type]?.default_port ?? "")} className={cn(inputClass, "font-mono")} />
                     </label>
                     <label className="grid gap-1.5 text-[11px] font-semibold text-muted">
                       数据库名
@@ -480,6 +542,25 @@ export default function ResourcesPage() {
                       <small className="text-[10px] font-normal text-faint">密码仅保存在平台服务端，接口永不回传明文。</small>
                     </label>
                   </div>
+                  <label className="grid gap-1.5 text-[11px] font-semibold text-muted">
+                    Schema 范围 <span className="font-normal text-faint">（可选，多个用逗号分隔）</span>
+                    <input value={form.schemas} onChange={updateForm("schemas")} placeholder={form.type === "postgresql" ? "public, manufacturing" : form.type === "sqlserver" ? "dbo" : "留空自动发现"} className={cn(inputClass, "font-mono")} />
+                    <small className="text-[10px] font-normal text-faint">留空时连接成功后自动发现非系统 Schema；扫描和白名单均保留 schema.table 身份。</small>
+                  </label>
+                  {form.type === "sqlserver" && (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="grid gap-1.5 text-[11px] font-semibold text-muted sm:col-span-2">ODBC 驱动
+                        <input value={form.config.driver ?? ""} onChange={(event) => setForm((value) => ({ ...value, config: { ...value.config, driver: event.target.value } }))} className={cn(inputClass, "font-mono")} />
+                      </label>
+                      <label className="flex items-center gap-2 text-[11px] font-semibold text-muted"><input type="checkbox" checked={form.config.encrypt ?? true} onChange={(event) => setForm((value) => ({ ...value, config: { ...value.config, encrypt: event.target.checked } }))} />加密连接</label>
+                      <label className="flex items-center gap-2 text-[11px] font-semibold text-muted"><input type="checkbox" checked={form.config.trustServerCertificate ?? false} onChange={(event) => setForm((value) => ({ ...value, config: { ...value.config, trustServerCertificate: event.target.checked } }))} />信任服务器证书</label>
+                    </div>
+                  )}
+                  {form.type === "oracle" && (
+                    <label className="grid gap-1.5 text-[11px] font-semibold text-muted">Service Name
+                      <input value={form.config.serviceName ?? ""} onChange={(event) => setForm((value) => ({ ...value, config: { ...value.config, serviceName: event.target.value } }))} placeholder={form.database || "ORCLPDB1"} className={cn(inputClass, "font-mono")} />
+                    </label>
+                  )}
                 </div>
               </div>
 
@@ -492,7 +573,7 @@ export default function ResourcesPage() {
                     <Button onClick={() => setForm(() => ({ ...EMPTY_FORM, type: "" }))}>上一步</Button>
                     <Button onClick={() => setConnectorOpen(false)}>取消</Button>
                     <Button variant="primary" onClick={saveAndTest} disabled={testing || !form.name || !form.database || !form.username}>
-                      {testing ? "正在连接并扫描" : "保存并测试连接"}
+                      {testing ? "正在测试连接" : "保存并测试连接"}
                     </Button>
                   </>
                 ) : (
@@ -509,20 +590,58 @@ export default function ResourcesPage() {
                 )}
                 {editNotice && <StatusPill tone="green">{editNotice}</StatusPill>}
                 {testResult && (
-                  <StatusPill tone={testResult.ok ? "green" : "red"}>{testResult.ok ? "连接成功" : testResult.message}</StatusPill>
+                  <StatusPill tone={testResult.ok ? "green" : "red"}>{testResult.ok ? `连接成功${testResult.schemas?.length ? ` · ${testResult.schemas.length} 个 Schema` : ""}` : testResult.message}</StatusPill>
                 )}
                 {integrated && <StatusPill tone="green">{integrated} 已接入资源目录</StatusPill>}
               </div>
-              {testResult?.ok && editingId == null && (
+              {testResult?.ok && editingId == null && awaitingSchemaSelection && (
+                <div className="mt-4 rounded-card border border-primary/20 bg-primary-soft/30 p-3.5">
+                  <div className="flex items-start gap-2.5">
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-control bg-surface text-primary"><Icon name="database" size={15} /></span>
+                    <div className="min-w-0 flex-1">
+                      <strong className="block text-xs font-semibold text-ink">选择允许分析的 Schema</strong>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted">仅所选范围会被扫描、建立语义索引并进入 SQL 白名单。后续可在数据源配置中修改。</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {(testResult.schemas ?? []).map((schema) => {
+                      const active = form.schemas.split(",").map((item) => item.trim()).includes(schema);
+                      return (
+                        <button
+                          type="button"
+                          key={schema}
+                          aria-pressed={active}
+                          onClick={() => toggleDiscoveredSchema(schema)}
+                          className={cn(
+                            "flex cursor-pointer items-center gap-2 rounded-control border px-2.5 py-2 font-mono text-[11px] transition",
+                            active ? "border-primary/35 bg-surface text-primary ring-1 ring-primary/15" : "border-line bg-surface text-muted hover:border-line-strong",
+                          )}
+                        >
+                          <span className={cn("grid h-4 w-4 place-items-center rounded-[4px] border", active ? "border-primary bg-primary text-white" : "border-line-strong")}>
+                            {active && <Icon name="check" size={11} />}
+                          </span>
+                          {schema}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-3 flex items-center justify-end border-t border-primary/15 pt-3">
+                    <Button variant="primary" size="sm" disabled={testing || !form.schemas.trim()} onClick={confirmSchemasAndScan}>
+                      {testing ? "正在扫描" : "确认范围并扫描"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {testResult?.ok && editingId == null && !awaitingSchemaSelection && (
                 <div className="mt-4 grid gap-3 rounded-card border border-line bg-surface-2 p-3.5">
                   {unregistered.length === 0 ? (
                     <span className="text-xs text-muted">结构扫描完成，未发现未登记数据表。</span>
                   ) : (
                     unregistered.map((table) => (
-                      <div key={table.name} className="flex flex-wrap items-center gap-2 text-xs text-ink-2">
+                      <div key={tableIdentity(table)} className="flex flex-wrap items-center gap-2 text-xs text-ink-2">
                         <Icon name="database" size={15} />
-                        <span>结构扫描发现未登记数据表：<code className="font-mono">{table.name}</code>（{table.rows} 行）</span>
-                        <Button size="sm" variant="primary" className="ml-auto" onClick={() => runSuggest(table.name)} disabled={suggesting}>
+                        <span>结构扫描发现未登记数据表：<code className="font-mono">{tableIdentity(table)}</code>（{table.rows} 行）</span>
+                        <Button size="sm" variant="primary" className="ml-auto" onClick={() => runSuggest(table)} disabled={suggesting}>
                           <Icon name="scan" size={14} />{suggesting ? "正在分析" : "AI 辅助理解"}
                         </Button>
                       </div>
@@ -564,7 +683,7 @@ export default function ResourcesPage() {
       <Card>
         <SectionHeader eyebrow="业务数据关系" title="生产—质量—设备关联图" action="展开关系图" />
         <div className="px-5 pb-5">
-          <SchemaGraph selected={selectedTable?.name} onSelect={(name) => { setSelectedName(name); setPreviewOpen(false); }} />
+          <SchemaGraph tables={tables} relations={relations} selected={tableIdentity(selectedTable)} onSelect={(name) => { setSelectedName(name); setPreviewOpen(false); }} />
         </div>
       </Card>
 
@@ -600,17 +719,17 @@ export default function ResourcesPage() {
             {visibleTables.map((table) => (
               <button
                 type="button"
-                key={table.name}
-                onClick={() => { setSelectedName(table.name); setPreviewOpen(false); }}
+                key={tableIdentity(table)}
+                onClick={() => { setSelectedName(tableIdentity(table)); setPreviewOpen(false); }}
                 className={cn(
                   "grid w-full cursor-pointer grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-control px-2 py-2 text-left transition-colors",
-                  selectedTable?.name === table.name ? "bg-surface-2 ring-1 ring-inset ring-line" : "hover:bg-surface-2",
+                  tableIdentity(selectedTable) === tableIdentity(table) ? "bg-surface-2 ring-1 ring-inset ring-line" : "hover:bg-surface-2",
                 )}
               >
                 <span className="grid h-8 w-8 place-items-center rounded-control border border-line bg-surface text-muted"><Icon name="database" size={16} /></span>
                 <span className="min-w-0">
                   <strong className="block truncate text-body font-semibold text-ink">{table.cn}</strong>
-                  <small className="block truncate font-mono text-[10px] text-faint">{table.name}</small>
+                  <small className="block truncate font-mono text-[10px] text-faint">{tableIdentity(table)}</small>
                 </span>
                 <span className="text-right">
                   <b className="block font-mono text-xs font-semibold text-ink">{table.quality}</b>
@@ -628,7 +747,7 @@ export default function ResourcesPage() {
               <div className="min-w-0">
                 <span className="text-[11px] font-semibold tracking-wide text-faint">{selectedTable.topic}主题 · {selectedTable.rows} 行</span>
                 <h3 className="mt-1 truncate text-base font-semibold tracking-tight text-ink">{selectedTable.cn}</h3>
-                <code className="font-mono text-[11px] text-muted">{selectedTable.name}</code>
+                <code className="font-mono text-[11px] text-muted">{tableIdentity(selectedTable)}</code>
               </div>
               <Button
                 size="sm"
@@ -645,7 +764,7 @@ export default function ResourcesPage() {
               <span><b className="mr-1 font-mono font-semibold text-ink">{selectedTable.freshness}</b>更新</span>
               <span><b className="mr-1 font-mono font-semibold text-ink">{selectedTable.quality}</b>质量分</span>
             </div>
-            {!previewOpen ? <FieldTable tableName={selectedTable.name} sourceId={currentSourceId} /> : <DataPreview table={selectedTable} sourceId={currentSourceId} />}
+            {!previewOpen ? <FieldTable tableName={selectedTable.name} schemaName={selectedTable.schemaName} sourceId={currentSourceId} /> : <DataPreview table={selectedTable} sourceId={currentSourceId} />}
           </Card>
         )}
       </div>
@@ -653,17 +772,17 @@ export default function ResourcesPage() {
   );
 }
 
-function FieldTable({ tableName, sourceId }) {
+function FieldTable({ tableName, schemaName, sourceId }) {
   const [fields, setFields] = useState(null);
 
   useEffect(() => {
     let active = true;
     setFields(null);
-    getTableFields(tableName, sourceId)
+    getTableFields(tableName, sourceId, schemaName)
       .then((data) => { if (active) setFields(data); })
       .catch(() => { if (active) setFields([]); });
     return () => { active = false; };
-  }, [tableName, sourceId]);
+  }, [tableName, schemaName, sourceId]);
 
   if (!fields) {
     return (
@@ -701,11 +820,11 @@ function DataPreview({ table, sourceId }) {
   useEffect(() => {
     let active = true;
     setPreview(null);
-    getTablePreview(table.name, sourceId)
+    getTablePreview(table.name, sourceId, table.schemaName)
       .then((data) => { if (active) setPreview(data); })
       .catch(() => { if (active) setPreview({ columns: [], rows: [] }); });
     return () => { active = false; };
-  }, [table.name, sourceId]);
+  }, [table.name, table.schemaName, sourceId]);
 
   if (!preview) {
     return (
@@ -719,7 +838,7 @@ function DataPreview({ table, sourceId }) {
       <div className="flex items-center gap-2 rounded-control border border-teal/30 bg-teal-soft px-2.5 py-2 text-[11px] text-teal">
         <Icon name="shield" size={14} />
         <span>只读预览 · 最多返回 20 行</span>
-        <code className="ml-auto font-mono text-[10px]">{table.name}</code>
+        <code className="ml-auto font-mono text-[10px]">{tableIdentity(table)}</code>
       </div>
       <div className="overflow-x-auto rounded-card border border-line">
         <table className="w-full border-collapse text-left">
@@ -753,24 +872,39 @@ const nodeTones = {
   violet: "text-violet",
 };
 
-function SchemaGraph({ selected, onSelect }) {
-  const nodes = [
-    { id: "mes_work_order", label: "生产工单", x: 18, y: 82, tone: "blue" },
-    { id: "mes_process_output", label: "工序产量", x: 246, y: 26, tone: "blue" },
-    { id: "qms_inspection", label: "质量检验", x: 246, y: 138, tone: "teal" },
-    { id: "eqp_downtime_record", label: "设备停机", x: 486, y: 26, tone: "amber" },
-    { id: "qms_defect_detail", label: "缺陷明细", x: 486, y: 138, tone: "teal" },
-    { id: "inv_inventory_snapshot", label: "库存快照", x: 724, y: 82, tone: "violet" },
+function SchemaGraph({ tables, relations, selected, onSelect }) {
+  const positions = [
+    [18, 26], [246, 26], [486, 26], [724, 26],
+    [18, 138], [246, 138], [486, 138], [724, 138],
   ];
-  const links = [
-    ["mes_work_order", "mes_process_output"],
-    ["mes_work_order", "qms_inspection"],
-    ["mes_process_output", "eqp_downtime_record"],
-    ["qms_inspection", "qms_defect_detail"],
-    ["eqp_downtime_record", "inv_inventory_snapshot"],
-    ["qms_defect_detail", "inv_inventory_snapshot"],
-  ];
+  const toneForTopic = (topic) => ({ 生产: "blue", 质量: "teal", 设备: "amber", 库存: "violet" }[topic] ?? "blue");
+  const nodes = (tables ?? []).slice(0, positions.length).map((table, index) => ({
+    id: tableIdentity(table),
+    label: table.cn || table.name,
+    x: positions[index][0],
+    y: positions[index][1],
+    tone: toneForTopic(table.topic),
+  }));
+  const visibleIds = new Set(nodes.map((node) => node.id));
+  const relationIdentity = (schema, name) => (schema ? `${schema}.${name}` : name);
+  const links = (relations ?? [])
+    .map((relation) => [
+      relationIdentity(relation.fromSchema, relation.fromTable),
+      relationIdentity(relation.toSchema, relation.toTable),
+    ])
+    .filter(([fromId, toId], index, items) => (
+      visibleIds.has(fromId)
+      && visibleIds.has(toId)
+      && items.findIndex(([left, right]) => left === fromId && right === toId) === index
+    ));
   const nodeMap = Object.fromEntries(nodes.map((node) => [node.id, node]));
+  if (!nodes.length) {
+    return (
+      <div data-testid="schema-graph-canvas" className="rounded-card border border-line bg-surface-2 p-5">
+        <EmptyState title="尚无可展示的数据关系" description="完成元数据扫描并登记数据表后，关系图会自动生成。" />
+      </div>
+    );
+  }
   return (
     <div className="overflow-hidden rounded-card border border-line bg-surface-2">
       <div
@@ -802,10 +936,13 @@ function SchemaGraph({ selected, onSelect }) {
             <span className={cn("shrink-0", nodeTones[node.tone] ?? nodeTones.blue)}><Icon name="database" size={14} /></span>
             <span className="min-w-0">
               <strong className="block truncate text-xs font-semibold text-ink">{node.label}</strong>
-              <small className="block truncate font-mono text-[9px] text-faint">{node.id}</small>
+              <small title={node.id} className="block truncate font-mono text-[9px] text-faint">{node.id}</small>
             </span>
           </button>
         ))}
+        {(tables?.length ?? 0) > positions.length && (
+          <span className="absolute bottom-1 right-2 text-[9px] text-faint">当前展示前 {positions.length} 张表</span>
+        )}
       </div>
     </div>
   );

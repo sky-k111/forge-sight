@@ -1,11 +1,13 @@
 import cn from "../../lib/cn";
 import mysqlIcon from "../../assets/db-icons/mysql.svg";
+import mariadbIcon from "../../assets/db-icons/mariadb.svg";
 import postgresqlIcon from "../../assets/db-icons/postgresql.svg";
 import sqlserverIcon from "../../assets/db-icons/sqlserver.svg";
 import oracleIcon from "../../assets/db-icons/oracle.svg";
 
 const sourceIcons = {
   mysql: mysqlIcon,
+  mariadb: mariadbIcon,
   postgresql: postgresqlIcon,
   sqlserver: sqlserverIcon,
   oracle: oracleIcon,

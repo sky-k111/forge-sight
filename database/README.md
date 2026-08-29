@@ -4,8 +4,10 @@ ForgeSight 使用两个职责分离的数据库：
 
 | 数据库 | 引擎 | 用途 | Agent 权限 |
 | --- | --- | --- | --- |
-| `forge_sight` | MySQL 8.0+ | 制造业业务数据、官方比赛样例数据 | 只读 |
+| `forge_sight` | MySQL 8.0+（官方样例） | 制造业业务数据、官方比赛样例数据 | 只读 |
 | `forge_sight_app` | PostgreSQL 14+ | 数据源、元数据、业务知识、会话、Agent 状态、报告版本与分发记录 | 读写 |
+
+`bootstrap.py` 使用 MySQL 装载官方比赛样例；产品运行时的数据源连接器还支持 PostgreSQL、MariaDB、SQL Server 和 Oracle。它们属于企业外部只读数据源，不替代平台 PostgreSQL，也不会由初始化脚本创建。
 
 初始化文件不包含真实密码，也不包含本地运行产生的会话、分析记录和审计日志。
 
@@ -61,7 +63,8 @@ database/
 │  └─ 003_validate.sql
 ├─ postgresql/
 │  ├─ 000_create_database.sql
-│  └─ 001_schema.sql
+│  ├─ 001_schema.sql
+│  └─ 002...018_*.sql
 └─ tools/
    ├─ generate_mysql_seed.py
    └─ generate_platform_schema.py
@@ -100,5 +103,7 @@ backend/.venv/Scripts/python.exe database/tools/generate_mysql_seed.py `
 ```powershell
 backend/.venv/Scripts/python.exe database/tools/generate_platform_schema.py
 ```
+
+全新环境由 `001_schema.sql` 得到当前完整结构；已有环境由 `002...018` 幂等增量迁移。`018_multi_database_adapter.sql` 增加 Schema 物理身份、数据库专属连接配置和连接池修订号。新增迁移后必须同时重新生成 `001_schema.sql`，保证全新安装与升级安装最终结构一致。
 
 提交 Git 时不要添加 `backend/.env`、密码或本机数据库 dump。

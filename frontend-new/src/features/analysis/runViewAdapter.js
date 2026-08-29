@@ -213,7 +213,7 @@ export function adaptAnalysisRun(snapshot) {
   });
   const firstSql = artifacts.find((item) => item.type === "sql")?.content?.sql;
   const contextSource = artifacts.find((item) => item.type === "context")?.content?.source;
-  const mysqlFullJoinMismatch = String(contextSource?.type).toLowerCase() === "mysql"
+  const mysqlFullJoinMismatch = ["mysql", "mariadb"].includes(String(contextSource?.type).toLowerCase())
     && /\bFULL\s+(?:OUTER\s+)?JOIN\b/i.test(firstSql ?? "");
   const dialectFailureMessage = mysqlFullJoinMismatch
     ? "生成的 SQL 使用了 MySQL 不支持的 FULL OUTER JOIN，数据库因此无法生成执行计划。系统应改用 LEFT JOIN 与 UNION 组合后重新校验。"

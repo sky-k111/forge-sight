@@ -444,15 +444,29 @@ def _validate_metric_binding(session, payload: dict, source_id: int) -> dict:
     table_names = _source_names(payload.get("sourceTables") or payload.get("source"))
     if not table_names:
         raise KnowledgeValidation("指标至少需要绑定一张数据表")
-    rows = session.query(DataTable.name).filter(
-        DataTable.source_id == source_id,
-        DataTable.registered.is_(True),
-        DataTable.name.in_(table_names),
-    ).all()
-    found = {row[0] for row in rows}
-    missing = [name for name in table_names if name not in found]
-    if missing:
-        raise KnowledgeValidation(f"指标引用了未登记的数据表：{', '.join(missing)}")
+    normalized_tables: list[str] = []
+    resolved_tables: dict[str, DataTable] = {}
+    for requested_name in table_names:
+        if "." in requested_name:
+            schema_name, physical_name = requested_name.split(".", 1)
+            rows = session.query(DataTable).filter_by(
+                source_id=source_id, schema_name=schema_name,
+                name=physical_name, registered=True,
+            ).all()
+        else:
+            rows = session.query(DataTable).filter_by(
+                source_id=source_id, name=requested_name, registered=True,
+            ).all()
+        if not rows:
+            raise KnowledgeValidation(f"指标引用了未登记的数据表：{requested_name}")
+        if len(rows) > 1:
+            raise KnowledgeValidation(f"数据表 {requested_name} 在多个 schema 中同名，请使用 schema.table")
+        table = rows[0]
+        qualified = f"{table.schema_name}.{table.name}" if table.schema_name else table.name
+        normalized_tables.append(qualified)
+        resolved_tables[qualified] = table
+        resolved_tables[table.name] = table
+    table_names = list(dict.fromkeys(normalized_tables))
     physical_formula = str(payload.get("physicalFormula") or payload.get("formula") or "").strip()
     if not physical_formula:
         raise KnowledgeValidation("数据源绑定必须提供物理计算表达式")
@@ -460,22 +474,30 @@ def _validate_metric_binding(session, payload: dict, source_id: int) -> dict:
         payload.get("bindingTimeField") or payload.get("physicalTimeField") or payload.get("timeField") or ""
     ).strip()
     if time_field:
-        exists = session.query(TableField).filter(
-            TableField.source_id == source_id,
-            TableField.table_name.in_(table_names),
-            TableField.name == time_field,
-        ).first()
-        if exists is None:
+        bound_tables = {item.id: item for item in resolved_tables.values()}.values()
+        exists = any(
+            session.query(TableField.id).filter_by(
+                    source_id=source_id,
+                    schema_name=table.schema_name,
+                    table_name=table.name,
+                    name=time_field,
+                ).first() is not None
+            for table in bound_tables
+        )
+        if not exists:
             raise KnowledgeValidation(f"默认时间字段 {time_field} 不存在于已绑定数据表")
     field_mappings = _normalize_field_mappings(payload.get("fieldMappings"))
     for mapping in field_mappings:
-        if mapping["tableName"] not in table_names:
+        table = resolved_tables.get(mapping["tableName"])
+        if table is None:
             raise KnowledgeValidation(
                 f"语义字段 {mapping['semanticField']} 引用了未绑定的数据表 {mapping['tableName']}"
             )
+        mapping["tableName"] = f"{table.schema_name}.{table.name}" if table.schema_name else table.name
         field = session.query(TableField).filter_by(
             source_id=source_id,
-            table_name=mapping["tableName"],
+            schema_name=table.schema_name,
+            table_name=table.name,
             name=mapping["fieldName"],
         ).first()
         if field is None:

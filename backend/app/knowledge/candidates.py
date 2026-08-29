@@ -29,6 +29,7 @@ from app.db.models import (
     TableRelation,
 )
 from app.db.platform import PlatformSession
+from app.gateway.adapters import get_adapter
 from app.knowledge import service
 from app.llm.provider import LLMError, chat_completion
 
@@ -143,9 +144,11 @@ def _relation_is_connected(session, source_id: int, table_names: list[str]) -> b
     graph = {name: set() for name in allowed}
     rows = session.query(TableRelation).filter_by(source_id=source_id).all()
     for row in rows:
-        if row.from_table in allowed and row.to_table in allowed:
-            graph[row.from_table].add(row.to_table)
-            graph[row.to_table].add(row.from_table)
+        from_name = f"{row.from_schema}.{row.from_table}" if row.from_schema else row.from_table
+        to_name = f"{row.to_schema}.{row.to_table}" if row.to_schema else row.to_table
+        if from_name in allowed and to_name in allowed:
+            graph[from_name].add(to_name)
+            graph[to_name].add(from_name)
     seen = set()
     stack = [table_names[0]]
     while stack:
@@ -160,13 +163,15 @@ def _relation_is_connected(session, source_id: int, table_names: list[str]) -> b
 def _column_reference_errors(session, source_id: int, binding: dict, tree, label: str) -> list[str]:
     errors: list[str] = []
     table_names = binding.get("sourceTables") or []
-    field_rows = session.query(TableField).filter(
-        TableField.source_id == source_id,
-        TableField.table_name.in_(table_names),
-    ).all()
+    field_rows = session.query(TableField).filter(TableField.source_id == source_id).all()
     fields_by_name: dict[str, set[str]] = {}
     for row in field_rows:
-        fields_by_name.setdefault(row.name.lower(), set()).add(row.table_name.lower())
+        qualified = f"{row.schema_name}.{row.table_name}" if row.schema_name else row.table_name
+        if qualified not in table_names and row.table_name not in table_names:
+            continue
+        fields_by_name.setdefault(row.name.lower(), set()).update(
+            {row.table_name.lower(), qualified.lower()}
+        )
     for column in tree.find_all(exp.Column):
         name = column.name.lower()
         tables = fields_by_name.get(name, set())
@@ -184,7 +189,7 @@ def _column_reference_errors(session, source_id: int, binding: dict, tree, label
 def _validate_sql_expression(session, source_id: int, binding: dict) -> list[str]:
     errors: list[str] = []
     formula = binding.get("physicalFormula") or ""
-    dialect = "postgres" if binding.get("sqlDialect") == "postgresql" else "mysql"
+    dialect = get_adapter(binding.get("sqlDialect") or "mysql").sqlglot_dialect
     if re.search(r"\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE)\b", formula, re.I):
         return ["物理公式只能是计算表达式，不能包含 SQL 语句"]
     try:

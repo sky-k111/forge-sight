@@ -16,6 +16,7 @@
 | `E邮件投递与重试` | `E00` | 邮件适配器、模板、附件、队列、重试 | Q、M、V、N、R | 已完成 | P0 |
 | `U前端交互与视觉设计` | `U00` | 绑定页、消息中心、周报页、公告管理、失败管理 | Q、R、V、N、E | 已完成 | P0 |
 | `T集成测试与上线验收` | `T00` | 全链路测试、指标、审计、迁移演练、发布清单 | Q～U | 已完成 | P0 |
+| `W多数据库适配` | `W00` | 统一适配器、PostgreSQL 补强、MySQL/PostgreSQL/MariaDB/SQL Server/Oracle 接入 | 现有多租户、数据源和问析链路 | 未完成 | P0 |
 
 ## 2. 依赖关系
 
@@ -37,6 +38,7 @@ flowchart LR
     E --> U
     U --> T[T 集成测试与上线验收]
     E --> T
+    T --> W[W 多数据库适配]
 ```
 
 ## 3. 推荐交付批次
@@ -65,6 +67,11 @@ flowchart LR
 - `U前端交互与视觉设计` 接入所有后端能力并完成 Web 端体验。
 - `T集成测试与上线验收` 完成端到端验收、迁移演练、监控和发布准备。
 
+### 批次 E：数据源产品化
+
+- `W多数据库适配` 在保持单数据源问析边界的前提下，统一连接器契约，补强 PostgreSQL 并增加 MariaDB、SQL Server 和 Oracle。
+- W 必须先完成 MySQL/PostgreSQL 适配器重构与回归，再逐个开放新增连接器。
+
 ## 4. 分支与 PR 建议
 
 每项任务独立分支、独立 PR，避免一个超大 PR 同时改认证、报告和通知：
@@ -78,6 +85,7 @@ task/n-message-center
 task/e-email-delivery
 task/u-web-ui
 task/t-release-check
+task/w-multi-database-adapters
 ```
 
 每个 PR 必须：

@@ -51,16 +51,36 @@ def get_unregistered_tables(sourceId: int | None = Query(default=None), context:
 
 
 @router.get("/tables/{table_name}/fields")
-def get_fields(table_name: str, sourceId: int | None = Query(default=None), context: TenantContext = Depends(tenant_context)):
-    fields = service.get_table_fields(table_name, source_id=_source_id(context, sourceId))
+def get_fields(
+    table_name: str,
+    sourceId: int | None = Query(default=None),
+    schemaName: str | None = Query(default=None),
+    context: TenantContext = Depends(tenant_context),
+):
+    try:
+        fields = service.get_table_fields(
+            table_name, source_id=_source_id(context, sourceId), schema_name=schemaName
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if fields is None:
         raise HTTPException(status_code=404, detail=f"数据表 {table_name} 未登记字段信息")
     return fields
 
 
 @router.get("/tables/{table_name}/preview")
-def get_preview(table_name: str, sourceId: int | None = Query(default=None), context: TenantContext = Depends(tenant_context)):
-    preview = service.get_table_preview(table_name, source_id=_source_id(context, sourceId))
+def get_preview(
+    table_name: str,
+    sourceId: int | None = Query(default=None),
+    schemaName: str | None = Query(default=None),
+    context: TenantContext = Depends(tenant_context),
+):
+    try:
+        preview = service.get_table_preview(
+            table_name, source_id=_source_id(context, sourceId), schema_name=schemaName
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if preview is None:
         raise HTTPException(status_code=404, detail=f"数据表 {table_name} 暂无预览数据")
     return preview
@@ -73,22 +93,39 @@ def get_relations(sourceId: int | None = Query(default=None), context: TenantCon
 
 class ConfirmRequest(BaseModel):
     sourceId: int
+    schemaName: str | None = None
     suggestion: dict
 
 
 @router.post("/tables/{table_name}/suggest")
-def suggest_semantics(table_name: str, sourceId: int = Query(...), context: TenantContext = Depends(require_tenant_admin)):
+def suggest_semantics(
+    table_name: str,
+    sourceId: int = Query(...),
+    schemaName: str | None = Query(default=None),
+    context: TenantContext = Depends(require_tenant_admin),
+):
     """LLM 生成新表语义推荐（中文名/主题/主外键/字段含义）。结果须经管理员确认。"""
     try:
-        return suggest.suggest_table_semantics(table_name, _source_id(context, sourceId))
+        return suggest.suggest_table_semantics(
+            table_name, _source_id(context, sourceId), schema_name=schemaName
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/tables/{table_name}/confirm")
 def confirm_semantics(table_name: str, request: ConfirmRequest, context: TenantContext = Depends(require_tenant_admin)):
     """管理员确认语义推荐，表正式进入资源目录并对问析可见。"""
     try:
-        return suggest.confirm_table_semantics(table_name, _source_id(context, request.sourceId), request.suggestion)
+        return suggest.confirm_table_semantics(
+            table_name,
+            _source_id(context, request.sourceId),
+            request.suggestion,
+            schema_name=request.schemaName,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

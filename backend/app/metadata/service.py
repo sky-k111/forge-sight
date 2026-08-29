@@ -6,6 +6,8 @@
 from app.db.models import DataSource, DataTable, TableField, TableRelation
 from app.db.platform import PlatformSession
 from app.gateway.executor import execute_readonly
+from app.gateway.adapters import get_adapter
+from app.gateway.connectors.base import PhysicalTableRef
 
 
 def _default_source_id() -> int:
@@ -40,9 +42,10 @@ def list_tables(keyword: str = "", topic: str | None = None, source_id: int | No
             .all()
         )
         # 统计每张表字段数
-        counts: dict[str, int] = {}
+        counts: dict[tuple[str, str], int] = {}
         for row in session.query(TableField).filter(TableField.source_id == source_id):
-            counts[row.table_name] = counts.get(row.table_name, 0) + 1
+            key = (row.schema_name, row.table_name)
+            counts[key] = counts.get(key, 0) + 1
 
     items = []
     for table in tables:
@@ -50,10 +53,13 @@ def list_tables(keyword: str = "", topic: str | None = None, source_id: int | No
             continue
         if topic and table.topic != topic:
             continue
-        count = counts.get(table.name, 0)
+        count = counts.get((table.schema_name, table.name), 0)
         items.append(
             {
                 "name": table.name,
+                "schemaName": table.schema_name,
+                "qualifiedName": f"{table.schema_name}.{table.name}" if table.schema_name else table.name,
+                "objectType": table.object_type,
                 "cn": table.cn_name,
                 "topic": table.topic,
                 "rows": f"{table.row_count:,}",
@@ -66,15 +72,21 @@ def list_tables(keyword: str = "", topic: str | None = None, source_id: int | No
     return items
 
 
-def get_table_fields(table_name: str, source_id: int | None = None) -> list[dict] | None:
+def get_table_fields(table_name: str, source_id: int | None = None, schema_name: str | None = None) -> list[dict] | None:
     source_id = source_id or _default_source_id()
     with PlatformSession() as session:
-        table = session.query(DataTable).filter_by(name=table_name, source_id=source_id, registered=True).first()
+        query = session.query(DataTable).filter_by(name=table_name, source_id=source_id, registered=True)
+        if schema_name is not None:
+            query = query.filter_by(schema_name=schema_name)
+        rows = query.all()
+        if len(rows) > 1:
+            raise ValueError("存在同名表，请指定 schemaName")
+        table = rows[0] if rows else None
         if table is None:
             return None
         fields = (
             session.query(TableField)
-            .filter_by(source_id=source_id, table_name=table_name)
+            .filter_by(source_id=source_id, schema_name=table.schema_name, table_name=table_name)
             .order_by(TableField.ordinal)
             .all()
         )
@@ -97,18 +109,30 @@ def get_table_fields(table_name: str, source_id: int | None = None) -> list[dict
     ]
 
 
-def get_table_preview(table_name: str, limit: int = 20, source_id: int | None = None) -> dict | None:
+def get_table_preview(
+    table_name: str,
+    limit: int = 20,
+    source_id: int | None = None,
+    schema_name: str | None = None,
+) -> dict | None:
     """只读预览，走 gateway（白名单 + 审计）。"""
     source_id = source_id or _default_source_id()
     with PlatformSession() as session:
-        table = session.query(DataTable).filter_by(name=table_name, source_id=source_id, registered=True).first()
+        query = session.query(DataTable).filter_by(name=table_name, source_id=source_id, registered=True)
+        if schema_name is not None:
+            query = query.filter_by(schema_name=schema_name)
+        rows = query.all()
+        if len(rows) > 1:
+            raise ValueError("存在同名表，请指定 schemaName")
+        table = rows[0] if rows else None
         source = session.query(DataSource).filter_by(id=source_id).first()
     if table is None or source is None:
         return None
 
-    quote = "`" if source.type == "mysql" else '"'
+    adapter = get_adapter(source.type)
+    target = adapter.qualify_table(PhysicalTableRef(table.schema_name, table.name, table.object_type))
     result = execute_readonly(
-        f"SELECT * FROM {quote}{table_name}{quote} LIMIT {limit}", action="预览数据表", source=source
+        adapter.apply_row_limit(f"SELECT * FROM {target}", limit), action="预览数据表", source=source
     )
     if not result.ok:
         return {"columns": [], "rows": [], "error": result.error}
@@ -124,8 +148,10 @@ def list_relations(source_id: int | None = None) -> list[dict]:
         relations = session.query(TableRelation).filter_by(source_id=source_id).all()
     return [
         {
+            "fromSchema": r.from_schema,
             "fromTable": r.from_table,
             "fromField": r.from_field,
+            "toSchema": r.to_schema,
             "toTable": r.to_table,
             "toField": r.to_field,
             "source": r.source,
@@ -139,4 +165,14 @@ def list_unregistered_tables(source_id: int | None = None) -> list[dict]:
     source_id = source_id or _default_source_id()
     with PlatformSession() as session:
         tables = session.query(DataTable).filter_by(registered=False, source_id=source_id).all()
-    return [{"name": t.name, "rows": t.row_count, "comment": t.comment, "sourceId": t.source_id} for t in tables]
+    return [
+        {
+            "name": t.name,
+            "schemaName": t.schema_name,
+            "qualifiedName": f"{t.schema_name}.{t.name}" if t.schema_name else t.name,
+            "rows": t.row_count,
+            "comment": t.comment,
+            "sourceId": t.source_id,
+        }
+        for t in tables
+    ]

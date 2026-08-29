@@ -17,7 +17,7 @@ from sqlalchemy.exc import ProgrammingError
 from app.audit.service import write_audit
 from app.config import settings
 from app.db.models import DataSource
-from app.gateway.adapters import get_engine
+from app.gateway.adapters import get_adapter, get_engine
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,7 @@ class ExplainCheckResult:
     checks: list[str] = field(default_factory=list)
     retryable: bool = False
     error_kind: str = ""
+    degraded: bool = False
 
 
 def _number(value: Any) -> float | None:
@@ -113,23 +114,30 @@ def explain_readonly(sql: str, source: DataSource) -> ExplainCheckResult:
             reason="EXPLAIN 成本门控已由配置关闭",
             checks=["成本门控已跳过"],
         )
-    statement = (
-        f"EXPLAIN FORMAT=JSON {sql}"
-        if source.type == "mysql"
-        else f"EXPLAIN (FORMAT JSON) {sql}"
-    )
+    adapter = get_adapter(source.type)
+    statement = adapter.explain_statement(sql)
+    if statement is None:
+        return ExplainCheckResult(
+            ok=True,
+            allowed=True,
+            dialect=source.type,
+            reason="该连接器暂不提供可稳定解析的估算成本，已降级为超时、只读与服务端限行保护",
+            checks=["成本门控降级", "只读账号与查询超时仍生效", "服务端限行仍生效"],
+            error_kind="explain_degraded",
+            degraded=True,
+        )
     try:
         with get_engine(source).connect() as connection:
             raw = connection.execute(text(statement)).scalar()
         if isinstance(raw, str):
             raw = json.loads(raw)
-        if source.type == "mysql":
+        if source.type in {"mysql", "mariadb"}:
             estimated_rows, estimated_cost, full_scans = _mysql_summary(raw)
         else:
             estimated_rows, estimated_cost, full_scans = _postgres_summary(raw)
     except Exception as exc:  # noqa: BLE001 - explain failure must become a safe gate result
         programming_error = isinstance(exc, ProgrammingError)
-        if source.type == "mysql" and "FULL OUTER JOIN" in sql.upper():
+        if source.type in {"mysql", "mariadb"} and "FULL OUTER JOIN" in sql.upper():
             reason = "生成的 SQL 使用了 MySQL 不支持的 FULL OUTER JOIN"
             error_kind = "dialect_syntax"
         elif programming_error:

@@ -2,6 +2,136 @@
 -- Do not edit by hand; regenerate with database/tools/generate_platform_schema.py.
 SET client_encoding = 'UTF8';
 
+CREATE TABLE IF NOT EXISTS agent_memory (
+	id VARCHAR(40) NOT NULL,
+	tenant_id VARCHAR(64) NOT NULL,
+	source_id INTEGER,
+	user_id VARCHAR(64),
+	role_scope VARCHAR(32),
+	session_id VARCHAR(40),
+	channel VARCHAR(24) NOT NULL,
+	memory_kind VARCHAR(24) NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	title VARCHAR(200) NOT NULL,
+	content TEXT NOT NULL,
+	normalized_content TEXT NOT NULL,
+	keywords_json JSONB NOT NULL,
+	metadata_json JSONB NOT NULL,
+	confidence NUMERIC(5, 4) NOT NULL,
+	importance NUMERIC(5, 4) NOT NULL,
+	explicit BOOLEAN NOT NULL,
+	valid_from TIMESTAMP WITHOUT TIME ZONE,
+	valid_until TIMESTAMP WITHOUT TIME ZONE,
+	last_accessed_at TIMESTAMP WITHOUT TIME ZONE,
+	access_count INTEGER NOT NULL,
+	supersedes_id VARCHAR(40),
+	created_by VARCHAR(64) NOT NULL,
+	reviewed_by VARCHAR(64),
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT ck_agent_memory_confidence CHECK (confidence >= 0 AND confidence <= 1),
+	CONSTRAINT ck_agent_memory_importance CHECK (importance >= 0 AND importance <= 1)
+);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_kind_status ON agent_memory (memory_kind, status);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_memory_kind ON agent_memory (memory_kind);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_scope ON agent_memory (tenant_id, source_id, user_id, status);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_session_id ON agent_memory (session_id);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_source_id ON agent_memory (source_id);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_status ON agent_memory (status);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_tenant_id ON agent_memory (tenant_id);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_user_id ON agent_memory (user_id);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_valid_until ON agent_memory (valid_until);
+
+CREATE TABLE IF NOT EXISTS agent_memory_access_log (
+	id VARCHAR(40) NOT NULL,
+	memory_id VARCHAR(40) NOT NULL,
+	run_id VARCHAR(40),
+	user_id VARCHAR(64) NOT NULL,
+	source_id INTEGER,
+	query_text TEXT NOT NULL,
+	relevance_score NUMERIC(8, 6) NOT NULL,
+	used_in_context BOOLEAN NOT NULL,
+	variant VARCHAR(16) NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_access_log_memory_id ON agent_memory_access_log (memory_id);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_access_log_run_id ON agent_memory_access_log (run_id);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_access_log_user_id ON agent_memory_access_log (user_id);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_access_run ON agent_memory_access_log (run_id, created_at);
+
+CREATE TABLE IF NOT EXISTS agent_memory_evidence (
+	id VARCHAR(40) NOT NULL,
+	memory_id VARCHAR(40) NOT NULL,
+	evidence_type VARCHAR(32) NOT NULL,
+	reference_id VARCHAR(80) NOT NULL,
+	excerpt TEXT NOT NULL,
+	metadata_json JSONB NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_evidence_memory ON agent_memory_evidence (memory_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_evidence_memory_id ON agent_memory_evidence (memory_id);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_evidence_reference_id ON agent_memory_evidence (reference_id);
+
+CREATE TABLE IF NOT EXISTS agent_memory_feedback (
+	id VARCHAR(40) NOT NULL,
+	memory_id VARCHAR(40) NOT NULL,
+	user_id VARCHAR(64) NOT NULL,
+	action VARCHAR(24) NOT NULL,
+	comment TEXT NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_feedback_memory_id ON agent_memory_feedback (memory_id);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_feedback_user_id ON agent_memory_feedback (user_id);
+
+CREATE TABLE IF NOT EXISTS agent_memory_job (
+	id VARCHAR(40) NOT NULL,
+	job_type VARCHAR(32) NOT NULL,
+	reference_id VARCHAR(80) NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	payload_json JSONB NOT NULL,
+	attempt_count INTEGER NOT NULL,
+	max_attempts INTEGER NOT NULL,
+	error TEXT NOT NULL,
+	lease_owner VARCHAR(100),
+	lease_expires_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_agent_memory_job_reference UNIQUE (job_type, reference_id)
+);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_job_claim ON agent_memory_job (status, lease_expires_at);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_job_status ON agent_memory_job (status);
+
+CREATE TABLE IF NOT EXISTS agent_memory_policy (
+	id VARCHAR(40) NOT NULL,
+	tenant_id VARCHAR(64) NOT NULL,
+	policy_key VARCHAR(64) NOT NULL,
+	enabled BOOLEAN NOT NULL,
+	config_json JSONB NOT NULL,
+	updated_by VARCHAR(64) NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_agent_memory_policy UNIQUE (tenant_id, policy_key)
+);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_policy_tenant_id ON agent_memory_policy (tenant_id);
+
+CREATE TABLE IF NOT EXISTS agent_memory_relation (
+	id VARCHAR(40) NOT NULL,
+	from_memory_id VARCHAR(40) NOT NULL,
+	to_memory_id VARCHAR(40) NOT NULL,
+	relation_type VARCHAR(32) NOT NULL,
+	metadata_json JSONB NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_agent_memory_relation UNIQUE (from_memory_id, to_memory_id, relation_type)
+);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_relation_from_memory_id ON agent_memory_relation (from_memory_id);
+CREATE INDEX IF NOT EXISTS ix_agent_memory_relation_to_memory_id ON agent_memory_relation (to_memory_id);
+
 CREATE TABLE IF NOT EXISTS analysis_artifact (
 	id VARCHAR(40) NOT NULL,
 	run_id VARCHAR(40) NOT NULL,
@@ -128,6 +258,8 @@ CREATE TABLE IF NOT EXISTS analysis_run (
 	budget_snapshot_json JSONB NOT NULL,
 	skill_enhancement_enabled BOOLEAN NOT NULL,
 	skill_experiment_variant VARCHAR(16) NOT NULL,
+	memory_enabled BOOLEAN NOT NULL,
+	memory_experiment_variant VARCHAR(16) NOT NULL,
 	lease_owner VARCHAR(100),
 	lease_expires_at TIMESTAMP WITHOUT TIME ZONE,
 	started_at TIMESTAMP WITHOUT TIME ZONE,
@@ -165,6 +297,7 @@ CREATE INDEX IF NOT EXISTS ix_analysis_run_step_task_id ON analysis_run_step (ta
 
 CREATE TABLE IF NOT EXISTS analysis_session (
 	id VARCHAR(40) NOT NULL,
+	tenant_id VARCHAR(40) NOT NULL,
 	title VARCHAR(200) NOT NULL,
 	user_id VARCHAR(64) NOT NULL,
 	source_id INTEGER NOT NULL,
@@ -176,6 +309,7 @@ CREATE TABLE IF NOT EXISTS analysis_session (
 	PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS ix_analysis_session_source_id ON analysis_session (source_id);
+CREATE INDEX IF NOT EXISTS ix_analysis_session_tenant_id ON analysis_session (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_analysis_session_user_id ON analysis_session (user_id);
 
 CREATE TABLE IF NOT EXISTS analysis_skill (
@@ -273,6 +407,7 @@ CREATE INDEX IF NOT EXISTS ix_announcement_status ON announcement (status);
 
 CREATE TABLE IF NOT EXISTS audit_log (
 	id SERIAL NOT NULL,
+	tenant_id VARCHAR(40) NOT NULL,
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	user_name VARCHAR(50) NOT NULL,
 	role VARCHAR(20) NOT NULL,
@@ -282,9 +417,11 @@ CREATE TABLE IF NOT EXISTS audit_log (
 	detail TEXT NOT NULL,
 	PRIMARY KEY (id)
 );
+CREATE INDEX IF NOT EXISTS ix_audit_log_tenant_id ON audit_log (tenant_id);
 
 CREATE TABLE IF NOT EXISTS business_object (
 	id VARCHAR(50) NOT NULL,
+	tenant_id VARCHAR(40) NOT NULL,
 	name VARCHAR(80) NOT NULL,
 	topic VARCHAR(50) NOT NULL,
 	description VARCHAR(255) NOT NULL,
@@ -292,12 +429,14 @@ CREATE TABLE IF NOT EXISTS business_object (
 	enabled BOOLEAN NOT NULL,
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
-	PRIMARY KEY (id),
-	UNIQUE (name)
+	CONSTRAINT pk_business_object PRIMARY KEY (tenant_id, id),
+	CONSTRAINT uq_business_object_tenant_name UNIQUE (tenant_id, name)
 );
+CREATE INDEX IF NOT EXISTS ix_business_object_tenant_id ON business_object (tenant_id);
 
 CREATE TABLE IF NOT EXISTS business_rule (
 	id VARCHAR(20) NOT NULL,
+	tenant_id VARCHAR(40) NOT NULL,
 	name VARCHAR(180) NOT NULL,
 	rule_type VARCHAR(30) NOT NULL,
 	scope VARCHAR(50) NOT NULL,
@@ -305,12 +444,14 @@ CREATE TABLE IF NOT EXISTS business_rule (
 	enabled BOOLEAN NOT NULL,
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
-	PRIMARY KEY (id),
-	UNIQUE (name)
+	CONSTRAINT pk_business_rule PRIMARY KEY (tenant_id, id),
+	CONSTRAINT uq_business_rule_tenant_name UNIQUE (tenant_id, name)
 );
+CREATE INDEX IF NOT EXISTS ix_business_rule_tenant_id ON business_rule (tenant_id);
 
 CREATE TABLE IF NOT EXISTS data_scope_policy (
 	id VARCHAR(40) NOT NULL,
+	tenant_id VARCHAR(40) NOT NULL,
 	subject_type VARCHAR(24) NOT NULL,
 	subject_id VARCHAR(80) NOT NULL,
 	business_key VARCHAR(80) NOT NULL,
@@ -324,31 +465,19 @@ CREATE TABLE IF NOT EXISTS data_scope_policy (
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	PRIMARY KEY (id),
-	CONSTRAINT uq_data_scope_subject_business UNIQUE (subject_type, subject_id, business_key)
+	CONSTRAINT uq_data_scope_tenant_subject_business UNIQUE (tenant_id, subject_type, subject_id, business_key)
 );
 CREATE INDEX IF NOT EXISTS ix_data_scope_policy_business_key ON data_scope_policy (business_key);
 CREATE INDEX IF NOT EXISTS ix_data_scope_policy_subject_id ON data_scope_policy (subject_id);
 CREATE INDEX IF NOT EXISTS ix_data_scope_policy_subject_type ON data_scope_policy (subject_type);
-
-CREATE TABLE IF NOT EXISTS data_source (
-	id SERIAL NOT NULL,
-	name VARCHAR(100) NOT NULL,
-	type VARCHAR(20) NOT NULL,
-	host VARCHAR(100) NOT NULL,
-	port INTEGER NOT NULL,
-	db_name VARCHAR(64) NOT NULL,
-	username VARCHAR(64) NOT NULL,
-	password VARCHAR(128) NOT NULL,
-	status VARCHAR(20) NOT NULL,
-	is_default BOOLEAN NOT NULL,
-	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
-	PRIMARY KEY (id)
-);
+CREATE INDEX IF NOT EXISTS ix_data_scope_policy_tenant_id ON data_scope_policy (tenant_id);
 
 CREATE TABLE IF NOT EXISTS data_table (
 	id SERIAL NOT NULL,
 	source_id INTEGER NOT NULL,
+	schema_name VARCHAR(128) NOT NULL,
 	name VARCHAR(64) NOT NULL,
+	object_type VARCHAR(20) NOT NULL,
 	cn_name VARCHAR(100) NOT NULL,
 	topic VARCHAR(20) NOT NULL,
 	row_count INTEGER NOT NULL,
@@ -358,8 +487,9 @@ CREATE TABLE IF NOT EXISTS data_table (
 	registered BOOLEAN NOT NULL,
 	scanned_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	PRIMARY KEY (id),
-	CONSTRAINT uq_source_table UNIQUE (source_id, name)
+	CONSTRAINT uq_source_schema_table UNIQUE (source_id, schema_name, name)
 );
+CREATE INDEX IF NOT EXISTS ix_data_table_schema_name ON data_table (schema_name);
 CREATE INDEX IF NOT EXISTS ix_data_table_source_id ON data_table (source_id);
 
 CREATE TABLE IF NOT EXISTS domain_event_outbox (
@@ -392,7 +522,7 @@ CREATE TABLE IF NOT EXISTS external_chat_conversation (
 	channel VARCHAR(24) NOT NULL,
 	tenant_key VARCHAR(80) NOT NULL,
 	external_chat_id VARCHAR(120) NOT NULL,
-	external_user_id VARCHAR(120) NOT NULL,
+	external_user_id VARCHAR(160) NOT NULL,
 	platform_user_id VARCHAR(64) NOT NULL,
 	source_id INTEGER NOT NULL,
 	analysis_session_id VARCHAR(40) NOT NULL,
@@ -416,8 +546,9 @@ CREATE TABLE IF NOT EXISTS external_chat_job (
 	tenant_key VARCHAR(80) NOT NULL,
 	external_message_id VARCHAR(120) NOT NULL,
 	external_chat_id VARCHAR(120) NOT NULL,
-	external_user_id VARCHAR(120) NOT NULL,
+	external_user_id VARCHAR(160) NOT NULL,
 	question TEXT NOT NULL,
+	reply_target_json JSONB NOT NULL,
 	status VARCHAR(24) NOT NULL,
 	conversation_id VARCHAR(40),
 	analysis_session_id VARCHAR(40),
@@ -428,6 +559,7 @@ CREATE TABLE IF NOT EXISTS external_chat_job (
 	attempt_count INTEGER NOT NULL,
 	lease_owner VARCHAR(100),
 	lease_expires_at TIMESTAMP WITHOUT TIME ZONE,
+	next_attempt_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	error_summary VARCHAR(500),
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
@@ -438,7 +570,7 @@ CREATE TABLE IF NOT EXISTS external_chat_job (
 );
 CREATE INDEX IF NOT EXISTS ix_external_chat_job_analysis_session_id ON external_chat_job (analysis_session_id);
 CREATE INDEX IF NOT EXISTS ix_external_chat_job_channel ON external_chat_job (channel);
-CREATE INDEX IF NOT EXISTS ix_external_chat_job_claim ON external_chat_job (channel, status, lease_expires_at);
+CREATE INDEX IF NOT EXISTS ix_external_chat_job_claim ON external_chat_job (channel, status, next_attempt_at, lease_expires_at);
 CREATE INDEX IF NOT EXISTS ix_external_chat_job_conversation_id ON external_chat_job (conversation_id);
 CREATE INDEX IF NOT EXISTS ix_external_chat_job_external_chat_id ON external_chat_job (external_chat_id);
 CREATE INDEX IF NOT EXISTS ix_external_chat_job_external_user_id ON external_chat_job (external_user_id);
@@ -481,6 +613,7 @@ CREATE INDEX IF NOT EXISTS ix_governed_model_task_id ON governed_model (task_id)
 
 CREATE TABLE IF NOT EXISTS knowledge_metric (
 	id VARCHAR(20) NOT NULL,
+	tenant_id VARCHAR(40) NOT NULL,
 	name VARCHAR(100) NOT NULL,
 	topic VARCHAR(50) NOT NULL,
 	definition TEXT NOT NULL,
@@ -495,25 +628,29 @@ CREATE TABLE IF NOT EXISTS knowledge_metric (
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	published_at TIMESTAMP WITHOUT TIME ZONE,
-	PRIMARY KEY (id),
-	UNIQUE (name)
+	CONSTRAINT pk_knowledge_metric PRIMARY KEY (tenant_id, id),
+	CONSTRAINT uq_knowledge_metric_tenant_name UNIQUE (tenant_id, name)
 );
+CREATE INDEX IF NOT EXISTS ix_knowledge_metric_tenant_id ON knowledge_metric (tenant_id);
 
 CREATE TABLE IF NOT EXISTS knowledge_reference (
 	id SERIAL NOT NULL,
+	tenant_id VARCHAR(40) NOT NULL,
 	entity_type VARCHAR(30) NOT NULL,
 	entity_id VARCHAR(50) NOT NULL,
 	consumer_type VARCHAR(30) NOT NULL,
 	consumer_id VARCHAR(64) NOT NULL,
 	description VARCHAR(255) NOT NULL,
 	PRIMARY KEY (id),
-	CONSTRAINT uq_knowledge_reference UNIQUE (entity_type, entity_id, consumer_type, consumer_id)
+	CONSTRAINT uq_knowledge_reference UNIQUE (tenant_id, entity_type, entity_id, consumer_type, consumer_id)
 );
 CREATE INDEX IF NOT EXISTS ix_knowledge_reference_entity_id ON knowledge_reference (entity_id);
 CREATE INDEX IF NOT EXISTS ix_knowledge_reference_entity_type ON knowledge_reference (entity_type);
+CREATE INDEX IF NOT EXISTS ix_knowledge_reference_tenant_id ON knowledge_reference (tenant_id);
 
 CREATE TABLE IF NOT EXISTS knowledge_topic (
 	code VARCHAR(20) NOT NULL,
+	tenant_id VARCHAR(40) NOT NULL,
 	name VARCHAR(50) NOT NULL,
 	color VARCHAR(20) NOT NULL,
 	description VARCHAR(255) NOT NULL,
@@ -521,9 +658,10 @@ CREATE TABLE IF NOT EXISTS knowledge_topic (
 	enabled BOOLEAN NOT NULL,
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
-	PRIMARY KEY (code),
-	UNIQUE (name)
+	CONSTRAINT pk_knowledge_topic PRIMARY KEY (tenant_id, code),
+	CONSTRAINT uq_knowledge_topic_tenant_name UNIQUE (tenant_id, name)
 );
+CREATE INDEX IF NOT EXISTS ix_knowledge_topic_tenant_id ON knowledge_topic (tenant_id);
 
 CREATE TABLE IF NOT EXISTS learning_feedback (
 	id VARCHAR(40) NOT NULL,
@@ -655,7 +793,7 @@ CREATE TABLE IF NOT EXISTS metric_field_binding (
 	id SERIAL NOT NULL,
 	binding_id INTEGER NOT NULL,
 	semantic_field VARCHAR(80) NOT NULL,
-	table_name VARCHAR(64) NOT NULL,
+	table_name VARCHAR(260) NOT NULL,
 	field_name VARCHAR(64) NOT NULL,
 	transform_expression TEXT NOT NULL,
 	PRIMARY KEY (id),
@@ -686,7 +824,7 @@ CREATE INDEX IF NOT EXISTS ix_metric_source_binding_source_id ON metric_source_b
 CREATE TABLE IF NOT EXISTS metric_table_binding (
 	id SERIAL NOT NULL,
 	binding_id INTEGER NOT NULL,
-	table_name VARCHAR(64) NOT NULL,
+	table_name VARCHAR(260) NOT NULL,
 	role VARCHAR(30) NOT NULL,
 	PRIMARY KEY (id),
 	CONSTRAINT uq_metric_binding_table UNIQUE (binding_id, table_name)
@@ -755,6 +893,23 @@ CREATE INDEX IF NOT EXISTS ix_modeling_task_source_id ON modeling_task (source_i
 CREATE INDEX IF NOT EXISTS ix_modeling_task_status ON modeling_task (status);
 CREATE INDEX IF NOT EXISTS ix_modeling_task_task_type ON modeling_task (task_type);
 
+CREATE TABLE IF NOT EXISTS monitoring_rule_template (
+	id VARCHAR(40) NOT NULL,
+	code VARCHAR(80) NOT NULL,
+	version INTEGER NOT NULL,
+	name VARCHAR(160) NOT NULL,
+	topic VARCHAR(80) NOT NULL,
+	description TEXT NOT NULL,
+	default_condition_json JSONB NOT NULL,
+	default_quality_gate_json JSONB NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_monitoring_template_version UNIQUE (code, version)
+);
+CREATE INDEX IF NOT EXISTS ix_monitoring_rule_template_code ON monitoring_rule_template (code);
+CREATE INDEX IF NOT EXISTS ix_monitoring_rule_template_status ON monitoring_rule_template (status);
+
 CREATE TABLE IF NOT EXISTS organization_unit (
 	id VARCHAR(40) NOT NULL,
 	code VARCHAR(80) NOT NULL,
@@ -793,6 +948,7 @@ CREATE TABLE IF NOT EXISTS platform_user (
 	email VARCHAR(254),
 	email_canonical VARCHAR(254),
 	email_verified_at TIMESTAMP WITHOUT TIME ZONE,
+	external_identity_required BOOLEAN NOT NULL,
 	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
 	PRIMARY KEY (id),
 	CONSTRAINT ck_platform_user_email_pair CHECK ((email IS NULL AND email_canonical IS NULL) OR (email IS NOT NULL AND email_canonical IS NOT NULL)),
@@ -1027,31 +1183,73 @@ CREATE INDEX IF NOT EXISTS ix_semantic_index_job_status ON semantic_index_job (s
 CREATE TABLE IF NOT EXISTS table_field (
 	id SERIAL NOT NULL,
 	source_id INTEGER NOT NULL,
+	schema_name VARCHAR(128) NOT NULL,
 	table_name VARCHAR(64) NOT NULL,
 	name VARCHAR(64) NOT NULL,
 	cn_name VARCHAR(100) NOT NULL,
 	data_type VARCHAR(40) NOT NULL,
 	ordinal INTEGER NOT NULL,
 	is_primary BOOLEAN NOT NULL,
+	ref_schema VARCHAR(128) NOT NULL,
 	ref_table VARCHAR(64) NOT NULL,
 	comment VARCHAR(255) NOT NULL,
 	sample_value VARCHAR(100) NOT NULL,
 	PRIMARY KEY (id)
 );
+CREATE INDEX IF NOT EXISTS ix_table_field_schema_name ON table_field (schema_name);
 CREATE INDEX IF NOT EXISTS ix_table_field_source_id ON table_field (source_id);
 CREATE INDEX IF NOT EXISTS ix_table_field_table_name ON table_field (table_name);
 
 CREATE TABLE IF NOT EXISTS table_relation (
 	id SERIAL NOT NULL,
 	source_id INTEGER NOT NULL,
+	from_schema VARCHAR(128) NOT NULL,
 	from_table VARCHAR(64) NOT NULL,
 	from_field VARCHAR(64) NOT NULL,
+	to_schema VARCHAR(128) NOT NULL,
 	to_table VARCHAR(64) NOT NULL,
 	to_field VARCHAR(64) NOT NULL,
+	constraint_name VARCHAR(160) NOT NULL,
 	source VARCHAR(20) NOT NULL,
 	PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS ix_table_relation_source_id ON table_relation (source_id);
+
+CREATE TABLE IF NOT EXISTS tenant (
+	id VARCHAR(40) NOT NULL,
+	slug VARCHAR(80) NOT NULL,
+	name VARCHAR(160) NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	plan_code VARCHAR(40) NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT ck_tenant_status CHECK (status IN ('active', 'suspended', 'archived'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_tenant_slug ON tenant (slug);
+CREATE INDEX IF NOT EXISTS ix_tenant_status ON tenant (status);
+
+CREATE TABLE IF NOT EXISTS data_source (
+	id SERIAL NOT NULL,
+	tenant_id VARCHAR(40) NOT NULL,
+	name VARCHAR(100) NOT NULL,
+	type VARCHAR(20) NOT NULL,
+	host VARCHAR(100) NOT NULL,
+	port INTEGER NOT NULL,
+	db_name VARCHAR(64) NOT NULL,
+	username VARCHAR(64) NOT NULL,
+	password VARCHAR(128) NOT NULL,
+	schema_names_json JSONB NOT NULL,
+	config_json JSONB NOT NULL,
+	credential_ref VARCHAR(255),
+	connection_revision INTEGER NOT NULL,
+	status VARCHAR(20) NOT NULL,
+	is_default BOOLEAN NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	FOREIGN KEY(tenant_id) REFERENCES tenant (id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS ix_data_source_tenant_id ON data_source (tenant_id);
 
 CREATE TABLE IF NOT EXISTS delivery_attempt (
 	id VARCHAR(40) NOT NULL,
@@ -1069,6 +1267,24 @@ CREATE TABLE IF NOT EXISTS delivery_attempt (
 	FOREIGN KEY(delivery_id) REFERENCES report_delivery (id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS ix_delivery_attempt_delivery_id ON delivery_attempt (delivery_id);
+
+CREATE TABLE IF NOT EXISTS dingtalk_oauth_state (
+	id VARCHAR(40) NOT NULL,
+	user_id VARCHAR(40),
+	state_token VARCHAR(128) NOT NULL,
+	corp_id VARCHAR(64),
+	redirect_path VARCHAR(255) NOT NULL,
+	purpose VARCHAR(24) NOT NULL,
+	expires_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	consumed_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_dingtalk_oauth_state_token UNIQUE (state_token),
+	CONSTRAINT ck_dingtalk_oauth_state_purpose CHECK (purpose IN ('bind', 'login')),
+	FOREIGN KEY(user_id) REFERENCES platform_user (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_dingtalk_oauth_state_expires ON dingtalk_oauth_state (expires_at);
+CREATE INDEX IF NOT EXISTS ix_dingtalk_oauth_state_user ON dingtalk_oauth_state (user_id);
 
 CREATE TABLE IF NOT EXISTS email_verification_challenge (
 	id VARCHAR(40) NOT NULL,
@@ -1095,6 +1311,23 @@ CREATE INDEX IF NOT EXISTS ix_email_verification_challenge_email_created ON emai
 CREATE INDEX IF NOT EXISTS ix_email_verification_challenge_user ON email_verification_challenge (user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verification_challenge_active ON email_verification_challenge (user_id) WHERE consumed_at IS NULL AND superseded_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS feishu_oauth_state (
+	id VARCHAR(40) NOT NULL,
+	user_id VARCHAR(40),
+	state_token VARCHAR(128) NOT NULL,
+	redirect_path VARCHAR(255) NOT NULL,
+	purpose VARCHAR(24) NOT NULL,
+	expires_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	consumed_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_feishu_oauth_state_token UNIQUE (state_token),
+	CONSTRAINT ck_feishu_oauth_state_purpose CHECK (purpose IN ('bind', 'login')),
+	FOREIGN KEY(user_id) REFERENCES platform_user (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_feishu_oauth_state_expires ON feishu_oauth_state (expires_at);
+CREATE INDEX IF NOT EXISTS ix_feishu_oauth_state_user ON feishu_oauth_state (user_id);
+
 CREATE TABLE IF NOT EXISTS message_recipient (
 	id VARCHAR(40) NOT NULL,
 	message_id VARCHAR(40) NOT NULL,
@@ -1110,6 +1343,24 @@ CREATE TABLE IF NOT EXISTS message_recipient (
 CREATE INDEX IF NOT EXISTS ix_message_recipient_is_read ON message_recipient (is_read);
 CREATE INDEX IF NOT EXISTS ix_message_recipient_message_id ON message_recipient (message_id);
 CREATE INDEX IF NOT EXISTS ix_message_recipient_user_id ON message_recipient (user_id);
+
+CREATE TABLE IF NOT EXISTS tenant_membership (
+	id VARCHAR(40) NOT NULL,
+	tenant_id VARCHAR(40) NOT NULL,
+	user_id VARCHAR(40) NOT NULL,
+	member_role VARCHAR(24) NOT NULL,
+	is_default BOOLEAN NOT NULL,
+	enabled BOOLEAN NOT NULL,
+	joined_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_tenant_membership_user UNIQUE (tenant_id, user_id),
+	CONSTRAINT ck_tenant_membership_role CHECK (member_role IN ('owner', 'admin', 'member', 'viewer')),
+	FOREIGN KEY(tenant_id) REFERENCES tenant (id) ON DELETE CASCADE,
+	FOREIGN KEY(user_id) REFERENCES platform_user (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_tenant_membership_member_role ON tenant_membership (member_role);
+CREATE INDEX IF NOT EXISTS ix_tenant_membership_tenant_id ON tenant_membership (tenant_id);
+CREATE INDEX IF NOT EXISTS ix_tenant_membership_user_id ON tenant_membership (user_id);
 
 CREATE TABLE IF NOT EXISTS user_membership (
 	id VARCHAR(40) NOT NULL,
@@ -1131,6 +1382,34 @@ CREATE INDEX IF NOT EXISTS ix_user_membership_organization_id ON user_membership
 CREATE INDEX IF NOT EXISTS ix_user_membership_position_code ON user_membership (position_code);
 CREATE INDEX IF NOT EXISTS ix_user_membership_user_id ON user_membership (user_id);
 
+CREATE TABLE IF NOT EXISTS dingtalk_binding (
+	id VARCHAR(40) NOT NULL,
+	user_id VARCHAR(40) NOT NULL,
+	corp_id VARCHAR(64) NOT NULL,
+	union_id VARCHAR(128),
+	open_id VARCHAR(128),
+	source_id INTEGER,
+	mobile VARCHAR(32),
+	display_name VARCHAR(100) NOT NULL,
+	avatar TEXT,
+	bind_status VARCHAR(24) NOT NULL,
+	last_auth_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_dingtalk_binding_user UNIQUE (user_id),
+	CONSTRAINT ck_dingtalk_binding_identity CHECK (union_id IS NOT NULL OR open_id IS NOT NULL),
+	CONSTRAINT ck_dingtalk_binding_status CHECK (bind_status IN ('bound', 'unbound', 'disabled')),
+	FOREIGN KEY(user_id) REFERENCES platform_user (id) ON DELETE CASCADE,
+	FOREIGN KEY(source_id) REFERENCES data_source (id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS ix_dingtalk_binding_mobile ON dingtalk_binding (mobile);
+CREATE INDEX IF NOT EXISTS ix_dingtalk_binding_source_id ON dingtalk_binding (source_id);
+CREATE INDEX IF NOT EXISTS ix_dingtalk_binding_status ON dingtalk_binding (bind_status);
+CREATE INDEX IF NOT EXISTS ix_dingtalk_binding_user_id ON dingtalk_binding (user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dingtalk_binding_corp_open ON dingtalk_binding (corp_id, open_id) WHERE open_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dingtalk_binding_corp_union ON dingtalk_binding (corp_id, union_id) WHERE union_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS email_verification_event (
 	id VARCHAR(40) NOT NULL,
 	user_id VARCHAR(40) NOT NULL,
@@ -1150,3 +1429,244 @@ CREATE INDEX IF NOT EXISTS ix_email_verification_event_challenge_time ON email_v
 CREATE INDEX IF NOT EXISTS ix_email_verification_event_email_time ON email_verification_event (email_canonical, created_at);
 CREATE INDEX IF NOT EXISTS ix_email_verification_event_ip_time ON email_verification_event (ip, created_at);
 CREATE INDEX IF NOT EXISTS ix_email_verification_event_user_time ON email_verification_event (user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS feishu_binding (
+	id VARCHAR(40) NOT NULL,
+	user_id VARCHAR(40) NOT NULL,
+	tenant_key VARCHAR(80) NOT NULL,
+	union_id VARCHAR(128),
+	open_id VARCHAR(128),
+	employee_id VARCHAR(128),
+	source_id INTEGER,
+	mobile VARCHAR(32),
+	email VARCHAR(254),
+	display_name VARCHAR(100) NOT NULL,
+	avatar TEXT,
+	bind_status VARCHAR(24) NOT NULL,
+	last_auth_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_feishu_binding_user UNIQUE (user_id),
+	CONSTRAINT ck_feishu_binding_identity CHECK (union_id IS NOT NULL OR open_id IS NOT NULL),
+	CONSTRAINT ck_feishu_binding_status CHECK (bind_status IN ('bound', 'unbound', 'disabled')),
+	FOREIGN KEY(user_id) REFERENCES platform_user (id) ON DELETE CASCADE,
+	FOREIGN KEY(source_id) REFERENCES data_source (id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS ix_feishu_binding_source_id ON feishu_binding (source_id);
+CREATE INDEX IF NOT EXISTS ix_feishu_binding_status ON feishu_binding (bind_status);
+CREATE INDEX IF NOT EXISTS ix_feishu_binding_user_id ON feishu_binding (user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_feishu_binding_tenant_open ON feishu_binding (tenant_key, open_id) WHERE open_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_feishu_binding_tenant_union ON feishu_binding (tenant_key, union_id) WHERE union_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS monitoring_rule (
+	id VARCHAR(40) NOT NULL,
+	code VARCHAR(80) NOT NULL,
+	version INTEGER NOT NULL,
+	template_code VARCHAR(80) NOT NULL,
+	source_id INTEGER NOT NULL,
+	name VARCHAR(160) NOT NULL,
+	metric_name VARCHAR(120) NOT NULL,
+	entity_type VARCHAR(80) NOT NULL,
+	grain VARCHAR(24) NOT NULL,
+	query_plan_json JSONB NOT NULL,
+	condition_json JSONB NOT NULL,
+	quality_gate_json JSONB NOT NULL,
+	severity_policy_json JSONB NOT NULL,
+	notification_policy_json JSONB NOT NULL,
+	schedule_seconds INTEGER NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	created_by VARCHAR(40) NOT NULL,
+	published_by VARCHAR(40),
+	published_at TIMESTAMP WITHOUT TIME ZONE,
+	last_scheduled_at TIMESTAMP WITHOUT TIME ZONE,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_monitoring_rule_version UNIQUE (code, version, source_id),
+	CONSTRAINT ck_monitoring_rule_status CHECK (status IN ('draft', 'published', 'paused', 'retired')),
+	FOREIGN KEY(source_id) REFERENCES data_source (id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS ix_monitoring_rule_code ON monitoring_rule (code);
+CREATE INDEX IF NOT EXISTS ix_monitoring_rule_last_scheduled_at ON monitoring_rule (last_scheduled_at);
+CREATE INDEX IF NOT EXISTS ix_monitoring_rule_source_id ON monitoring_rule (source_id);
+CREATE INDEX IF NOT EXISTS ix_monitoring_rule_status ON monitoring_rule (status);
+CREATE INDEX IF NOT EXISTS ix_monitoring_rule_template_ref ON monitoring_rule (template_code);
+
+CREATE TABLE IF NOT EXISTS monitoring_source_contract (
+	id VARCHAR(40) NOT NULL,
+	source_id INTEGER NOT NULL,
+	table_name VARCHAR(160) NOT NULL,
+	version INTEGER NOT NULL,
+	ingestion_mode VARCHAR(24) NOT NULL,
+	business_time_field VARCHAR(160) NOT NULL,
+	updated_time_field VARCHAR(160),
+	primary_key_fields_json JSONB NOT NULL,
+	allowed_lateness_seconds INTEGER NOT NULL,
+	lookback_seconds INTEGER NOT NULL,
+	reconciliation_seconds INTEGER NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_monitoring_source_contract UNIQUE (source_id, table_name, version),
+	FOREIGN KEY(source_id) REFERENCES data_source (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_monitoring_source_contract_source_id ON monitoring_source_contract (source_id);
+CREATE INDEX IF NOT EXISTS ix_monitoring_source_contract_status ON monitoring_source_contract (status);
+
+CREATE TABLE IF NOT EXISTS monitoring_alert (
+	id VARCHAR(40) NOT NULL,
+	rule_id VARCHAR(40) NOT NULL,
+	rule_version INTEGER NOT NULL,
+	source_id INTEGER NOT NULL,
+	metric_name VARCHAR(120) NOT NULL,
+	entity_type VARCHAR(80) NOT NULL,
+	entity_id VARCHAR(160) NOT NULL,
+	entity_name VARCHAR(200) NOT NULL,
+	title VARCHAR(240) NOT NULL,
+	severity VARCHAR(16) NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	correlation_key VARCHAR(160) NOT NULL,
+	current_value NUMERIC(24, 8),
+	baseline_value NUMERIC(24, 8),
+	sample_size INTEGER NOT NULL,
+	pending_count INTEGER NOT NULL,
+	recovery_count INTEGER NOT NULL,
+	recurrence_count INTEGER NOT NULL,
+	first_seen_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	last_seen_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	resolved_at TIMESTAMP WITHOUT TIME ZONE,
+	latest_observation_id VARCHAR(40),
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_monitoring_alert_correlation UNIQUE (correlation_key),
+	CONSTRAINT ck_monitoring_alert_status CHECK (status IN ('firing', 'recovering', 'resolved')),
+	FOREIGN KEY(rule_id) REFERENCES monitoring_rule (id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_entity_id ON monitoring_alert (entity_id);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_filter ON monitoring_alert (status, severity, last_seen_at);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_last_seen_at ON monitoring_alert (last_seen_at);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_rule_id ON monitoring_alert (rule_id);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_severity ON monitoring_alert (severity);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_source_id ON monitoring_alert (source_id);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_status ON monitoring_alert (status);
+
+CREATE TABLE IF NOT EXISTS monitoring_cursor (
+	id VARCHAR(40) NOT NULL,
+	rule_id VARCHAR(40) NOT NULL,
+	source_id INTEGER NOT NULL,
+	logical_period VARCHAR(80) NOT NULL,
+	watermark_at TIMESTAMP WITHOUT TIME ZONE,
+	task_id VARCHAR(40),
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_monitoring_cursor_rule UNIQUE (rule_id),
+	FOREIGN KEY(rule_id) REFERENCES monitoring_rule (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_monitoring_cursor_rule_id ON monitoring_cursor (rule_id);
+CREATE INDEX IF NOT EXISTS ix_monitoring_cursor_source_id ON monitoring_cursor (source_id);
+
+CREATE TABLE IF NOT EXISTS monitoring_observation (
+	id VARCHAR(40) NOT NULL,
+	rule_id VARCHAR(40) NOT NULL,
+	rule_version INTEGER NOT NULL,
+	source_id INTEGER NOT NULL,
+	logical_period VARCHAR(80) NOT NULL,
+	entity_type VARCHAR(80) NOT NULL,
+	entity_id VARCHAR(160) NOT NULL,
+	entity_name VARCHAR(200) NOT NULL,
+	current_value NUMERIC(24, 8),
+	baseline_value NUMERIC(24, 8),
+	lower_bound NUMERIC(24, 8),
+	upper_bound NUMERIC(24, 8),
+	sample_size INTEGER NOT NULL,
+	quality_status VARCHAR(24) NOT NULL,
+	evaluation_state VARCHAR(24) NOT NULL,
+	data_cutoff_at TIMESTAMP WITHOUT TIME ZONE,
+	details_json JSONB NOT NULL,
+	idempotency_key VARCHAR(160) NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_monitoring_observation_idempotency UNIQUE (idempotency_key),
+	FOREIGN KEY(rule_id) REFERENCES monitoring_rule (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_monitoring_observation_evaluation_state ON monitoring_observation (evaluation_state);
+CREATE INDEX IF NOT EXISTS ix_monitoring_observation_rule_id ON monitoring_observation (rule_id);
+CREATE INDEX IF NOT EXISTS ix_monitoring_observation_rule_period ON monitoring_observation (rule_id, logical_period);
+CREATE INDEX IF NOT EXISTS ix_monitoring_observation_source_id ON monitoring_observation (source_id);
+
+CREATE TABLE IF NOT EXISTS monitoring_task (
+	id VARCHAR(40) NOT NULL,
+	rule_id VARCHAR(40) NOT NULL,
+	rule_version INTEGER NOT NULL,
+	logical_period VARCHAR(80) NOT NULL,
+	window_start TIMESTAMP WITHOUT TIME ZONE,
+	window_end TIMESTAMP WITHOUT TIME ZONE,
+	status VARCHAR(24) NOT NULL,
+	idempotency_key VARCHAR(160) NOT NULL,
+	attempt_count INTEGER NOT NULL,
+	max_attempts INTEGER NOT NULL,
+	next_attempt_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	lease_owner VARCHAR(100),
+	lease_expires_at TIMESTAMP WITHOUT TIME ZONE,
+	error_summary VARCHAR(500),
+	result_json JSONB NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	started_at TIMESTAMP WITHOUT TIME ZONE,
+	finished_at TIMESTAMP WITHOUT TIME ZONE,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_monitoring_task_idempotency UNIQUE (idempotency_key),
+	FOREIGN KEY(rule_id) REFERENCES monitoring_rule (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_monitoring_task_claim ON monitoring_task (status, next_attempt_at, lease_expires_at);
+CREATE INDEX IF NOT EXISTS ix_monitoring_task_lease_expires_at ON monitoring_task (lease_expires_at);
+CREATE INDEX IF NOT EXISTS ix_monitoring_task_next_attempt_at ON monitoring_task (next_attempt_at);
+CREATE INDEX IF NOT EXISTS ix_monitoring_task_rule_id ON monitoring_task (rule_id);
+CREATE INDEX IF NOT EXISTS ix_monitoring_task_status ON monitoring_task (status);
+
+CREATE TABLE IF NOT EXISTS monitoring_alert_delivery (
+	id VARCHAR(40) NOT NULL,
+	alert_id VARCHAR(40) NOT NULL,
+	event_type VARCHAR(80) NOT NULL,
+	channel VARCHAR(24) NOT NULL,
+	recipient_user_id VARCHAR(40) NOT NULL,
+	recipient_address VARCHAR(200),
+	status VARCHAR(24) NOT NULL,
+	idempotency_key VARCHAR(160) NOT NULL,
+	attempt_count INTEGER NOT NULL,
+	max_attempts INTEGER NOT NULL,
+	next_attempt_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	lease_owner VARCHAR(100),
+	lease_expires_at TIMESTAMP WITHOUT TIME ZONE,
+	provider_message_id VARCHAR(200),
+	error_summary VARCHAR(500),
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	sent_at TIMESTAMP WITHOUT TIME ZONE,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_monitoring_alert_delivery_idempotency UNIQUE (idempotency_key),
+	FOREIGN KEY(alert_id) REFERENCES monitoring_alert (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_delivery_alert_id ON monitoring_alert_delivery (alert_id);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_delivery_channel ON monitoring_alert_delivery (channel);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_delivery_event_type ON monitoring_alert_delivery (event_type);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_delivery_recipient_user_id ON monitoring_alert_delivery (recipient_user_id);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_delivery_status ON monitoring_alert_delivery (status);
+CREATE INDEX IF NOT EXISTS ix_monitoring_delivery_claim ON monitoring_alert_delivery (status, next_attempt_at, lease_expires_at);
+
+CREATE TABLE IF NOT EXISTS monitoring_alert_evidence (
+	id VARCHAR(40) NOT NULL,
+	alert_id VARCHAR(40) NOT NULL,
+	observation_id VARCHAR(40) NOT NULL,
+	evidence_type VARCHAR(32) NOT NULL,
+	snapshot_json JSONB NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_monitoring_alert_evidence UNIQUE (alert_id, observation_id),
+	FOREIGN KEY(alert_id) REFERENCES monitoring_alert (id) ON DELETE CASCADE,
+	FOREIGN KEY(observation_id) REFERENCES monitoring_observation (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_evidence_alert_id ON monitoring_alert_evidence (alert_id);
+CREATE INDEX IF NOT EXISTS ix_monitoring_alert_evidence_observation_id ON monitoring_alert_evidence (observation_id);

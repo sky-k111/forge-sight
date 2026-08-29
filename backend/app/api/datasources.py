@@ -1,7 +1,7 @@
 """数据源管理接口。"""
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.metadata import datasources
 from app.metadata.scanner import scan_source
@@ -15,12 +15,19 @@ router = APIRouter(prefix="/api/datasources", tags=["datasources"])
 
 class DataSourceCreate(BaseModel):
     name: str
-    type: str  # mysql / postgresql
+    type: str
     host: str = "127.0.0.1"
     port: int | None = None
     database: str
     username: str
     password: str = ""
+    schemas: list[str] = Field(default_factory=list)
+    config: dict = Field(default_factory=dict)
+
+
+@router.get("/types")
+def get_source_types(_context: TenantContext = Depends(tenant_context)):
+    return datasources.list_source_types()
 
 
 @router.get("")
@@ -38,11 +45,14 @@ def add_source(payload: DataSourceCreate, context: TenantContext = Depends(requi
 
 class DataSourceUpdate(BaseModel):
     name: str | None = None
+    type: str | None = None
     host: str | None = None
     port: int | None = None
     database: str | None = None
     username: str | None = None
     password: str | None = None  # 空 = 不修改
+    schemas: list[str] | None = None
+    config: dict | None = None
 
 
 @router.patch("/{source_id}")
@@ -67,6 +77,14 @@ def scan_source_tables(source_id: int, context: TenantContext = Depends(require_
     if source is None:
         raise HTTPException(status_code=404, detail="数据源不存在")
     return scan_source(source)
+
+
+@router.get("/{source_id}/schemas")
+def get_source_schemas(source_id: int, context: TenantContext = Depends(require_tenant_admin)):
+    try:
+        return {"schemas": datasources.list_source_schemas(source_id, context.tenant_id)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/{source_id}/semantic-index")
