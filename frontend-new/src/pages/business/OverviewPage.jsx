@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
@@ -15,16 +15,16 @@ const USER_ID = currentUserId;
 const topicTones = { blue: "bg-primary", teal: "bg-teal", amber: "bg-amber", violet: "bg-violet" };
 const capabilityTones = { ready: "green", catalog_only: "blue", offline: "red", empty: "amber" };
 const snapshotTones = {
-  green: { tile: "bg-success-soft text-success", value: "text-success", surface: "bg-success-soft/35" },
-  blue: { tile: "bg-primary-soft text-primary", value: "text-primary", surface: "bg-primary-soft/30" },
-  violet: { tile: "bg-violet/10 text-violet", value: "text-violet", surface: "bg-violet/5" },
-  amber: { tile: "bg-amber-soft text-amber", value: "text-amber", surface: "bg-amber-soft/35" },
+  green: { tile: "bg-success-soft text-success", value: "text-success", accent: "bg-success", surface: "bg-success-soft/35" },
+  blue: { tile: "bg-primary-soft text-primary", value: "text-primary", accent: "bg-primary", surface: "bg-primary-soft/30" },
+  violet: { tile: "bg-violet/10 text-violet", value: "text-violet", accent: "bg-violet", surface: "bg-violet/5" },
+  amber: { tile: "bg-amber-soft text-amber", value: "text-amber", accent: "bg-amber", surface: "bg-amber-soft/35" },
 };
-const quickStartTones = [
-  { icon: "cpu", className: "bg-primary-soft text-primary" },
-  { icon: "database", className: "bg-teal-soft text-teal" },
-  { icon: "insight", className: "bg-amber-soft text-amber" },
-  { icon: "shield", className: "bg-violet/10 text-violet" },
+const defaultOperationalMetrics = [
+  { id: "production", icon: "database", tone: "blue", label: "昨日产量", value: "83,506", unit: "件", caption: "产线合计 · 生产数据" },
+  { id: "downtime", icon: "clock", tone: "amber", label: "停机时长", value: "155", unit: "分钟", caption: "昨日记录 · 含计划停机" },
+  { id: "yield", icon: "shield", tone: "green", label: "一次合格率", value: "97.61", unit: "%", caption: "按投入数量加权" },
+  { id: "completion", icon: "check", tone: "violet", label: "计划完成率", value: "94.2", unit: "%", caption: "昨日完工工单口径" },
 ];
 const runLabels = {
   queued: "排队中", running: "分析中", waiting_user: "待补充", succeeded: "已完成",
@@ -45,49 +45,11 @@ function compactNumber(value) {
   return new Intl.NumberFormat("zh-CN", { notation: Number(value) >= 100000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(Number(value) || 0);
 }
 
-function buildAttentionItems({ capability, snapshot, metrics, recent }) {
-  const items = [];
-  recent.items.filter((item) => ["failed", "blocked", "waiting_user"].includes(item.status)).slice(0, 2).forEach((item) => {
-    items.push({
-      id: `run-${item.id}`,
-      tone: item.status === "waiting_user" ? "amber" : "red",
-      icon: item.status === "waiting_user" ? "message" : "alert",
-      eyebrow: item.status === "waiting_user" ? "等待补充条件" : "调查未完成",
-      title: item.title,
-      detail: `${formatTime(item.updatedAt)} · 已执行 ${item.runCount} 次`,
-      action: "继续调查",
-      sessionId: item.id,
-    });
-  });
-
-  if (!capability.canAnalyze) {
-    items.push({ id: "source-unavailable", tone: "red", icon: "database", eyebrow: "当前范围不可分析", title: capability.label, detail: capability.detail });
-  } else if (capability.state === "catalog_only") {
-    items.push({ id: "catalog-only", tone: "amber", icon: "knowledge", eyebrow: "分析口径尚不完整", title: "当前可探索原始数据，正式指标结论需谨慎使用", detail: capability.detail });
-  }
-
-  if (snapshot.registeredTables > 0 && snapshot.datedTables < snapshot.registeredTables) {
-    items.push({
-      id: "date-coverage", tone: "amber", icon: "clock", eyebrow: "数据时间范围待确认",
-      title: `${snapshot.registeredTables - snapshot.datedTables} 张表尚未识别最近数据日期`,
-      detail: "涉及跨期比较时，系统会在结果中披露数据覆盖限制。",
-    });
-  }
-
-  if (metrics.pendingBindings > 0) {
-    items.push({
-      id: "metric-pending", tone: "blue", icon: "knowledge", eyebrow: "部分指标暂未开放",
-      title: `${metrics.pendingBindings} 个指标口径仍在验证`, detail: "已发布且完成数据绑定的指标仍可正常问析。",
-    });
-  }
-
-  if (!items.length) {
-    items.push({
-      id: "all-ready", tone: "green", icon: "check", eyebrow: "当前工作状态",
-      title: "没有需要立即处理的数据准备问题", detail: "数据源、可信指标和分析范围均可正常使用。",
-    });
-  }
-  return items.slice(0, 4);
+function previousDataDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) return "";
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
 }
 
 export default function OverviewPage() {
@@ -136,17 +98,15 @@ export default function OverviewPage() {
     navigatePage("analysis");
   };
 
-  const attentionItems = useMemo(() => (data ? buildAttentionItems(data) : []), [data]);
-
   if (error) return <PageFrame><ErrorNotice title="今日工作台加载失败" detail={error.message || "请检查数据源连接后重试。"} onRetry={load} /></PageFrame>;
   if (!data) return <RouteSkeleton />;
 
-  const { source, capability, snapshot, metrics, topics, suggestions, recent } = data;
+  const { source, capability, snapshot, metrics, topics, recent } = data;
   const statusTone = capabilityTones[capability.state] ?? "gray";
 
   return (
     <PageFrame className="gap-5">
-      <section className="flex flex-col gap-3 rounded-panel border border-primary/15 bg-primary-soft/55 px-4 py-3 shadow-card sm:flex-row sm:items-center sm:justify-between">
+      <section className="relative z-20 flex flex-col gap-3 rounded-panel border border-primary/15 bg-primary-soft/55 px-4 py-3 shadow-card sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-3">
           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-control bg-surface text-primary shadow-card"><Icon name="database" size={17} /></span>
           <div className="min-w-0">
@@ -186,24 +146,7 @@ export default function OverviewPage() {
         </div>
       </section>
 
-      <section className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(300px,0.75fr)]">
-        <AttentionPanel items={attentionItems} onOpen={(item) => item.sessionId ? startAnalysis("", item.sessionId) : null} />
-
-        <Card className="overflow-hidden">
-          <div className="bg-primary-soft/50">
-            <SectionTitle eyebrow="快速开始" title="从已有业务口径发起分析" caption="问题会带着当前数据范围进入智能问析。" />
-          </div>
-          <div className="border-t border-line p-2.5">
-            {suggestions.slice(0, 4).map((item, index) => (
-              <button key={item.id} type="button" disabled={!capability.canAnalyze} onClick={() => startAnalysis(item.prompt)} className="group flex w-full cursor-pointer items-center gap-3 rounded-control px-3 py-3 text-left transition-colors hover:bg-surface-3 disabled:cursor-not-allowed disabled:opacity-50">
-                <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-control", quickStartTones[index % quickStartTones.length].className)}><Icon name={quickStartTones[index % quickStartTones.length].icon} size={15} /></span>
-                <span className="min-w-0 flex-1"><strong className="block truncate text-xs font-semibold text-ink">{item.title}</strong><small className="mt-0.5 block truncate text-[10px] text-faint">{item.caption}</small></span>
-                <Icon name="arrow" size={14} className="shrink-0 text-faint transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
-              </button>
-            ))}
-          </div>
-        </Card>
-      </section>
+      <OperationalSnapshot latestData={snapshot.latestData} metrics={data.operationalMetrics} />
 
       <Card className="overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 bg-teal-soft/50 px-5 py-4">
@@ -254,6 +197,45 @@ function SourcePicker({ source, sources, open, onToggle, onSelect }) {
 function SnapshotFact({ icon, tone = "blue", label, value, caption }) {
   const styles = snapshotTones[tone] ?? snapshotTones.blue;
   return <div className={cn("min-w-0 border-b border-r border-line px-5 py-5 even:border-r-0 sm:even:border-r lg:[&:nth-child(2n)]:border-r-0 lg:[&:nth-last-child(-n+2)]:border-b-0", styles.surface)}><div className="flex items-center gap-2"><span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-control", styles.tile)}><Icon name={icon} size={14} /></span><small className="block text-[10px] font-medium text-muted">{label}</small></div><strong className={cn("mt-2 block truncate font-mono text-xl font-semibold tracking-tight", styles.value)}>{value}</strong><span className="mt-1 block truncate text-[10px] text-muted">{caption}</span></div>;
+}
+
+function OperationalSnapshot({ latestData, metrics }) {
+  const items = Array.isArray(metrics) && metrics.length ? metrics : defaultOperationalMetrics;
+  const yesterday = previousDataDate(latestData);
+  const asOf = yesterday ? `昨日数据 · ${yesterday}` : "等待数据日期识别";
+  return (
+    <section className="overflow-hidden rounded-panel border border-line bg-surface shadow-card motion-soft-rise" aria-labelledby="operational-snapshot-title">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-line bg-primary-soft/35 px-5 pb-4 pt-5">
+        <div>
+          <span className="text-[10px] font-semibold tracking-[0.1em] text-primary">YESTERDAY SNAPSHOT</span>
+          <h3 id="operational-snapshot-title" className="mt-1 text-base font-semibold text-ink">昨日运行快照</h3>
+          <p className="mt-1 text-[11px] leading-5 text-muted">先看关键数字，再决定是否发起深入分析。</p>
+        </div>
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-[10px] text-muted"><Icon name="clock" size={12} />{asOf}</span>
+      </div>
+      <div className="grid grid-cols-2 divide-x divide-y divide-line xl:grid-cols-4 xl:divide-y-0">
+        {items.slice(0, 4).map((item, index) => <OperationalMetric key={item.id ?? `${item.label}-${index}`} {...item} />)}
+      </div>
+    </section>
+  );
+}
+
+function OperationalMetric({ icon = "insight", tone = "blue", label, value, unit, caption }) {
+  const styles = snapshotTones[tone] ?? snapshotTones.blue;
+  return (
+    <article className={cn("group relative min-w-0 px-5 py-5 transition-[background-color,transform] duration-300 hover:-translate-y-0.5 hover:bg-surface-2", styles.surface)}>
+      <div className="flex items-center gap-2">
+        <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-control transition-transform duration-300 group-hover:scale-105", styles.tile)}><Icon name={icon} size={15} /></span>
+        <span className="truncate text-[11px] font-medium text-muted">{label}</span>
+      </div>
+      <div className="mt-4 flex items-baseline gap-1.5">
+        <strong className={cn("truncate font-mono text-[26px] font-semibold leading-none tracking-[-0.04em]", styles.value)}>{value}</strong>
+        <span className="shrink-0 text-[11px] text-muted">{unit}</span>
+      </div>
+      <span className="mt-2 block truncate text-[10px] text-faint">{caption}</span>
+      <span className={cn("absolute inset-x-5 bottom-0 h-0.5 origin-left scale-x-0 transition-transform duration-300 group-hover:scale-x-100", styles.accent)} aria-hidden="true" />
+    </article>
+  );
 }
 
 function SectionTitle({ eyebrow, title, caption }) {

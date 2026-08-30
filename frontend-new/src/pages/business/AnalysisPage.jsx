@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router-dom";
 import Icon from "../../components/ui/Icon";
+import forgeSightLogo from "../../assets/forgesight-logo.png";
 import cn from "../../lib/cn";
 import { Button, Card, ErrorNotice, StatusPill } from "../../components/ui";
 import { ChartLegend, ComboMetricChart, CorrelationScatterChart, MatrixHeatmapChart, RankBarChart, ShareDonutChart, TrendLineChart } from "../../components/charts";
@@ -33,10 +34,12 @@ const ACTIVE_SOURCE_KEY = "forgesight:active-source-id";
 const ANALYSIS_DRAFT_KEY = "forgesight:analysis-draft";
 const MODELING_DRAFT_KEY = "forgesight:modeling-draft";
 const ANALYSIS_SESSION_KEY = "forgesight:analysis-session-id";
+const ANALYSIS_NEW_SESSION_KEY = "forgesight:analysis-new-session";
 const ANALYSIS_SESSION_SELECTED_EVENT = "forgesight:analysis-session-selected";
 
 export default function AnalysisPage() {
   const { evidenceOpen, setEvidenceOpen, navigatePage, refreshSessions } = useOutletContext();
+  const navigate = useNavigate();
   const [messages, setMessages] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [pending, setPending] = useState(false);
@@ -59,8 +62,11 @@ export default function AnalysisPage() {
   const [availableSources, setAvailableSources] = useState([]);
   const [scopeOpen, setScopeOpen] = useState(false);
   const scrollRef = useRef(null);
+  const composerRef = useRef(null);
   const subscriptionsRef = useRef(new Map());
   const refreshTimersRef = useRef(new Map());
+  // 每次加载都递增版本号，避免旧会话请求晚返回后覆盖“新建分析”的空白界面。
+  const loadVersionRef = useRef(0);
   const [clarifySubmitting, setClarifySubmitting] = useState(false);
   const [clarifyError, setClarifyError] = useState(null);
 
@@ -150,9 +156,17 @@ export default function AnalysisPage() {
     subscriptionsRef.current.set(runId, unsubscribe);
   };
 
-  const load = async () => {
+  const load = async (forceNewSession = false) => {
+    const loadVersion = ++loadVersionRef.current;
     setLoadError(null);
     setMessages(null);
+    setQuery("");
+    setActiveSession(null);
+    setEvidenceRun(null);
+    setBranchContext(null);
+    setOriginRun(null);
+    setAdjustmentTarget(null);
+    setBusy(false);
     // 切换数据源/会话前先停掉旧 run 的订阅，避免旧分析串入新会话。
     subscriptionsRef.current.forEach((unsubscribe) => unsubscribe());
     subscriptionsRef.current.clear();
@@ -160,6 +174,7 @@ export default function AnalysisPage() {
     refreshTimersRef.current.clear();
     try {
       const sources = await listSources();
+      if (loadVersion !== loadVersionRef.current) return;
       setAvailableSources(sources);
       const preferredSourceId = Number(window.sessionStorage.getItem(ACTIVE_SOURCE_KEY));
       const source = sources.find((item) => item.id === preferredSourceId)
@@ -169,16 +184,32 @@ export default function AnalysisPage() {
       window.sessionStorage.setItem(ACTIVE_SOURCE_KEY, String(source.id));
       setActiveSource(source);
       const sessions = await listAnalysisSessions(USER_ID());
+      if (loadVersion !== loadVersionRef.current) return;
+      const isNewSession = forceNewSession || window.sessionStorage.getItem(ANALYSIS_NEW_SESSION_KEY) === "1";
+      window.sessionStorage.removeItem(ANALYSIS_NEW_SESSION_KEY);
       const preferredSessionId = window.sessionStorage.getItem(ANALYSIS_SESSION_KEY);
-      const selected = sessions.find((item) => item.id === preferredSessionId && item.sourceId === source.id)
-        ?? sessions.find((item) => item.sourceId === source.id)
-        ?? await createAnalysisSession({ title: "制造业务问析", sourceId: source.id, userId: USER_ID() });
+      const selected = isNewSession
+        ? null
+        : sessions.find((item) => item.id === preferredSessionId && item.sourceId === source.id)
+          ?? sessions.find((item) => item.sourceId === source.id)
+          ?? null;
       window.sessionStorage.removeItem(ANALYSIS_SESSION_KEY);
       setActiveSession(selected);
+      const draft = window.sessionStorage.getItem(ANALYSIS_DRAFT_KEY);
+      window.sessionStorage.removeItem(ANALYSIS_DRAFT_KEY);
+      setQuery(draft ?? "");
+      if (!selected) {
+        setMessages([]);
+        setEvidenceRun(null);
+        setBusy(false);
+        return;
+      }
       refreshSessions?.(selected.id);
       const sessionView = await getAnalysisSession(selected.id);
+      if (loadVersion !== loadVersionRef.current) return;
       setBranchContext(sessionView.branchContext ?? null);
       const snapshots = await Promise.all((sessionView.runs ?? []).map((run) => getAnalysisRun(run.id)));
+      if (loadVersion !== loadVersionRef.current) return;
       let items = snapshots.flatMap((snapshot) => {
         const run = adaptAnalysisRun(snapshot);
         const created = new Date(snapshot.createdAt);
@@ -200,9 +231,10 @@ export default function AnalysisPage() {
       if (sessionView.branchContext?.sourceRunId) {
         try {
           const sourceSnapshot = await getAnalysisRun(sessionView.branchContext.sourceRunId);
+          if (loadVersion !== loadVersionRef.current) return;
           setOriginRun(adaptAnalysisRun(sourceSnapshot));
         } catch {
-          setOriginRun(null);
+          if (loadVersion === loadVersionRef.current) setOriginRun(null);
         }
       } else {
         setOriginRun(null);
@@ -216,11 +248,6 @@ export default function AnalysisPage() {
         });
       }
       setMessages(items);
-      const draft = window.sessionStorage.getItem(ANALYSIS_DRAFT_KEY);
-      if (draft) {
-        setQuery(draft);
-        window.sessionStorage.removeItem(ANALYSIS_DRAFT_KEY);
-      }
       const lastRun = snapshots.at(-1);
       setEvidenceRun(lastRun ? adaptAnalysisRun(lastRun) : null);
       setBusy(snapshots.some((snapshot) => !TERMINAL_STATUSES.has(snapshot.status)));
@@ -228,16 +255,17 @@ export default function AnalysisPage() {
         if (!TERMINAL_STATUSES.has(snapshot.status)) watchRun(snapshot.id);
       }
     } catch (error) {
-      setLoadError(error);
+      if (loadVersion === loadVersionRef.current) setLoadError(error);
     }
   };
   useEffect(() => {
     load();
-    const handleSessionSelected = () => load();
+    const handleSessionSelected = (event) => load(Boolean(event.detail?.newSession));
     const subscriptions = subscriptionsRef.current;
     const refreshTimers = refreshTimersRef.current;
     window.addEventListener(ANALYSIS_SESSION_SELECTED_EVENT, handleSessionSelected);
     return () => {
+      loadVersionRef.current += 1;
       window.removeEventListener(ANALYSIS_SESSION_SELECTED_EVENT, handleSessionSelected);
       subscriptions.forEach((unsubscribe) => unsubscribe());
       subscriptions.clear();
@@ -247,16 +275,17 @@ export default function AnalysisPage() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(scrollToBottom, [messages, pending]);
 
-  const acceptRun = async (accepted, text) => {
+  const acceptRun = async (accepted, text, session = activeSession) => {
+    if (!session) return;
     setActiveSession((current) => current ? { ...current, title: text } : current);
-    refreshSessions?.(activeSession.id);
+    refreshSessions?.(session.id);
     const immediateTerminal = TERMINAL_STATUSES.has(accepted.status);
     // 澄清（waiting_user）/建模提案（modeling_proposal）需要 interaction/proposal 数据才能渲染对应卡片，
     // 而验收响应只回 runId/status；占位快照缺这些数据，先按“运行中”展示，待 refreshRun 拉取全量快照后再切换。
     const needsCardData = ["waiting_user", "modeling_proposal"].includes(accepted.status);
     const placeholder = adaptAnalysisRun({
       id: accepted.runId,
-      sessionId: activeSession.id,
+      sessionId: session.id,
       sourceId: activeSource?.id,
       question: text,
       status: immediateTerminal || needsCardData ? "running" : accepted.status,
@@ -275,7 +304,7 @@ export default function AnalysisPage() {
 
   const submit = async (prompt = query) => {
     const text = prompt.trim();
-    if (!text || pending || busy || messages == null || !activeSession) return;
+    if (!text || pending || busy || messages == null) return;
     const idempotencyKey = crypto.randomUUID();
     const time = new Date().toTimeString().slice(0, 5);
     setMessages((current) => [...current, { id: `user-${Date.now()}`, role: "user", text, time }]);
@@ -283,8 +312,19 @@ export default function AnalysisPage() {
     setBranchNotice("");
     setPending(true);
     try {
-      const accepted = await submitAnalysisRun(activeSession.id, text, idempotencyKey);
-      await acceptRun(accepted, text);
+      let session = activeSession;
+      if (!session) {
+        session = await createAnalysisSession({
+          title: text,
+          sourceId: activeSource?.id,
+          userId: USER_ID(),
+        });
+        setActiveSession(session);
+        window.sessionStorage.setItem(ANALYSIS_SESSION_KEY, session.id);
+        refreshSessions?.(session.id);
+      }
+      const accepted = await submitAnalysisRun(session.id, text, idempotencyKey);
+      await acceptRun(accepted, text, session);
     } catch {
       // 失败时保留问题文字与幂等键，便于用同一 key 重试而不产生重复 run。
       setMessages((current) => [...current, { id: `error-${Date.now()}`, role: "assistant", failed: true, retry: { text, idempotencyKey } }]);
@@ -425,11 +465,6 @@ export default function AnalysisPage() {
       <section className="flex min-w-0 flex-1 flex-col">
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto px-6 pt-6">
           <div className="mx-auto w-full max-w-[760px] pb-6">
-            <div className="flex flex-wrap gap-2">
-              <ContextChip icon="database">{activeSource?.name ?? "制造数据底座"}</ContextChip>
-              <ContextChip icon="knowledge">企业统一业务语义</ContextChip>
-              <ContextChip icon="shield">只读查询</ContextChip>
-            </div>
             {branchContext && (
               <BranchOriginCard
                 context={branchContext}
@@ -447,64 +482,74 @@ export default function AnalysisPage() {
                 })}
               />
             )}
-            {messages == null ? (
-              <ConversationSkeleton />
+            {messages == null ? <ConversationSkeleton /> : messages.length === 0 ? (
+              <AnalysisEmptyState
+                onPrompt={(prompt) => {
+                  setQuery(prompt);
+                  window.requestAnimationFrame(() => composerRef.current?.focus());
+                }}
+                onNavigateModeling={() => navigatePage("modeling")}
+                onNavigateReports={() => navigatePage("reports")}
+                onNavigateProfile={() => navigate("/workspace/profile")}
+              />
             ) : (
-              messages.map((message) => {
-                return message.role === "user" ? (
-                  <UserMessage key={message.id} text={message.text} />
-                ) : (
-                  <div key={message.id} className="motion-soft-rise mt-8">
-                    <div className="min-w-0">
-                      {message.plainText ? (
-                        <div className="mt-1.5 rounded-card border border-line bg-surface-2 px-3.5 py-3 text-body leading-relaxed text-ink-2">
-                          {message.plainText}
-                          {message.inherited && <span className="mt-1 block text-[10px] text-faint">继承自分析分支起点</span>}
-                        </div>
-                      ) : message.failed ? (
-                        <div className="mt-1.5 rounded-card border border-red/25 bg-red-soft px-3.5 py-3 text-xs text-ink-2">
-                          分析请求发送失败，请稍后重试。
-                          {message.retry && (
-                            <button
-                              type="button"
-                              onClick={() => retryFailed(message)}
-                              className="mt-2 inline-flex cursor-pointer items-center gap-1 rounded-control px-2 py-1 text-xs font-semibold text-red transition-colors hover:bg-red/10"
-                            >
-                              <Icon name="refresh" size={14} />重试
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <AssistantRunMessage
-                          run={message.run}
-                          animate={message.animate}
-                          onComplete={handleComplete}
-                          onOpenEvidence={(run) => { setEvidenceRun(run); setEvidenceOpen(true); }}
-                          onClarify={(option, interactionId) => clarify(message.id, option, interactionId)}
-                          onFollowUp={(text) => submit(text)}
-                          onOpenModeling={() => navigatePage("modeling")}
-                          clarifySubmitting={clarifySubmitting}
-                          clarifyError={clarifyError}
-                        />
-                      )}
+              <div className="analysis-conversation-state">
+                {messages.map((message) => {
+                  return message.role === "user" ? (
+                    <UserMessage key={message.id} text={message.text} />
+                  ) : (
+                    <div key={message.id} className="motion-soft-rise mt-8">
+                      <div className="min-w-0">
+                        {message.plainText ? (
+                          <div className="mt-1.5 rounded-card border border-line bg-surface-2 px-3.5 py-3 text-body leading-relaxed text-ink-2">
+                            {message.plainText}
+                            {message.inherited && <span className="mt-1 block text-[10px] text-faint">继承自分析分支起点</span>}
+                          </div>
+                        ) : message.failed ? (
+                          <div className="mt-1.5 rounded-card border border-red/25 bg-red-soft px-3.5 py-3 text-xs text-ink-2">
+                            分析请求发送失败，请稍后重试。
+                            {message.retry && (
+                              <button
+                                type="button"
+                                onClick={() => retryFailed(message)}
+                                className="mt-2 inline-flex cursor-pointer items-center gap-1 rounded-control px-2 py-1 text-xs font-semibold text-red transition-colors hover:bg-red/10"
+                              >
+                                <Icon name="refresh" size={14} />重试
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <AssistantRunMessage
+                            run={message.run}
+                            animate={message.animate}
+                            onComplete={handleComplete}
+                            onOpenEvidence={(run) => { setEvidenceRun(run); setEvidenceOpen(true); }}
+                            onClarify={(option, interactionId) => clarify(message.id, option, interactionId)}
+                            onFollowUp={(text) => submit(text)}
+                            onOpenModeling={() => navigatePage("modeling")}
+                            clarifySubmitting={clarifySubmitting}
+                            clarifyError={clarifyError}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {branchContext && originRun && currentBranchRun && TERMINAL_STATUSES.has(currentBranchRun.status) && (
+                  <BranchComparisonCard context={branchContext} originRun={originRun} currentRun={currentBranchRun} />
+                )}
+                {pending && (
+                  <div className="mt-8 border-l-2 border-primary/35 pl-3">
+                    <div className="flex items-center gap-2 text-xs text-muted">
+                      <span className="flex items-center gap-1">
+                        {[0, 1, 2].map((dot) => (
+                          <span key={dot} className="h-1.5 w-1.5 animate-pulse rounded-full bg-faint" style={{ animationDelay: `${dot * 160}ms` }} />
+                        ))}
+                      </span>
+                      正在理解问题并匹配业务知识…
                     </div>
                   </div>
-                );
-              })
-            )}
-            {branchContext && originRun && currentBranchRun && TERMINAL_STATUSES.has(currentBranchRun.status) && (
-              <BranchComparisonCard context={branchContext} originRun={originRun} currentRun={currentBranchRun} />
-            )}
-            {pending && (
-              <div className="mt-8 border-l-2 border-primary/35 pl-3">
-                <div className="flex items-center gap-2 text-xs text-muted">
-                    <span className="flex items-center gap-1">
-                      {[0, 1, 2].map((dot) => (
-                        <span key={dot} className="h-1.5 w-1.5 animate-pulse rounded-full bg-faint" style={{ animationDelay: `${dot * 160}ms` }} />
-                      ))}
-                    </span>
-                    正在理解问题并匹配业务知识…
-                </div>
+                )}
               </div>
             )}
           </div>
@@ -541,6 +586,7 @@ export default function AnalysisPage() {
               onSubmit={(event) => { event.preventDefault(); submit(); }}
             >
               <textarea
+                ref={composerRef}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="用业务语言描述你想分析的问题…"
@@ -552,6 +598,7 @@ export default function AnalysisPage() {
                   <div className="relative">
                     <button
                       type="button"
+                      aria-label="选择分析数据范围"
                       aria-haspopup="listbox"
                       aria-expanded={scopeOpen}
                       onClick={() => setScopeOpen((value) => !value)}
@@ -807,8 +854,8 @@ function UserMessage({ text }) {
     }
   };
   return (
-    <div className="group relative motion-soft-rise mt-7 ml-auto max-w-[86%]">
-      <p className="rounded-[18px] bg-surface-2 px-4 py-2.5 text-body leading-relaxed text-ink">{text}</p>
+    <div className="group relative motion-soft-rise mt-7 ml-auto w-fit max-w-[86%]">
+      <p className="user-message__bubble inline-block max-w-full rounded-[18px] px-4 py-2.5 text-body leading-relaxed text-ink">{text}</p>
       <div className="absolute right-0 top-full z-10 mt-1 flex opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
         <button type="button" onClick={copy} aria-label="复制问题" className="grid h-5 w-5 cursor-pointer place-items-center rounded-tag text-faint transition-colors hover:bg-surface-3 hover:text-ink">
           <Icon name={copied ? "check" : "copy"} size={13} />
@@ -1114,6 +1161,82 @@ function ProposalField({ label, value, mono = false }) {
   return <div className="min-w-0 bg-surface p-2.5"><span className="block text-[10px] text-faint">{label}</span><strong className={cn("mt-1 block text-[11px] font-semibold leading-relaxed text-ink", mono && "font-mono")}>{value}</strong></div>;
 }
 
+function AnalysisEmptyState({ onPrompt, onNavigateModeling, onNavigateReports, onNavigateProfile }) {
+  const guides = [
+    {
+      id: "analysis",
+      icon: "analysis",
+      tone: "blue",
+      eyebrow: "START WITH A QUESTION",
+      title: "分析引导",
+      description: "从产量、质量或设备问题开始",
+      action: "试问一个问题",
+      onClick: () => onPrompt("统计每条产线最近 7 天的产量趋势"),
+    },
+    {
+      id: "modeling",
+      icon: "model",
+      tone: "violet",
+      eyebrow: "FIND THE NEXT SIGNAL",
+      title: "建模引导",
+      description: "识别风险因素，生成可复核方案",
+      action: "查看建模工作台",
+      onClick: onNavigateModeling,
+    },
+    {
+      id: "report",
+      icon: "report",
+      tone: "amber",
+      eyebrow: "SHARE WHAT IS VERIFIED",
+      title: "周报引导",
+      description: "把已验证结论整理成周报与交接",
+      action: "查看周报与交接",
+      onClick: onNavigateReports,
+    },
+    {
+      id: "binding",
+      icon: "link",
+      tone: "teal",
+      eyebrow: "KEEP THE TEAM IN SYNC",
+      title: "飞书 / 钉钉绑定",
+      description: "接收分析提醒和报告投递",
+      action: "去绑定账号",
+      onClick: onNavigateProfile,
+    },
+  ];
+
+  return (
+    <section className="analysis-empty-state" aria-labelledby="analysis-empty-title">
+      <div className="analysis-empty-hero">
+        <div className="analysis-empty-logo-wrap" aria-hidden="true">
+          <span className="analysis-empty-logo-ring analysis-empty-logo-ring--outer" />
+          <span className="analysis-empty-logo-ring analysis-empty-logo-ring--inner" />
+          <img src={forgeSightLogo} alt="" className="analysis-empty-logo" />
+        </div>
+        <div className="analysis-empty-copy">
+          <span className="analysis-empty-kicker">FORGESIGHT / START HERE</span>
+          <h2 id="analysis-empty-title">从一个问题开始，进入你的数据现场</h2>
+          <p>用业务语言描述现场疑问，ForgeSight 会把方向、证据和下一步整理在一起。</p>
+        </div>
+      </div>
+      <div className="analysis-guide-grid">
+        {guides.map((guide) => (
+          <button type="button" key={guide.id} className={`analysis-guide-card analysis-guide-card--${guide.tone}`} onClick={guide.onClick}>
+            <span className="analysis-guide-card__icon"><Icon name={guide.icon} size={17} /></span>
+            <span className="analysis-guide-card__body">
+              <span className="analysis-guide-card__eyebrow">{guide.eyebrow}</span>
+              <strong>{guide.title}</strong>
+              <span>{guide.description}</span>
+            </span>
+            <span className="analysis-guide-card__action">{guide.action}<Icon name="arrow" size={13} /></span>
+          </button>
+        ))}
+      </div>
+      <p className="analysis-empty-hint"><span className="analysis-empty-hint__dot" />也可以直接在下方输入问题，先从一个具体现场开始。</p>
+    </section>
+  );
+}
+
 function ConversationSkeleton() {
   return (
     <div className="mt-7 grid animate-pulse gap-7" role="status" aria-label="会话加载中">
@@ -1134,14 +1257,6 @@ function ConversationSkeleton() {
         </div>
       </div>
     </div>
-  );
-}
-
-function ContextChip({ icon, children }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-2 px-2.5 py-1 text-[11px] text-ink-2">
-      <Icon name={icon} size={14} />{children}
-    </span>
   );
 }
 
@@ -1508,6 +1623,8 @@ function EvidencePanel({ run, open, onBranch }) {
   const [view, setView] = useState("overview");
   const [active, setActive] = useState(plan[1]?.id ?? plan[0]?.id);
   const [expandedGroup, setExpandedGroup] = useState(plan.find((step) => step.taskId)?.taskId ?? "run");
+  const [executionExpanded, setExecutionExpanded] = useState(false);
+  const [sourcesExpanded, setSourcesExpanded] = useState(false);
   const [traceFullscreen, setTraceFullscreen] = useState(false);
   const contentScrollRef = useRef(null);
   const detail = run.planDetails?.[active];
@@ -1520,6 +1637,8 @@ function EvidencePanel({ run, open, onBranch }) {
   useEffect(() => {
     setActive(plan[1]?.id ?? plan[0]?.id);
     setExpandedGroup(plan.find((step) => step.taskId)?.taskId ?? "run");
+    setExecutionExpanded(false);
+    setSourcesExpanded(false);
     setView("overview");
   }, [run.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1546,104 +1665,125 @@ function EvidencePanel({ run, open, onBranch }) {
   return (
     <aside id="analysis-evidence-panel" className="evidence-panel flex flex-col overflow-hidden border-l border-line bg-surface">
       <div ref={contentScrollRef} className="min-h-0 flex-1 overflow-x-hidden overflow-y-scroll pb-4" style={{ scrollbarGutter: "stable" }}>
-        <div className={cn(
-          "mx-4 mt-3.5 flex items-center gap-2.5 rounded-card border px-3 py-2.5 transition-[transform,opacity,box-shadow] duration-300",
-          interrupted ? "border-amber/30 bg-amber-soft" : "border-teal/30 bg-teal-soft",
-          open && "motion-soft-rise",
-        )}>
-          <span className={cn("shrink-0", interrupted ? "text-amber" : "text-teal")}><Icon name={blocked ? "shield" : interrupted ? "warning" : "shield"} size={16} /></span>
-          <div className="min-w-0 flex-1">
-            <strong className="block text-xs font-semibold text-ink">
-              {blocked ? "安全拦截已记录" : interrupted ? "执行未完成，过程已保留" : "可信执行"}
-            </strong>
-            <span className="text-[11px] text-muted">
-              {interrupted ? "可回看已完成步骤、失败位置与已有产物" : "只读、白名单与执行计划均已校验"}
+        <section className={cn("evidence-disclosure evidence-disclosure--execution mx-4 mt-3.5", executionExpanded && "is-open")}>
+          <button
+            type="button"
+            aria-expanded={executionExpanded}
+            aria-controls="analysis-evidence-execution-content"
+            data-evidence-state={blocked ? "blocked" : interrupted ? "interrupted" : "ready"}
+            className={cn(
+              "evidence-card evidence-card--trust evidence-disclosure__trigger flex w-full items-center gap-2.5 rounded-card border px-3 py-2.5 text-left transition-[transform,opacity,box-shadow,border-radius] duration-300",
+              interrupted ? "border-amber/30 bg-amber-soft" : "border-teal/30 bg-teal-soft",
+              executionExpanded && "is-open",
+              open && "motion-soft-rise",
+            )}
+            onClick={() => setExecutionExpanded((expanded) => !expanded)}
+          >
+            <span className={cn("shrink-0", interrupted ? "text-amber" : "text-teal")}><Icon name={blocked ? "shield" : interrupted ? "warning" : "shield"} size={16} /></span>
+            <span className="min-w-0 flex-1">
+              <strong className="block text-xs font-semibold text-ink">
+                {blocked ? "安全拦截已记录" : interrupted ? "执行未完成，过程已保留" : "可信执行"}
+              </strong>
+              <span className="text-[11px] text-muted">
+                {interrupted ? "可回看已完成步骤、失败位置与已有产物" : "只读、白名单与执行计划均已校验"}
+              </span>
             </span>
+            <StatusPill tone={interrupted ? "amber" : "green"}>{completedSteps}/{plan.length}</StatusPill>
+            <Icon name="chevron" size={14} className={cn("shrink-0 text-muted transition-transform duration-300", executionExpanded && "rotate-90")} />
+          </button>
+          <div id="analysis-evidence-execution-content" aria-hidden={!executionExpanded} inert={!executionExpanded} className={cn("evidence-disclosure__content", executionExpanded && "is-open")}>
+            <div className="evidence-disclosure__content-inner">
+              {run.usage && (
+                <div className="evidence-card evidence-card--usage mt-2.5 flex items-center justify-between gap-3 rounded-control border border-line bg-surface-2 px-3 py-2 text-[11px] text-muted">
+                  <span className="min-w-0 truncate">模型调用 {run.usage.callCount ?? 0} 次 · {Number(run.usage.totalTokens ?? 0).toLocaleString()} Token</span>
+                  <span className="shrink-0 font-mono text-faint">{run.usage.estimatedCost > 0 ? `约 ¥${Number(run.usage.estimatedCost).toFixed(4)}` : "费用待配置"}</span>
+                </div>
+              )}
+              {run.trust?.costGate && (
+                <div
+                  data-cost-state={run.trust.costGate.allowed ? "allowed" : run.trust.costGate.ok === false ? "failed" : "review"}
+                  className="evidence-card evidence-card--cost mt-2 flex items-center justify-between gap-3 rounded-control border border-line bg-surface-2 px-3 py-2 text-[11px] text-muted"
+                >
+                  <span className="min-w-0 truncate" title={run.trust.costGate.reason || ""}>
+                    {run.trust.costGate.ok === false
+                      ? `执行计划未生成 · ${run.trust.costGate.reason || "数据库未能解析查询"}`
+                      : `执行计划 · 预计扫描 ${Number(run.trust.costGate.estimated_rows ?? 0).toLocaleString()} 行`}
+                  </span>
+                  <span className={cn("shrink-0 font-medium", run.trust.costGate.allowed ? "text-teal" : run.trust.costGate.ok === false ? "text-red" : "text-amber")}>
+                    {run.trust.costGate.allowed ? "成本门控通过" : run.trust.costGate.ok === false ? "执行计划失败" : "成本需优化"}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
-          <StatusPill tone={interrupted ? "amber" : "green"}>{completedSteps}/{plan.length}</StatusPill>
-        </div>
-        {run.usage && (
-          <div className="mx-4 mt-2.5 flex items-center justify-between gap-3 rounded-control border border-line bg-surface-2 px-3 py-2 text-[11px] text-muted">
-            <span className="min-w-0 truncate">模型调用 {run.usage.callCount ?? 0} 次 · {Number(run.usage.totalTokens ?? 0).toLocaleString()} Token</span>
-            <span className="shrink-0 font-mono text-faint">{run.usage.estimatedCost > 0 ? `约 ¥${Number(run.usage.estimatedCost).toFixed(4)}` : "费用待配置"}</span>
+        </section>
+        <section className="evidence-main-container mx-4 mt-3.5">
+          <div className={cn("evidence-view-tabs grid grid-cols-4 gap-0.5 rounded-control border border-line bg-surface-2 p-0.5 transition-[transform,opacity] duration-300", open && "motion-soft-rise")}>
+            <TabButton active={view === "overview"} onClick={() => changeView("overview")}>概览</TabButton>
+            <TabButton active={view === "steps"} onClick={() => changeView("steps")}>过程 <span className="font-mono text-[10px]">{plan.length}</span></TabButton>
+            <TabButton active={view === "graph"} onClick={() => changeView("graph")}>追踪图</TabButton>
+            <TabButton active={view === "artifacts"} onClick={() => changeView("artifacts")}>产物 <span className="font-mono text-[10px]">{run.artifacts?.length ?? 0}</span></TabButton>
           </div>
-        )}
-        {run.trust?.costGate && (
-          <div className="mx-4 mt-2 flex items-center justify-between gap-3 rounded-control border border-line bg-surface-2 px-3 py-2 text-[11px] text-muted">
-            <span className="min-w-0 truncate" title={run.trust.costGate.reason || ""}>
-              {run.trust.costGate.ok === false
-                ? `执行计划未生成 · ${run.trust.costGate.reason || "数据库未能解析查询"}`
-                : `执行计划 · 预计扫描 ${Number(run.trust.costGate.estimated_rows ?? 0).toLocaleString()} 行`}
-            </span>
-            <span className={cn("shrink-0 font-medium", run.trust.costGate.allowed ? "text-teal" : run.trust.costGate.ok === false ? "text-red" : "text-amber")}>
-              {run.trust.costGate.allowed ? "成本门控通过" : run.trust.costGate.ok === false ? "执行计划失败" : "成本需优化"}
-            </span>
-          </div>
-        )}
-        <div className={cn("mx-4 mt-3 grid grid-cols-4 gap-0.5 rounded-control border border-line bg-surface-2 p-0.5 transition-[transform,opacity] duration-300", open && "motion-soft-rise")}>
-          <TabButton active={view === "overview"} onClick={() => changeView("overview")}>概览</TabButton>
-          <TabButton active={view === "steps"} onClick={() => changeView("steps")}>过程 <span className="font-mono text-[10px]">{plan.length}</span></TabButton>
-          <TabButton active={view === "graph"} onClick={() => changeView("graph")}>追踪图</TabButton>
-          <TabButton active={view === "artifacts"} onClick={() => changeView("artifacts")}>产物 <span className="font-mono text-[10px]">{run.artifacts?.length ?? 0}</span></TabButton>
-        </div>
-        {view === "overview" && (
-          <EvidenceOverview run={run} plan={plan} active={active} onOpenSteps={() => changeView("steps")} onOpenGraph={() => changeView("graph")} />
-        )}
-        {view === "steps" && (
-          <div className={cn("mx-4 mt-3 border-l border-line pl-3 transition-[transform,opacity] duration-300", open && "motion-soft-rise")}>
-            {groups.map((group) => {
-              const completed = group.steps.filter((step) => step.status === "succeeded").length;
-              const hasFailed = group.steps.some((step) => step.status === "failed");
-              const expanded = expandedGroup === group.id;
-              return (
-                <section key={group.id} className="relative pb-4 last:pb-0">
-                  <span className="absolute -left-[17px] top-3 h-2 w-2 rounded-full border-2 border-surface bg-primary" aria-hidden="true" />
-                  <button
-                    type="button"
-                    onClick={() => setExpandedGroup(expanded ? null : group.id)}
-                    className="flex w-full cursor-pointer items-center gap-2 py-2 text-left transition-colors hover:text-primary"
-                  >
-                    <span className={cn("grid h-5 w-5 shrink-0 place-items-center rounded-tag", completed === group.steps.length ? "bg-green/10 text-green" : hasFailed ? "bg-red-soft text-red" : "bg-primary-soft text-primary")}>
-                      <Icon name={completed === group.steps.length ? "check" : hasFailed ? "alert" : "clock"} size={12} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <strong className="block truncate text-xs font-semibold text-ink">{group.title}</strong>
-                      <span className="text-[10px] text-faint">{completed}/{group.steps.length} 个节点完成</span>
-                    </span>
-                    <Icon name="chevron" size={14} className={cn("shrink-0 text-faint transition-transform", expanded && "rotate-90")} />
-                  </button>
-                  {expanded && (
-                    <div className="mt-1 grid gap-0.5 border-l border-line pl-3">
-                      {group.steps.map((step) => (
-                        <button
-                          type="button"
-                          key={step.id}
-                          onClick={() => setActive(step.id)}
-                          className={cn(
-                            "relative grid w-full cursor-pointer grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2 rounded-tag px-2 py-2 text-left transition-colors",
-                            active === step.id ? "bg-primary-soft text-ink" : "hover:bg-surface-2",
-                          )}
-                        >
-                          <span className={cn("absolute -left-[21px] h-2 w-2 rounded-full border-2 border-surface", step.status === "succeeded" ? "bg-green" : step.status === "failed" ? "bg-red" : "bg-amber")} aria-hidden="true" />
-                          <div className="trace-step__node scale-90" data-status={step.status}><Icon name={step.status === "succeeded" ? "check" : step.status === "failed" ? "alert" : "clock"} size={11} /></div>
-                          <span className="min-w-0">
-                            <strong className="block truncate text-[11px] font-semibold text-ink">{step.label}</strong>
-                            <span className="block truncate text-[10px] text-faint">{step.caption}</span>
-                          </span>
-                          <small className="font-mono text-[10px] text-faint">{step.duration}</small>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </section>
-              );
-            })}
-          </div>
-        )}
-        {view === "graph" && <TraceGraph plan={plan} active={active} onSelect={setActive} onFullscreen={() => setTraceFullscreen(true)} />}
-        {view === "artifacts" && <TraceArtifacts artifacts={run.artifacts ?? []} />}
-        {view !== "artifacts" && detail && (
-          <div className={cn("mx-4 mt-3.5 rounded-card border border-line bg-surface-2 p-3.5 transition-[transform,opacity,box-shadow] duration-300", open && "motion-soft-rise")}>
+          {view === "overview" && (
+            <EvidenceOverview run={run} plan={plan} />
+          )}
+          {view === "steps" && (
+            <div className={cn("evidence-steps mt-3 transition-[transform,opacity] duration-300", open && "motion-soft-rise")}>
+              {groups.map((group) => {
+                const completed = group.steps.filter((step) => step.status === "succeeded").length;
+                const hasFailed = group.steps.some((step) => step.status === "failed");
+                const expanded = expandedGroup === group.id;
+                return (
+                  <section key={group.id} className={cn("evidence-step-group relative pb-4 last:pb-0", expanded && "is-expanded")}>
+                    {expanded && <span className="evidence-step-group__rail" aria-hidden="true" />}
+                    <button
+                      type="button"
+                      onClick={() => setExpandedGroup(expanded ? null : group.id)}
+                      className="evidence-step-group__trigger relative z-[1] flex w-full cursor-pointer items-center gap-2 py-2 text-left transition-colors hover:text-primary"
+                    >
+                      <span
+                        data-status={completed === group.steps.length ? "succeeded" : hasFailed ? "failed" : "running"}
+                        className={cn("evidence-step-group__node grid h-6 w-6 shrink-0 place-items-center rounded-tag", completed === group.steps.length ? "bg-green/10 text-green" : hasFailed ? "bg-red-soft text-red" : "bg-primary-soft text-primary")}
+                      >
+                        <Icon name={completed === group.steps.length ? "check" : hasFailed ? "alert" : "clock"} size={12} />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <strong className="block truncate text-xs font-semibold text-ink">{group.title}</strong>
+                        <span className="text-[10px] text-faint">{completed}/{group.steps.length} 个节点完成</span>
+                      </span>
+                      <Icon name="chevron" size={14} className={cn("shrink-0 text-faint transition-transform", expanded && "rotate-90")} />
+                    </button>
+                    {expanded && (
+                      <div className="evidence-step-list relative z-[1] mt-1 grid gap-0.5">
+                        {group.steps.map((step) => (
+                          <button
+                            type="button"
+                            key={step.id}
+                            onClick={() => setActive(step.id)}
+                            className={cn(
+                              "evidence-step relative grid w-full cursor-pointer grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2 rounded-tag px-2 py-2 text-left transition-colors",
+                              active === step.id ? "bg-primary-soft text-ink" : "hover:bg-surface-2",
+                            )}
+                          >
+                            <div className="trace-step__node relative z-[1]" data-status={step.status}><Icon name={step.status === "succeeded" ? "check" : step.status === "failed" ? "alert" : "clock"} size={11} /></div>
+                            <span className="min-w-0">
+                              <strong className="block truncate text-[11px] font-semibold text-ink">{step.label}</strong>
+                              <span className="block truncate text-[10px] text-faint">{step.caption}</span>
+                            </span>
+                            <small className="font-mono text-[10px] text-faint">{step.duration}</small>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
+            </div>
+          )}
+          {view === "graph" && <TraceGraph plan={plan} active={active} onSelect={setActive} onFullscreen={() => setTraceFullscreen(true)} />}
+          {view === "artifacts" && <TraceArtifacts artifacts={run.artifacts ?? []} />}
+          {view !== "artifacts" && detail && (
+            <div className={cn("evidence-card evidence-card--detail mt-3.5 rounded-card border border-line bg-surface-2 p-3.5 transition-[transform,opacity,box-shadow] duration-300", open && "motion-soft-rise")}>
             <span className="text-[11px] font-semibold tracking-wide text-faint">当前节点详情</span>
             <h3 className="mt-1 text-body font-semibold text-ink">{detail.title}</h3>
             <p className="mt-1 text-xs leading-relaxed text-muted">{detail.body}</p>
@@ -1673,17 +1813,35 @@ function EvidencePanel({ run, open, onBranch }) {
                 </button>
               </div>
             )}
-          </div>
-        )}
-        {view !== "artifacts" && run.sources?.length > 0 && (
-          <div className={cn("mx-4 mt-3.5 transition-[transform,opacity] duration-300", open && "motion-soft-rise")}>
-            <span className="text-[11px] font-semibold tracking-wide text-faint">引用资产</span>
-            <div className="mt-1.5 grid gap-1">
-              {run.sources.map((source) => (
-                <SourceButton key={source.title} icon={source.icon} title={source.title} caption={source.caption} />
-              ))}
             </div>
-          </div>
+          )}
+        </section>
+        {view !== "artifacts" && run.sources?.length > 0 && (
+          <section className={cn("evidence-disclosure evidence-disclosure--sources mx-4 mt-3.5", sourcesExpanded && "is-open")}>
+            <button
+              type="button"
+              aria-expanded={sourcesExpanded}
+              aria-controls="analysis-evidence-sources-content"
+              className={cn("evidence-disclosure__trigger evidence-disclosure__trigger--sources flex w-full items-center gap-2.5 rounded-card border px-3 py-2.5 text-left transition-[transform,opacity,box-shadow,border-radius] duration-300", sourcesExpanded && "is-open", open && "motion-soft-rise")}
+              onClick={() => setSourcesExpanded((expanded) => !expanded)}
+            >
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-tag bg-primary-soft text-primary"><Icon name="database" size={14} /></span>
+              <span className="min-w-0 flex-1">
+                <strong className="block text-xs font-semibold text-ink">引用资产</strong>
+                <span className="text-[10px] text-muted">{run.sources.length} 项数据、指标与语义资产</span>
+              </span>
+              <Icon name="chevron" size={14} className={cn("shrink-0 text-muted transition-transform duration-300", sourcesExpanded && "rotate-90")} />
+            </button>
+            <div id="analysis-evidence-sources-content" aria-hidden={!sourcesExpanded} inert={!sourcesExpanded} className={cn("evidence-disclosure__content", sourcesExpanded && "is-open")}>
+              <div className="evidence-disclosure__content-inner">
+                <div className="evidence-sources grid gap-1">
+                  {run.sources.map((source) => (
+                    <SourceButton key={source.title} icon={source.icon} title={source.title} caption={source.caption} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
         )}
       </div>
       <TraceFullscreen
@@ -1697,13 +1855,12 @@ function EvidencePanel({ run, open, onBranch }) {
   );
 }
 
-function EvidenceOverview({ run, plan, active, onOpenSteps, onOpenGraph }) {
+function EvidenceOverview({ run, plan }) {
   const completed = plan.filter((step) => step.status === "succeeded").length;
   const failed = plan.filter((step) => step.status === "failed").length;
-  const selected = plan.find((step) => step.id === active);
   return (
-    <div className="mx-4 mt-3 grid gap-3">
-      <div className="rounded-card border border-line bg-surface p-3">
+    <div className="evidence-overview grid gap-3">
+      <div className="evidence-card evidence-card--summary rounded-card border border-line bg-surface p-3">
         <span className="text-[10px] font-semibold tracking-wide text-faint">本次分析</span>
         <p className="mt-1 text-xs leading-relaxed text-ink">{run.question}</p>
         <div className="mt-3 grid grid-cols-2 gap-y-2 divide-x divide-line border-y border-line py-2 sm:grid-cols-4">
@@ -1714,20 +1871,6 @@ function EvidenceOverview({ run, plan, active, onOpenSteps, onOpenGraph }) {
         </div>
         {failed > 0 && <p className="mt-2 text-[11px] text-red">其中 {failed} 个工具调用失败，已保留执行记录。</p>}
       </div>
-      <div className="rounded-card border border-line bg-surface p-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <span className="text-[10px] font-semibold tracking-wide text-faint">当前节点</span>
-            <strong className="mt-1 block text-xs text-ink">{selected?.label ?? "等待选择步骤"}</strong>
-          </div>
-          <button type="button" onClick={onOpenSteps} className="cursor-pointer text-xs font-medium text-primary hover:opacity-75">查看过程</button>
-        </div>
-        <p className="mt-1.5 text-[11px] leading-relaxed text-muted">{selected?.caption ?? "点击过程中的任意节点，可查看它使用的数据、规则与执行结果。"}</p>
-      </div>
-      <button type="button" onClick={onOpenGraph} className="flex cursor-pointer items-center justify-between rounded-card border border-line bg-surface px-3 py-2.5 text-left transition-colors hover:border-line-strong hover:bg-surface-2">
-        <span><strong className="block text-xs text-ink">查看完整追踪图</strong><small className="block mt-0.5 text-[10px] text-faint">按任务拆分执行路径与依赖</small></span>
-        <Icon name="arrow" size={15} className="text-primary" />
-      </button>
     </div>
   );
 }
@@ -1775,7 +1918,7 @@ function TabButton({ active, onClick, children }) {
 
 function SourceButton({ icon, title, caption }) {
   return (
-    <button type="button" className="flex w-full cursor-pointer items-center gap-2.5 rounded-control border border-line bg-surface px-2.5 py-2 text-left transition-colors hover:border-line-strong hover:bg-surface-2">
+    <button type="button" className="evidence-source-card flex w-full cursor-pointer items-center gap-2.5 rounded-control border border-line bg-surface px-2.5 py-2 text-left transition-colors hover:border-line-strong hover:bg-surface-2">
       <span className="shrink-0 text-muted"><Icon name={icon} size={15} /></span>
       <span className="min-w-0 flex-1">
         <strong className="block truncate text-xs font-semibold text-ink">{title}</strong>
@@ -1788,6 +1931,12 @@ function SourceButton({ icon, title, caption }) {
 
 function TraceGraph({ plan, active, onSelect, onFullscreen, fullscreen = false }) {
   const groups = buildEvidenceGroups(plan);
+  // The SVG path uses node centers while each absolutely positioned button is
+  // anchored by its top edge. Keep the two coordinate systems in sync so the
+  // connector terminates at the center of the circular node instead of its
+  // upper edge.
+  const graphNodeRadius = 14;
+  const graphRowCenter = 64 + graphNodeRadius;
   const maxSteps = Math.max(1, ...groups.map((group) => group.steps.length));
   const canvasWidth = Math.max(420, 72 + Math.max(maxSteps - 1, 0) * 96);
   const canvasHeight = Math.max(220, 62 + groups.length * 120);
@@ -1795,7 +1944,7 @@ function TraceGraph({ plan, active, onSelect, onFullscreen, fullscreen = false }
   const groupPaths = [];
   groups.forEach((group, groupIndex) => {
     const points = group.steps.map((step, stepIndex) => {
-      const point = [44 + stepIndex * 96, 64 + groupIndex * 120];
+      const point = [44 + stepIndex * 96, graphRowCenter + groupIndex * 120];
       positions.push({ id: step.id, point, groupTitle: group.title, step });
       return point;
     });
@@ -1813,7 +1962,7 @@ function TraceGraph({ plan, active, onSelect, onFullscreen, fullscreen = false }
   };
 
   return (
-    <div className={cn(fullscreen ? "flex h-full min-h-0 flex-col" : "mx-4 mt-3")} aria-label="Agent 分析追踪图">
+    <div className={cn("evidence-trace-view", fullscreen ? "flex h-full min-h-0 flex-col" : "mx-4 mt-3")} aria-label="Agent 分析追踪图">
       <div className="flex items-center justify-between text-[11px] text-faint">
         <span>{plan.length} 个节点 · {groups.length} 条任务路径</span>
         <span className="flex items-center gap-3">
@@ -1840,7 +1989,7 @@ function TraceGraph({ plan, active, onSelect, onFullscreen, fullscreen = false }
                 <button
                   type="button"
                   key={id}
-                  style={{ left: x, top: y }}
+                  style={{ left: x, top: y - graphNodeRadius }}
                   onClick={() => onSelect(id)}
                   aria-label={step.label}
                   className="absolute grid -translate-x-1/2 cursor-pointer justify-items-center gap-1"
@@ -1885,7 +2034,7 @@ function TraceArtifacts({ artifacts }) {
     meta: artifact.id,
   }));
   return (
-    <div className="mx-4 mt-3 grid gap-1.5">
+    <div className="evidence-artifacts mx-4 mt-3 grid gap-1.5">
       <div className="flex items-center gap-1.5 rounded-control border border-line bg-surface-2 px-2.5 py-2 text-[11px] text-muted">
         <Icon name="link" size={14} />
         <span>所有产物均关联本次 SQL、指标版本和数据时间。</span>

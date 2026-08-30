@@ -18,6 +18,7 @@ export default function EmailVerificationPage() {
   const location = useLocation();
   const user = getCachedUser();
   const initialEmail = user?.email ?? "";
+  const isEmailChange = Boolean(location.state?.allowEmailChange);
   const [email, setEmail] = useState(initialEmail);
   const [code, setCode] = useState("");
   const [sentTo, setSentTo] = useState("");
@@ -47,7 +48,7 @@ export default function EmailVerificationPage() {
   if (!user) {
     return <Navigate to="/login" replace />;
   }
-  if (user.emailStatus === "verified") {
+  if (user.emailStatus === "verified" && !location.state?.allowEmailChange) {
     return <Navigate to={destination} replace />;
   }
 
@@ -61,7 +62,7 @@ export default function EmailVerificationPage() {
     setBusy("send");
     try {
       const response =
-        initialEmail && email.trim() !== initialEmail
+        isEmailChange || (initialEmail && email.trim() !== initialEmail)
           ? await changeEmail(email.trim())
           : await requestEmailChallenge(email.trim());
       setSentTo(email.trim());

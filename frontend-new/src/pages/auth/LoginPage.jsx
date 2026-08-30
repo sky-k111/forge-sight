@@ -15,8 +15,6 @@ import {
   selectFeishuBindingSource,
   startDingTalkBind,
   startFeishuBind,
-  unbindDingTalk,
-  unbindFeishu,
 } from "../../api/auth";
 import {
   clearPendingRegistrationBinding,
@@ -35,12 +33,21 @@ function ProviderMark({ provider }) {
   return (
     <span
       className={cn(
-        "flex h-9 w-9 shrink-0 items-center justify-center rounded-control text-sm font-bold text-white",
+        "flex h-9 w-9 shrink-0 items-center justify-center rounded-control text-white",
         isDingTalk ? "bg-[#1677ff]" : "bg-[#00b96b]"
       )}
       aria-hidden="true"
     >
-      {isDingTalk ? "钉" : "飞"}
+      {isDingTalk ? (
+        <svg viewBox="0 0 1024 1024" className="h-5 w-5 fill-current" focusable="false">
+          <path d="M573.7 252.5C422.5 197.4 201.3 96.7 201.3 96.7c-15.7-4.1-17.9 11.1-17.9 11.1-5 61.1 33.6 160.5 53.6 182.8 19.9 22.3 319.1 113.7 319.1 113.7S326 357.9 270.5 341.9c-55.6-16-37.9 17.8-37.9 17.8 11.4 61.7 64.9 131.8 107.2 138.4 42.2 6.6 220.1 4 220.1 4s-35.5 4.1-93.2 11.9c-42.7 5.8-97 12.5-111.1 17.8-33.1 12.5 24 62.6 24 62.6 84.7 76.8 129.7 50.5 129.7 50.5 33.3-10.7 61.4-18.5 85.2-24.2L565 743.1h84.6L603 928l205.3-271.9H700.8l22.3-38.7c.3.5.4.8.4.8S799.8 496.1 829 433.8l.6-1h-.1c5-10.8 8.6-19.7 10-25.8 17-71.3-114.5-99.4-265.8-154.5z" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 48 48" className="h-5 w-5 fill-current" focusable="false">
+          <path d="M41.072 5.994 3.311 16.519l9.075 9.293 8.414.147 9.683-9.44c-.257-.525-.385-.964-.385-1.318 0-.794.311-1.423.796-1.868.829-.763 1.827-.878 2.994-.343l7.184-6.996Z" />
+          <path d="m42.103 6.728-10.525 37.761-9.294-9.075-.147-8.414 9.375-9.518c.508.364 1.063.528 1.665.495.902-.05 1.486-.595 1.759-.916.274-.321.594-.855.568-1.649-.018-.529-.192-1.017-.522-1.464l7.121-7.22Z" />
+        </svg>
+      )}
     </span>
   );
 }
@@ -106,6 +113,7 @@ export default function LoginPage() {
   const [bindingSubmitting, setBindingSubmitting] = useState(false);
   const [bindingSources, setBindingSources] = useState([]);
   const [sourceSubmitting, setSourceSubmitting] = useState(false);
+  const [introComplete, setIntroComplete] = useState(false);
   const activeUser = registrationUser || cachedUser;
   const registrationBindingRequired = mode === "register" && registerStage === "binding";
   const binding =
@@ -352,31 +360,6 @@ export default function LoginPage() {
     }
   };
 
-  const handleUnbindProvider = async () => {
-    const providerName = selectedProvider === "feishu" ? "飞书" : "钉钉";
-    if (
-      !window.confirm(`解绑后，${providerName}机器人将无法继续读取该账号的会话上下文。确定解绑吗？`)
-    ) {
-      return;
-    }
-    setBindingSubmitting(true);
-    setError(null);
-    try {
-      if (selectedProvider === "feishu") {
-        await unbindFeishu();
-        setFeishuBinding({ bound: false });
-      } else {
-        await unbindDingTalk();
-        setDingTalkBinding({ bound: false });
-      }
-      setNotice({ type: "success", text: `${providerName}账号已解绑` });
-    } catch (unbindError) {
-      setError(unbindError.message || `${providerName}账号解绑失败`);
-    } finally {
-      setBindingSubmitting(false);
-    }
-  };
-
   const handleFinishRegistration = async () => {
     if (!activeUser || !binding?.bound) {
       setError("请先完成钉钉或飞书账号绑定");
@@ -415,27 +398,96 @@ export default function LoginPage() {
           ? `已绑定：${binding.displayName || binding.mobile || binding.unionId || `${selectedProvider === "feishu" ? "飞书" : "钉钉"}账号`}`
           : `当前未绑定${selectedProvider === "feishu" ? "飞书" : "钉钉"}账号`;
 
-  return (
-    <div className="flex min-h-full items-center justify-center bg-canvas px-4 py-10">
-      <div className="w-full max-w-[460px]">
-        <div className="mb-6 flex flex-col items-center gap-2.5">
-          <img
-            className="h-14 w-14 rounded-control border border-line bg-surface object-contain p-1.5 shadow-card"
-            src={forgeSightLogo}
-            alt="ForgeSight logo"
-          />
-          <h1 className="m-0 text-xl font-semibold tracking-tight text-ink">
-            ForgeSight 企业数据底座
-          </h1>
-          <p className="m-0 text-xs text-muted">面向制造业的智能问析与数据治理平台</p>
-        </div>
+  useEffect(() => {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) {
+      setIntroComplete(true);
+      return undefined;
+    }
 
-        <Card className="p-5">
-          <div
-            className="mb-4 flex items-center gap-0.5 rounded-control border border-line bg-surface-2 p-0.5"
-            role="tablist"
-            aria-label="切换登录方式"
-          >
+    const timer = window.setTimeout(() => setIntroComplete(true), 3200);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  return (
+    <main className={cn("login-page", introComplete && "is-ready")}>
+      <div className="login-page__grain" aria-hidden="true" />
+      <div className="login-page__curtain" aria-hidden="true" />
+      {!introComplete && (
+        <button
+          type="button"
+          className="login-page__skip"
+          onClick={() => setIntroComplete(true)}
+          aria-label="跳过开场动画"
+        >
+          跳过开场 <span aria-hidden="true">↗</span>
+        </button>
+      )}
+
+      <header className="login-page__topbar">
+        <span className="login-page__eyebrow">FORGESIGHT / 01</span>
+        <span className="login-page__status"><i aria-hidden="true" /> SYSTEM READY</span>
+      </header>
+
+      <div className="login-page__layout">
+        <section className="login-page__brand-column" aria-labelledby="forgesight-title">
+          <div className="login-page__brand-index" aria-hidden="true">
+            <span>智能制造 · 数据底座</span>
+          </div>
+          <div className="login-page__brand-lockup">
+            <div className="login-page__orbit login-page__orbit--one" aria-hidden="true" />
+            <div className="login-page__orbit login-page__orbit--two" aria-hidden="true" />
+            <div className="login-page__logo-frame">
+              <img src={forgeSightLogo} alt="ForgeSight logo" />
+              <span className="login-page__logo-caption" aria-hidden="true">precision / intelligence</span>
+            </div>
+            <div className="login-page__brand-copy">
+              <p className="login-page__brand-kicker">THE OPERATING LAYER FOR INDUSTRY</p>
+              <h1
+                id="forgesight-title"
+                className="login-page__title"
+                aria-label="ForgeSight 企业数据底座"
+              >
+                <span className="login-page__title-word" aria-hidden="true">
+                  {Array.from("Forge").map((letter, index) => (
+                    <span
+                      className="login-page__title-letter"
+                      key={`forge-${letter}-${index}`}
+                      style={{ "--letter-index": index }}
+                    >
+                      {letter}
+                    </span>
+                  ))}
+                </span>
+                <span className="login-page__title-word" aria-hidden="true">
+                  {Array.from("Sight").map((letter, index) => (
+                    <span
+                      className="login-page__title-letter"
+                      key={`sight-${letter}-${index}`}
+                      style={{ "--letter-index": index + 5 }}
+                    >
+                      {letter}
+                    </span>
+                  ))}
+                </span>
+              </h1>
+              <p className="login-page__subtitle">面向制造业的智能问析与数据治理平台</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="login-page__auth-column" aria-label="登录与注册">
+          <div className="login-page__auth-heading">
+            <p className="login-page__auth-kicker">WELCOME BACK</p>
+            <h2>{mode === "login" ? "进入你的数据现场" : "建立你的工作空间"}</h2>
+          </div>
+
+          <Card className={cn("login-card p-5", `login-card--${mode}`)}>
+          <div className="login-card__content">
+            <div
+              className="login-card__tabs mb-4 flex items-center gap-0.5 rounded-control border border-line bg-surface-2 p-0.5"
+              role="tablist"
+              aria-label="切换登录方式"
+            >
             <button
               type="button"
               role="tab"
@@ -462,9 +514,9 @@ export default function LoginPage() {
             >
               注册
             </button>
-          </div>
+            </div>
 
-          {notice && (
+            {notice && (
             <div
               className={cn(
                 "mb-3 rounded-tag px-2.5 py-2 text-xs",
@@ -476,9 +528,9 @@ export default function LoginPage() {
             >
               {notice.text}
             </div>
-          )}
+            )}
 
-          {!registrationBindingRequired ? (
+            {!registrationBindingRequired ? (
             <form className="flex flex-col gap-3" onSubmit={handleSubmit}>
               <label className="flex flex-col gap-1.5 text-xs font-semibold text-ink">
                 用户名
@@ -542,70 +594,6 @@ export default function LoginPage() {
                 </>
               )}
 
-              {cachedUser && mode === "login" && (
-                <div className="rounded-control border border-line bg-surface-2 px-3 py-3">
-                  <div className="text-xs font-semibold text-ink">第三方账号绑定</div>
-                  <p className="mt-1 text-[11px] leading-5 text-muted">
-                    绑定后，机器人会按当前账号的数据权限执行问析，并为每个会话保留连续上下文。
-                  </p>
-                  <div className="mt-2 flex gap-2">
-                    <ProviderOption
-                      provider="dingtalk"
-                      selected={selectedProvider === "dingtalk"}
-                      onSelect={handleProviderSelection}
-                    />
-                    <ProviderOption
-                      provider="feishu"
-                      selected={selectedProvider === "feishu"}
-                      onSelect={handleProviderSelection}
-                    />
-                  </div>
-                  <p className="mt-2 text-[11px] text-faint">{bindingText}</p>
-                  {binding?.bound && (
-                    <label className="mt-2 flex flex-col gap-1 text-[11px] font-medium text-ink">
-                      机器人使用的数据源
-                      <select
-                        className={INPUT_CLASS}
-                        value={binding.sourceId ?? ""}
-                        onChange={handleSelectBindingSource}
-                        disabled={sourceSubmitting || bindingSources.length === 0}
-                      >
-                        <option value="">请选择已授权数据源</option>
-                        {bindingSources.map((source) => (
-                          <option key={source.id} value={source.id}>
-                            {source.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                  <button
-                    type="button"
-                    className="mt-2 h-8 w-full rounded-tag border border-primary/25 bg-primary/5 text-xs font-semibold text-primary transition hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
-                    onClick={() => handleBindProvider()}
-                    disabled={bindingSubmitting || !selectedProvider}
-                  >
-                    {bindingSubmitting
-                      ? "正在打开授权页面…"
-                      : binding?.bound
-                        ? `重新绑定${selectedProvider === "feishu" ? "飞书" : "钉钉"}账号`
-                        : selectedProvider
-                          ? `绑定${selectedProvider === "feishu" ? "飞书" : "钉钉"}账号`
-                          : "请先选择绑定平台"}
-                  </button>
-                  {binding?.bound && (
-                    <button
-                      type="button"
-                      className="mt-2 h-8 w-full rounded-tag border border-line bg-surface text-xs font-medium text-muted transition hover:text-red disabled:opacity-60"
-                      onClick={handleUnbindProvider}
-                      disabled={bindingSubmitting}
-                    >
-                      解绑{selectedProvider === "feishu" ? "飞书" : "钉钉"}账号
-                    </button>
-                  )}
-                </div>
-              )}
-
               <label className="flex flex-col gap-1.5 text-xs font-semibold text-ink">
                 密码
                 <input
@@ -637,7 +625,7 @@ export default function LoginPage() {
                 {submitting ? "请稍候…" : mode === "login" ? "登录" : "创建账号并继续绑定"}
               </Button>
             </form>
-          ) : (
+            ) : (
             <section aria-labelledby="registration-binding-title">
               <div className="mb-4 flex items-start justify-between gap-3">
                 <div>
@@ -748,9 +736,9 @@ export default function LoginPage() {
                 </p>
               )}
             </section>
-          )}
+            )}
 
-          <div className="mt-4 flex items-center justify-between border-t border-line pt-3 text-[11px] text-faint">
+            <div className="mt-4 flex items-center justify-between border-t border-line pt-3 text-[11px] text-faint">
             <span>{mode === "login" ? "还没有账号？" : "已有账号？"}</span>
             <button
               type="button"
@@ -759,16 +747,17 @@ export default function LoginPage() {
             >
               {mode === "login" ? "立即注册" : "返回登录"}
             </button>
+            </div>
           </div>
-        </Card>
+          </Card>
 
-        {activeUser && (
-          <p className="mt-4 text-center text-[11px] text-faint">
-            当前已登录 <b className="text-ink">{activeUser.displayName || activeUser.username}</b>
-            ，重新登录将切换账号
-          </p>
-        )}
+          {activeUser && (
+            <p className="login-page__active-user">
+              当前已登录 <b>{activeUser.displayName || activeUser.username}</b>，重新登录将切换账号
+            </p>
+          )}
+        </section>
       </div>
-    </div>
+    </main>
   );
 }

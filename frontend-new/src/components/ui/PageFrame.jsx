@@ -2,12 +2,12 @@ import Icon from "./Icon";
 import cn from "../../lib/cn";
 
 export function PageFrame({ children, className = "" }) {
-  return <div className={cn("motion-soft-rise mx-auto grid w-full max-w-[1360px] gap-5 px-4 pb-12 pt-5 sm:px-6 sm:pt-6 xl:px-8 xl:pt-7", className)}>{children}</div>;
+  return <div data-ui="page-frame" className={cn("ui-page-frame motion-soft-rise mx-auto grid w-full max-w-[1360px] gap-5 px-4 pb-12 pt-5 sm:px-6 sm:pt-6 xl:px-8 xl:pt-7", className)}>{children}</div>;
 }
 
 export function SectionHeader({ eyebrow, title, action, onAction }) {
   return (
-    <div className="flex items-center justify-between gap-5 px-5 pb-3.5 pt-4.5">
+    <div data-ui="section-header" className="ui-section-header flex items-center justify-between gap-5 px-5 pb-3.5 pt-4.5">
       <div className="min-w-0">
         <span className="text-[11px] font-semibold tracking-[0.08em] text-faint">{eyebrow}</span>
         <h3 className="mt-1 truncate text-base font-semibold tracking-tight text-ink">{title}</h3>

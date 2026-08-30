@@ -19,7 +19,7 @@ export function Button({ variant = "secondary", size = "md", className = "", chi
       data-variant={variant}
       data-size={size}
       className={cn(
-        "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-control font-semibold leading-none transition-[color,background-color,border-color,box-shadow] duration-200 disabled:cursor-not-allowed disabled:opacity-55",
+        "ui-button inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-control font-semibold leading-none transition-[color,background-color,border-color,box-shadow] duration-200 disabled:cursor-not-allowed disabled:opacity-55",
         variants[variant],
         sizes[size],
         className,
