@@ -837,6 +837,7 @@ def test_runner_projects_steps_events_artifacts_and_message(analysis_session):
     assert [step["stepKey"] for step in snapshot["steps"]] == [
         "intent.route",
             "intent.guard",
+            "planner.route",
             "intent.parse",
             "memory.retrieve",
             "skill.retrieve",

@@ -192,6 +192,24 @@ export function adaptAnalysisRun(snapshot) {
   const artifacts = snapshot.artifacts ?? [];
   const steps = latestSteps(snapshot.steps, snapshot.tasks);
   const checkpoints = snapshot.checkpoints ?? [];
+  const plannerSnapshot = snapshot.planner ?? {};
+  const plannerObservations = plannerSnapshot.observations ?? [];
+  const plannerObservationByStep = new Map(plannerObservations.map((item) => [item.stepId, item]));
+  const businessPlanSteps = (plannerSnapshot.plan?.steps ?? []).map((step, index) => {
+    const observation = plannerObservationByStep.get(step.id);
+    return {
+      id: step.id,
+      order: index + 1,
+      capability: step.capability,
+      purpose: step.purpose,
+      dependsOn: step.dependsOn ?? [],
+      status: observation?.status ?? (snapshot.status === "succeeded" ? "pending" : "running"),
+      summary: observation?.summary ?? "等待前置能力完成",
+      reasonCode: observation?.reasonCode,
+      quality: observation?.quality ?? {},
+      artifactRefs: observation?.artifactRefs ?? [],
+    };
+  });
   const multi = (snapshot.tasks?.length ?? 0) > 1;
   const plan = steps.map((step) => {
     const task = snapshot.tasks?.find((item) => item.id === step.taskId);
@@ -304,6 +322,12 @@ export function adaptAnalysisRun(snapshot) {
     error: businessError,
     plan,
     planDetails,
+    planner: {
+      ...plannerSnapshot,
+      steps: businessPlanSteps,
+      completed: businessPlanSteps.filter((item) => ["succeeded", "accepted", "skipped"].includes(item.status)).length,
+      failed: businessPlanSteps.filter((item) => item.status === "failed").length,
+    },
     result: {
       kind: conversationOnly ? "conversation" : "execution",
       kpis: conversationOnly ? [] : businessKpis,

@@ -1587,7 +1587,7 @@ function EvidencePanel({ run, open, onBranch }) {
           <TabButton active={view === "artifacts"} onClick={() => changeView("artifacts")}>产物 <span className="font-mono text-[10px]">{run.artifacts?.length ?? 0}</span></TabButton>
         </div>
         {view === "overview" && (
-          <EvidenceOverview run={run} plan={plan} active={active} onOpenSteps={() => changeView("steps")} onOpenGraph={() => changeView("graph")} />
+          <EvidenceOverview run={run} plan={plan} active={active} onOpenSteps={() => changeView("steps")} onOpenGraph={() => changeView("graph")} onOpenArtifacts={() => changeView("artifacts")} />
         )}
         {view === "steps" && (
           <div className={cn("mx-4 mt-3 border-l border-line pl-3 transition-[transform,opacity] duration-300", open && "motion-soft-rise")}>
@@ -1697,12 +1697,95 @@ function EvidencePanel({ run, open, onBranch }) {
   );
 }
 
-function EvidenceOverview({ run, plan, active, onOpenSteps, onOpenGraph }) {
+function BusinessPlanCard({ planner, question, onOpenArtifacts }) {
+  const [expanded, setExpanded] = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
+  const selected = planner.steps.find((step) => step.id === selectedId);
+  return (
+    <section className="overflow-hidden rounded-card border border-primary/20 bg-primary-soft/20">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+        className="flex w-full cursor-pointer items-start justify-between gap-3 px-3 py-2.5 text-left transition-colors hover:bg-primary-soft/45"
+      >
+        <span className="min-w-0">
+          <span className="flex items-center gap-1.5 text-primary">
+            <Icon name="model" size={14} />
+            <span className="text-[10px] font-semibold tracking-wide">AGENT 调查计划</span>
+          </span>
+          <strong className="mt-1 block line-clamp-2 text-xs leading-relaxed text-ink">{planner.plan?.goal ?? question}</strong>
+        </span>
+        <span className="flex shrink-0 items-center gap-2">
+          <StatusPill tone={planner.failed > 0 ? "amber" : "blue"}>{planner.completed}/{planner.steps.length}</StatusPill>
+          <Icon name="chevron" size={13} className={cn("text-muted transition-transform", expanded && "rotate-180")} />
+        </span>
+      </button>
+      {expanded && (
+        <div className="border-t border-primary/10">
+          <div className="divide-y divide-primary/10 px-3">
+            {planner.steps.map((step) => {
+              const complete = ["succeeded", "accepted", "skipped"].includes(step.status);
+              return (
+                <button
+                  type="button"
+                  key={step.id}
+                  onClick={() => setSelectedId((value) => value === step.id ? null : step.id)}
+                  className={cn(
+                    "grid w-full cursor-pointer grid-cols-[20px_minmax(0,1fr)] gap-2 py-2.5 text-left transition-colors hover:bg-white/45",
+                    selectedId === step.id && "bg-white/60",
+                  )}
+                >
+                  <span className={cn(
+                    "mt-0.5 grid h-5 w-5 place-items-center rounded-full",
+                    step.status === "failed" ? "bg-red-soft text-red" : complete ? "bg-teal-soft text-teal" : "bg-surface text-primary",
+                  )}>
+                    <Icon name={step.status === "failed" ? "alert" : complete ? "check" : "clock"} size={11} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="flex items-center justify-between gap-2">
+                      <strong className="truncate text-[11px] font-semibold text-ink">{step.purpose}</strong>
+                      <span className="shrink-0 font-mono text-[9px] text-faint">{step.capability}</span>
+                    </span>
+                    <span className="mt-0.5 block line-clamp-2 text-[10px] leading-relaxed text-muted">{step.summary}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {selected && (
+            <div className="border-t border-primary/10 bg-surface/70 px-3 py-2.5 text-[10px] leading-relaxed text-muted">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-semibold text-ink">步骤详情</span>
+                {selected.reasonCode && <span className="rounded-tag border border-line px-1.5 py-0.5 font-mono">{selected.reasonCode}</span>}
+                <button
+                  type="button"
+                  disabled={!selected.artifactRefs?.length}
+                  onClick={onOpenArtifacts}
+                  className="rounded-tag border border-line px-1.5 py-0.5 transition-colors enabled:cursor-pointer enabled:hover:border-primary/40 enabled:hover:text-primary disabled:opacity-70"
+                >关联产物 {selected.artifactRefs?.length ?? 0}</button>
+              </div>
+              <p className="mt-1.5">{selected.summary}</p>
+            </div>
+          )}
+          {planner.degraded && (
+            <p className="border-t border-primary/10 px-3 py-2 text-[10px] text-muted">模型规划不可用时已安全降级为确定性计划，受治理分析链和权限边界保持不变。</p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function EvidenceOverview({ run, plan, active, onOpenSteps, onOpenGraph, onOpenArtifacts }) {
   const completed = plan.filter((step) => step.status === "succeeded").length;
   const failed = plan.filter((step) => step.status === "failed").length;
   const selected = plan.find((step) => step.id === active);
   return (
     <div className="mx-4 mt-3 grid gap-3">
+      {run.planner?.mode === "bounded" && run.planner?.steps?.length > 0 && (
+        <BusinessPlanCard planner={run.planner} question={run.question} onOpenArtifacts={onOpenArtifacts} />
+      )}
       <div className="rounded-card border border-line bg-surface p-3">
         <span className="text-[10px] font-semibold tracking-wide text-faint">本次分析</span>
         <p className="mt-1 text-xs leading-relaxed text-ink">{run.question}</p>

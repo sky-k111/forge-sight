@@ -7,6 +7,9 @@ class AnalysisState(TypedDict, total=False):
     session_id: str
     run_id: str
     source_id: int
+    tenant_id: str
+    role: str
+    capability_scopes: list[str]
     user_id: str
     user_question: str
     analysis_question: str
@@ -38,4 +41,22 @@ class AnalysisState(TypedDict, total=False):
     execution: dict[str, Any]
     conclusion: str
     modeling_proposal: dict[str, Any] | None
+    planner_enabled: bool
+    planner_model_enabled: bool
+    execution_path: str
+    planning_reason: str
+    plan: dict[str, Any] | None
+    plan_validation: dict[str, Any]
+    plan_revision: int
+    active_plan_step_id: str | None
+    active_plan_step: dict[str, Any] | None
+    capability_result: dict[str, Any] | None
+    capability_calls: list[dict[str, Any]]
+    observations: list[dict[str, Any]]
+    replan_count: int
+    capability_budget: dict[str, Any]
+    pending_approval: dict[str, Any] | None
+    progress_decision: dict[str, Any]
+    finalization_reason: str | None
+    planner_degraded: bool
     error: dict[str, Any] | None

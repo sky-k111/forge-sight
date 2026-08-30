@@ -41,3 +41,18 @@ def test_analysis_session_run_event_and_usage_api(analysis_session):
     assert stream.status_code == 200
     assert "event: run.accepted" in stream.text
     assert "event: run.cancelled" in stream.text
+
+
+def test_planner_settings_api_controls_rollout(analysis_session):
+    client = TestClient(app)
+    changed = client.patch(
+        "/api/analysis/planner-settings",
+        json={"enabled": True, "rolloutPercent": 50, "modelPlanningEnabled": False},
+    )
+    assert changed.status_code == 200
+    assert changed.json()["rolloutPercent"] == 50
+    current = client.get("/api/analysis/planner-settings")
+    assert current.status_code == 200
+    assert current.json()["enabled"] is True
+    assert current.json()["modelPlanningEnabled"] is False
+    assert set(current.json()["experiment"]) == {"planner", "baseline"}

@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     agent_max_total_tokens: int = 136000
     agent_max_estimated_cost: float = 10.0
     agent_max_duration_seconds: int = 300
+    agent_planner_enabled: bool = True
+    agent_planner_model_enabled: bool = True
+    # 按用户稳定分桶，便于同一账号在 Planner/基线间做可复现实验。
+    agent_planner_rollout_percent: int = 100
+    agent_planner_max_capability_calls: int = 8
+    agent_planner_max_database_executions: int = 3
+    agent_planner_max_replans: int = 1
+    agent_planner_max_async_jobs: int = 1
     agent_worker_enabled: bool = True
     agent_worker_poll_seconds: float = 0.75
     agent_worker_lease_seconds: int = 60

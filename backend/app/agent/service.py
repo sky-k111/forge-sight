@@ -1,5 +1,6 @@
 """Session/Run 当前投影和提交入口。"""
 
+import hashlib
 from datetime import datetime, timedelta
 
 from sqlalchemy import func
@@ -38,6 +39,32 @@ class AnalysisNotFound(KeyError):
 
 class AnalysisConflict(RuntimeError):
     pass
+
+
+def _planner_assignment(user_id: str, setting: dict | None = None) -> dict:
+    """Freeze one stable experiment assignment for the lifetime of a run."""
+    setting = setting or {
+        "enabled": settings.agent_planner_enabled,
+        "rolloutPercent": settings.agent_planner_rollout_percent,
+        "modelPlanningEnabled": settings.agent_planner_model_enabled,
+    }
+    rollout = max(0, min(int(setting.get("rolloutPercent", 100)), 100))
+    bucket = int(hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:8], 16) % 100
+    enabled = bool(setting.get("enabled") and bucket < rollout)
+    return {
+        "enabled": enabled,
+        "variant": "bounded-planner-v1" if enabled else "governed-baseline-v1",
+        "rolloutPercent": rollout,
+        "bucket": bucket,
+        "modelPlanningEnabled": bool(enabled and setting.get("modelPlanningEnabled", True)),
+    }
+
+
+BUSINESS_CAPABILITY_SCOPES = [
+    "analysis:read", "scope:read", "task:read",
+    "modeling:read", "modeling:draft", "modeling:predict",
+    "report:read", "report:draft", "investigation:read",
+]
 
 
 def create_session(title: str, source_id: int, user_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
@@ -205,13 +232,26 @@ def create_run(
 
         skill_setting = snapshot_settings(session)
         memory_setting = snapshot_memory_settings(session)
+        from app.agent.settings import snapshot_settings as snapshot_planner_settings
+
+        planner_assignment = _planner_assignment(parent.user_id, snapshot_planner_settings(session))
+        budget_snapshot = default_budget()
+        budget_snapshot["planner"] = planner_assignment
+        budget_snapshot["access"] = {
+            "tenantId": parent.tenant_id,
+            "userId": parent.user_id,
+            "role": "business",
+            "sourceId": parent.source_id,
+            "capabilityScopes": BUSINESS_CAPABILITY_SCOPES,
+        }
         run = AnalysisRun(
             id=new_id("run"),
             session_id=session_id,
             trigger_message_id=message.id,
             idempotency_key=idempotency_key,
             source_id=parent.source_id,
-            budget_snapshot_json=default_budget(),
+            workflow_version=planner_assignment["variant"],
+            budget_snapshot_json=budget_snapshot,
             skill_enhancement_enabled=skill_setting["enabled"],
             skill_experiment_variant=skill_setting["variant"],
             memory_enabled=memory_setting["enabled"],
@@ -344,6 +384,24 @@ def get_run(run_id: str) -> dict:
             None,
         )
         result["artifacts"] = [_artifact_dict(item) for item in artifacts]
+        base_plan_artifact = next((item for item in reversed(artifacts) if item.type == "agent-plan"), None)
+        plan_artifact = next(
+            (item for item in reversed(artifacts) if item.type in {"agent-plan", "agent-plan-revision"}),
+            None,
+        )
+        observation_artifacts = [item for item in artifacts if item.type == "capability-observation"]
+        planner_assignment = (run.budget_snapshot_json or {}).get("planner") or {}
+        result["planner"] = {
+            "enabled": bool(planner_assignment.get("enabled", run.workflow_version == "bounded-planner-v1")),
+            "variant": planner_assignment.get("variant", run.workflow_version),
+            "rolloutPercent": planner_assignment.get("rolloutPercent"),
+            "mode": "bounded" if plan_artifact else "fast",
+            "plan": (plan_artifact.content_json or {}).get("plan") if plan_artifact else None,
+            "revision": (plan_artifact.content_json or {}).get("revision") if plan_artifact else None,
+            "degraded": bool((base_plan_artifact.content_json or {}).get("degraded")) if base_plan_artifact else False,
+            "reason": (base_plan_artifact.content_json or {}).get("reason") if base_plan_artifact else None,
+            "observations": [item.content_json for item in observation_artifacts],
+        }
         result["checkpoints"] = [_checkpoint_dict(item) for item in checkpoints]
         result["interaction"] = _interaction_dict(interaction) if interaction else None
         proposal_artifact = next(
@@ -414,10 +472,11 @@ def respond_to_interaction(interaction_id: str, answer: str) -> dict:
         task = session.query(AnalysisTask).filter_by(id=interaction.task_id).first() if interaction.task_id else None
         if task:
             task.status = "pending"
+        resolved_event = "approval.resolved" if interaction.kind == "approval" else "clarification.resolved"
         append_event(
             session,
             run,
-            "clarification.resolved",
+            resolved_event,
             {"interactionId": interaction.id, "answer": answer.strip(), "status": "queued"},
             task_id=interaction.task_id,
             step_key=interaction.resume_node,
@@ -456,6 +515,7 @@ def create_branch(
             title=(title or f"{parent.title} · 分支").strip(),
             user_id=user_id,
             source_id=parent.source_id,
+            tenant_id=parent.tenant_id,
             parent_session_id=parent.id,
             fork_checkpoint_id=checkpoint.id,
         )
@@ -481,6 +541,18 @@ def create_branch(
 
             skill_setting = snapshot_settings(session)
             memory_setting = snapshot_memory_settings(session)
+            from app.agent.settings import snapshot_settings as snapshot_planner_settings
+
+            planner_assignment = _planner_assignment(user_id, snapshot_planner_settings(session))
+            budget_snapshot = default_budget()
+            budget_snapshot["planner"] = planner_assignment
+            budget_snapshot["access"] = {
+                "tenantId": parent.tenant_id,
+                "userId": user_id,
+                "role": "business",
+                "sourceId": child.source_id,
+                "capabilityScopes": BUSINESS_CAPABILITY_SCOPES,
+            }
             message = AnalysisMessage(
                 id=new_id("msg"),
                 session_id=child.id,
@@ -501,7 +573,8 @@ def create_branch(
                 session_id=child.id,
                 trigger_message_id=message.id,
                 source_id=child.source_id,
-                budget_snapshot_json=default_budget(),
+                workflow_version=planner_assignment["variant"],
+                budget_snapshot_json=budget_snapshot,
                 skill_enhancement_enabled=skill_setting["enabled"],
                 skill_experiment_variant=skill_setting["variant"],
                 memory_enabled=memory_setting["enabled"],

@@ -13,9 +13,17 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from app.agent.budgets import BudgetExceeded
+from app.agent.capabilities import build_default_registry
+from app.agent.capability_executor import CapabilityExecutor, capability_idempotency_key
+from app.agent.capability_registry import CapabilityContext
+from app.agent.ids import new_id
 from app.agent.intent import build_intent_plan, build_request_route
+from app.agent.plan_schema import AgentPlan, CapabilityObservation, PlanBudget, dump_contract
+from app.agent.planner import build_plan, revise_plan, should_use_planner, validate_plan
+from app.agent.progress import evaluate_progress, select_next_step
 from app.agent.state import AnalysisState
 from app.agent.system_utility import build_system_utility_response
+from app.config import settings
 from app.gateway.executor import ExecutionResult
 from app.gateway.connectors import get_adapter
 from app.gateway.sql_validator import SqlCheckResult, validate_dialect_compatibility
@@ -729,6 +737,9 @@ def _route_model_prompt(
 
 
 def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
+    capability_registry = build_default_registry()
+    capability_executor = CapabilityExecutor(capability_registry)
+
     def route_request(state: AnalysisState) -> dict:
         preclassified_labels = {
             int(index): kind
@@ -810,6 +821,370 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             }
         return {"blocked": False, "error": None}
 
+    def decide_planning_path(state: AnalysisState) -> dict:
+        enabled, reason = should_use_planner(
+            state.get("analysis_question") or state["user_question"],
+            state.get("request_segments") or [],
+            enabled=bool(state.get("planner_enabled", settings.agent_planner_enabled)),
+        )
+        budget = PlanBudget(
+            maxCapabilityCalls=settings.agent_planner_max_capability_calls,
+            maxDatabaseExecutions=settings.agent_planner_max_database_executions,
+            maxReplans=settings.agent_planner_max_replans,
+            maxAsyncJobs=settings.agent_planner_max_async_jobs,
+        )
+        return {
+            "execution_path": "planner" if enabled else "fast",
+            "planning_reason": reason,
+            "plan": None,
+            "plan_validation": {},
+            "plan_revision": 0,
+            "active_plan_step_id": None,
+            "active_plan_step": None,
+            "capability_calls": [],
+            "observations": [],
+            "replan_count": 0,
+            "capability_budget": budget.model_dump(by_alias=True, mode="json"),
+            "pending_approval": None,
+            "progress_decision": {},
+            "finalization_reason": None,
+            "planner_degraded": False,
+        }
+
+    def build_business_plan(state: AnalysisState) -> dict:
+        budget = PlanBudget.model_validate(state.get("capability_budget") or {})
+        available_capabilities = capability_registry.names_for(
+            state.get("role", "business"),
+            frozenset(state.get("capability_scopes") or [
+                "analysis:read", "scope:read", "task:read", "report:draft",
+                "modeling:read", "modeling:draft", "modeling:predict",
+            ]),
+        )
+        plan, source, degraded_reason = build_plan(
+            state,
+            available_capabilities,
+            deps.generate_text,
+            model_enabled=bool(state.get("planner_model_enabled", settings.agent_planner_model_enabled)),
+            budget=budget,
+        )
+        return {
+            "plan": dump_contract(plan),
+            "plan_revision": 1,
+            "planner_degraded": source == "deterministic_fallback",
+            "planning_reason": (
+                f"{state.get('planning_reason')}:{degraded_reason}"
+                if degraded_reason
+                else state.get("planning_reason")
+            ),
+            "error": None,
+        }
+
+    def validate_business_plan(state: AnalysisState) -> dict:
+        try:
+            plan = AgentPlan.model_validate(state.get("plan") or {})
+            available_capabilities = capability_registry.names_for(
+                state.get("role", "business"),
+                frozenset(state.get("capability_scopes") or [
+                    "analysis:read", "scope:read", "task:read", "report:draft",
+                    "modeling:read", "modeling:draft", "modeling:predict",
+                ]),
+            )
+            result = validate_plan(plan, available_capabilities)
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "plan_validation": {
+                    "valid": False,
+                    "checks": [],
+                    "errors": [str(exc)],
+                    "reasonCode": "PLAN_SCHEMA_INVALID",
+                    "degraded": True,
+                },
+                "execution_path": "fast",
+                "planner_degraded": True,
+                "planning_reason": "PLAN_SCHEMA_INVALID",
+            }
+        payload = result.model_dump(by_alias=True, mode="json")
+        if not result.valid:
+            return {
+                "plan_validation": payload,
+                "execution_path": "fast",
+                "planner_degraded": True,
+                "planning_reason": result.reason_code,
+            }
+        return {"plan_validation": payload}
+
+    def select_business_step(state: AnalysisState) -> dict:
+        plan = AgentPlan.model_validate(state["plan"])
+        selected = select_next_step(plan, state.get("observations") or [])
+        if selected is None:
+            return {"active_plan_step_id": None, "active_plan_step": None}
+        step = dict(selected["step"])
+        if selected.get("skip"):
+            step["_skip"] = True
+            step["_skipReason"] = selected.get("skipReason")
+        return {"active_plan_step_id": step["id"], "active_plan_step": step}
+
+    def _capability_context(state: AnalysisState, step: dict[str, Any]) -> CapabilityContext:
+        descriptor = capability_registry.get(step["capability"]).descriptor
+        arguments = dict(step.get("arguments") or {})
+        key = capability_idempotency_key(
+            state["run_id"],
+            state.get("plan_revision", 1),
+            step["id"],
+            descriptor.version,
+            arguments,
+        )
+        return CapabilityContext(
+            run_id=state["run_id"],
+            session_id=state["session_id"],
+            tenant_id=state.get("tenant_id", "tenant-default"),
+            user_id=state.get("user_id", "local-test-user"),
+            role=state.get("role", "business"),
+            source_ids=(int(state["source_id"]),),
+            capability_scopes=frozenset(state.get("capability_scopes") or [
+                "analysis:read", "scope:read", "task:read", "report:draft",
+                "modeling:read", "modeling:draft", "modeling:predict",
+            ]),
+            plan_revision=state.get("plan_revision", 1),
+            step_id=step["id"],
+            idempotency_key=key,
+            artifact_refs=tuple(
+                ref
+                for item in state.get("observations") or []
+                for ref in item.get("artifactRefs") or []
+            ),
+            state=dict(state),
+        )
+
+    def authorize_capability(state: AnalysisState) -> dict:
+        step = state.get("active_plan_step") or {}
+        if step.get("_skip"):
+            return {
+                "capability_result": {
+                    "status": "skipped",
+                    "summary": step.get("_skipReason", "该步骤无需执行"),
+                    "reasonCode": "CONDITION_SKIPPED",
+                    "artifactRefs": [],
+                    "quality": {},
+                    "suggestedNext": [],
+                    "usage": {},
+                    "payload": {},
+                }
+            }
+        context = _capability_context(state, step)
+        budget = PlanBudget.model_validate(state.get("capability_budget") or {})
+        decision = capability_executor.authorize(
+            context,
+            step["capability"],
+            dict(step.get("arguments") or {}),
+            budget,
+            state.get("capability_calls") or [],
+        )
+        if decision.requires_approval:
+            prompt = {
+                "kind": "approval",
+                "question": decision.message or "该操作会产生外部或高成本影响，是否确认继续？",
+                "capability": step["capability"],
+                "stepId": step["id"],
+                "purpose": step.get("purpose"),
+                "arguments": step.get("arguments") or {},
+                "options": [
+                    {"label": "确认执行", "value": "confirm"},
+                    {"label": "取消", "value": "cancel"},
+                ],
+                "resumeNode": "planner.authorize",
+            }
+            response = interrupt(prompt)
+            answer = str((response or {}).get("answer") if isinstance(response, dict) else response).lower()
+            if answer not in {"confirm", "确认", "确认执行", "yes", "true"}:
+                return {
+                    "pending_approval": None,
+                    "capability_result": {
+                        "status": "failed",
+                        "summary": "用户未确认该操作，计划已保留已有结果。",
+                        "reasonCode": "APPROVAL_DECLINED",
+                        "artifactRefs": [], "quality": {}, "suggestedNext": [], "usage": {}, "payload": {},
+                    },
+                }
+            return {"pending_approval": {"stepId": step["id"], "status": "approved"}}
+        if not decision.allowed:
+            return {
+                "capability_result": {
+                    "status": "failed",
+                    "summary": decision.message,
+                    "reasonCode": decision.reason_code,
+                    "artifactRefs": [], "quality": {}, "suggestedNext": [], "usage": {}, "payload": {},
+                }
+            }
+        return {"pending_approval": None, "capability_result": None}
+
+    def invoke_business_capability(state: AnalysisState) -> dict:
+        if state.get("capability_result"):
+            return {}
+        step = state["active_plan_step"]
+        context = _capability_context(state, step)
+        try:
+            result, record = capability_executor.execute(
+                context,
+                step["capability"],
+                dict(step.get("arguments") or {}),
+                state.get("capability_calls") or [],
+            )
+        except Exception as exc:  # noqa: BLE001
+            result_payload = {
+                "status": "failed", "summary": "业务能力执行失败，已保留前序证据。",
+                "reasonCode": type(exc).__name__, "artifactRefs": [], "quality": {},
+                "suggestedNext": [], "usage": {}, "payload": {},
+            }
+            record = {
+                "stepId": step["id"], "capability": step["capability"],
+                "status": "failed", "result": result_payload,
+            }
+            return {
+                "capability_result": result_payload,
+                "capability_calls": [*(state.get("capability_calls") or []), record],
+            }
+        result_payload = {
+            "status": result.status,
+            "summary": result.summary,
+            "artifactRefs": result.artifact_refs,
+            "quality": result.quality,
+            "reasonCode": result.reason_code,
+            "suggestedNext": result.suggested_next,
+            "usage": result.usage,
+            "payload": result.payload,
+        }
+        return {
+            "capability_result": result_payload,
+            "capability_calls": [*(state.get("capability_calls") or []), record],
+        }
+
+    def record_business_observation(state: AnalysisState) -> dict:
+        step = state["active_plan_step"]
+        result = state.get("capability_result") or {}
+        observation = CapabilityObservation(
+            stepId=step["id"],
+            capability=step["capability"],
+            status=result.get("status", "failed"),
+            summary=result.get("summary", ""),
+            artifactRefs=result.get("artifactRefs") or [],
+            quality=result.get("quality") or {},
+            reasonCode=result.get("reasonCode", "OK"),
+            suggestedNext=result.get("suggestedNext") or [],
+            usage=result.get("usage") or {},
+            payload=result.get("payload") or {},
+        )
+        direct = state.get("direct_response", "")
+        if observation.summary and step["capability"] not in {"analysis.query_data", "modeling.propose"}:
+            direct = "\n\n".join(item for item in (direct, observation.summary) if item)
+        return {
+            "observations": [*(state.get("observations") or []), dump_contract(observation)],
+            "capability_result": None,
+            "direct_response": direct,
+        }
+
+    def record_delegated_observation(state: AnalysisState) -> dict:
+        step = state["active_plan_step"]
+        is_modeling = step["capability"] == "modeling.propose"
+        error = state.get("error") or {}
+        if error:
+            status = "failed"
+            summary = error.get("userSafeMessage") or error.get("message") or "受治理子图未完成"
+            reason = error.get("code", "CAPABILITY_FAILED")
+            artifact_refs: list[str] = []
+            payload: dict[str, Any] = {}
+        elif is_modeling:
+            proposal = state.get("modeling_proposal") or {}
+            status = "succeeded"
+            summary = (
+                "已找到可复用模型并形成复用建议。"
+                if proposal.get("recommendedAction") == "reuse"
+                else "已形成需要用户确认的建模草案。"
+            )
+            reason = "OK"
+            artifact_refs = []
+            payload = {"proposal": proposal}
+        else:
+            execution = state.get("execution") or {}
+            status = "succeeded"
+            summary = state.get("conclusion") or "只读分析已完成"
+            reason = "OK"
+            artifact_refs = []
+            payload = {"rowCount": execution.get("row_count", 0)}
+        observation = CapabilityObservation(
+            stepId=step["id"], capability=step["capability"], status=status,
+            summary=summary, artifactRefs=artifact_refs,
+            quality={"sampleCount": int((state.get("execution") or {}).get("row_count") or 0), "limitations": []},
+            reasonCode=reason, suggestedNext=[], usage={}, payload=payload,
+        )
+        calls = [*(state.get("capability_calls") or []), {
+            "stepId": step["id"], "capability": step["capability"], "status": status,
+            "result": dump_contract(observation),
+        }]
+        task_results = list(state.get("task_results") or [])
+        if not is_modeling and not error:
+            task_results.append({
+                "task": state.get("task", {}), "context": state.get("semantic_context", {}),
+                "sql": state.get("sql"), "validation": state.get("validation", {}),
+                "execution": state.get("execution", {}), "conclusion": state.get("conclusion", ""),
+                "confidence": state.get("confidence", {}), "metricResolution": state.get("metric_resolution", {}),
+            })
+        return {
+            "observations": [*(state.get("observations") or []), dump_contract(observation)],
+            "capability_calls": calls,
+            "task_results": task_results,
+            "capability_result": None,
+            "error": state.get("error"),
+        }
+
+    def evaluate_business_progress(state: AnalysisState) -> dict:
+        plan = AgentPlan.model_validate(state["plan"])
+        decision = evaluate_progress(plan, state.get("observations") or [], replan_count=state.get("replan_count", 0))
+        return {"progress_decision": {"action": decision.action, "reasonCode": decision.reason_code, "summary": decision.summary}}
+
+    def revise_business_plan(state: AnalysisState) -> dict:
+        plan = AgentPlan.model_validate(state["plan"])
+        available_capabilities = capability_registry.names_for(
+            state.get("role", "business"),
+            frozenset(state.get("capability_scopes") or [
+                "analysis:read", "scope:read", "task:read", "report:draft",
+                "modeling:read", "modeling:draft", "modeling:predict",
+            ]),
+        )
+        revised = revise_plan(plan, state.get("observations") or [], available_capabilities)
+        return {
+            "plan": dump_contract(revised),
+            "plan_revision": state.get("plan_revision", 1) + 1,
+            "replan_count": state.get("replan_count", 0) + 1,
+            "progress_decision": {},
+            "active_plan_step": None,
+            "active_plan_step_id": None,
+        }
+
+    def finalize_business_plan(state: AnalysisState) -> dict:
+        decision = state.get("progress_decision") or {}
+        observations = state.get("observations") or []
+        has_usable_result = any(
+            item.get("status") in {"succeeded", "accepted"}
+            for item in observations
+        )
+        summaries = [
+            item.get("summary", "")
+            for item in observations
+            if item.get("capability") != "analysis.query_data" and item.get("summary")
+        ]
+        direct = state.get("direct_response", "")
+        for summary in summaries:
+            if summary not in direct:
+                direct = "\n\n".join(item for item in (direct, summary) if item)
+        return {
+            "finalization_reason": decision.get("reasonCode", "GOAL_SATISFIED"),
+            "direct_response": direct,
+            "active_plan_step": None,
+            "active_plan_step_id": None,
+            "error": None if has_usable_result else state.get("error"),
+        }
+
     def plan_tasks(state: AnalysisState) -> dict:
         planning = build_intent_plan(
             state.get("analysis_question") or state["user_question"],
@@ -833,7 +1208,26 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         }
 
     def activate_task(state: AnalysisState) -> dict:
-        task = state["tasks"][state.get("task_index", 0)]
+        if state.get("execution_path") == "planner":
+            step = state.get("active_plan_step") or {}
+            task = dict((step.get("arguments") or {}).get("task") or {})
+            if not task:
+                question = str((step.get("arguments") or {}).get("question") or state.get("analysis_question") or state["user_question"])
+                task = {
+                    "id": new_id("tsk"),
+                    "order": len(state.get("observations") or []) + 1,
+                    "title": step.get("purpose") or question[:120],
+                    "originalQuestion": question,
+                    "normalizedQuestion": question,
+                    "mode": "planned",
+                    "analysisType": "modeling" if step.get("capability") == "modeling.propose" else "query",
+                    "dependsOn": list(step.get("dependsOn") or []),
+                    "requestedChart": None,
+                    "timeConstraint": None,
+                    "groupBy": [],
+                }
+        else:
+            task = state["tasks"][state.get("task_index", 0)]
         return {
             "task": task,
             "retry_count": 0,
@@ -1319,31 +1713,67 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         return "intent_guard" if state.get("analysis_question") else END
 
     def after_guard(state: AnalysisState) -> str:
-        return END if state.get("blocked") else "plan_tasks"
+        return END if state.get("blocked") else "decide_planning_path"
+
+    def after_planning_decision(state: AnalysisState) -> str:
+        return "build_business_plan" if state.get("execution_path") == "planner" else "plan_tasks"
+
+    def after_plan_validation(state: AnalysisState) -> str:
+        return "select_business_step" if state.get("execution_path") == "planner" else "plan_tasks"
+
+    def after_step_selection(state: AnalysisState) -> str:
+        return "authorize_capability" if state.get("active_plan_step") else "finalize_business_plan"
+
+    def after_authorization(state: AnalysisState) -> str:
+        if state.get("capability_result"):
+            return "record_business_observation"
+        capability = (state.get("active_plan_step") or {}).get("capability")
+        if capability in {"analysis.query_data", "modeling.propose"}:
+            return "activate_task"
+        return "invoke_business_capability"
 
     def after_context(state: AnalysisState) -> str:
         if state.get("error"):
-            return END
+            return "record_delegated_observation" if state.get("execution_path") == "planner" else END
         if (state.get("task") or {}).get("analysisType") == "modeling":
             return "propose_modeling"
         return "generate_query"
 
     def after_generate(state: AnalysisState) -> str:
-        return END if state.get("error") else "validate_query"
+        if state.get("error"):
+            return "record_delegated_observation" if state.get("execution_path") == "planner" else END
+        return "validate_query"
 
     def after_validate(state: AnalysisState) -> str:
         if not state.get("error"):
             return "execute_query"
         if state["error"].get("retryable") and state.get("retry_count", 0) < 2:
             return "prepare_retry"
-        return END
+        return "record_delegated_observation" if state.get("execution_path") == "planner" else END
 
     def after_execute(state: AnalysisState) -> str:
         if not state.get("error"):
             return "explain_result"
         if state["error"].get("retryable") and state.get("retry_count", 0) < 2:
             return "prepare_retry"
-        return END
+        return "record_delegated_observation" if state.get("execution_path") == "planner" else END
+
+    def after_delegated_success(state: AnalysisState) -> str:
+        return "record_delegated_observation" if state.get("execution_path") == "planner" else END
+
+    def after_explanation(state: AnalysisState) -> str:
+        return "record_delegated_observation" if state.get("execution_path") == "planner" else "advance_task"
+
+    def after_observation(state: AnalysisState) -> str:
+        return "evaluate_business_progress"
+
+    def after_progress(state: AnalysisState) -> str:
+        action = (state.get("progress_decision") or {}).get("action")
+        if action == "replan":
+            return "revise_business_plan"
+        if action == "continue":
+            return "select_business_step"
+        return "finalize_business_plan"
 
     def after_advance(state: AnalysisState) -> str:
         return "activate_task" if state.get("task_index", 0) < len(state.get("tasks", [])) else END
@@ -1352,6 +1782,17 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
     graph.add_node("route_request", route_request)
     graph.add_node("system_utility", system_utility)
     graph.add_node("intent_guard", intent_guard)
+    graph.add_node("decide_planning_path", decide_planning_path)
+    graph.add_node("build_business_plan", build_business_plan)
+    graph.add_node("validate_business_plan", validate_business_plan)
+    graph.add_node("select_business_step", select_business_step)
+    graph.add_node("authorize_capability", authorize_capability)
+    graph.add_node("invoke_business_capability", invoke_business_capability)
+    graph.add_node("record_business_observation", record_business_observation)
+    graph.add_node("record_delegated_observation", record_delegated_observation)
+    graph.add_node("evaluate_business_progress", evaluate_business_progress)
+    graph.add_node("revise_business_plan", revise_business_plan)
+    graph.add_node("finalize_business_plan", finalize_business_plan)
     graph.add_node("plan_tasks", plan_tasks)
     graph.add_node("activate_task", activate_task)
     graph.add_node("retrieve_memory", retrieve_memory)
@@ -1368,6 +1809,17 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
     graph.add_conditional_edges("route_request", after_route)
     graph.add_conditional_edges("system_utility", after_utility)
     graph.add_conditional_edges("intent_guard", after_guard)
+    graph.add_conditional_edges("decide_planning_path", after_planning_decision)
+    graph.add_edge("build_business_plan", "validate_business_plan")
+    graph.add_conditional_edges("validate_business_plan", after_plan_validation)
+    graph.add_conditional_edges("select_business_step", after_step_selection)
+    graph.add_conditional_edges("authorize_capability", after_authorization)
+    graph.add_edge("invoke_business_capability", "record_business_observation")
+    graph.add_conditional_edges("record_business_observation", after_observation)
+    graph.add_conditional_edges("record_delegated_observation", after_observation)
+    graph.add_conditional_edges("evaluate_business_progress", after_progress)
+    graph.add_edge("revise_business_plan", "select_business_step")
+    graph.add_edge("finalize_business_plan", END)
     graph.add_edge("plan_tasks", "activate_task")
     graph.add_edge("activate_task", "retrieve_memory")
     graph.add_edge("retrieve_memory", "retrieve_skill")
@@ -1377,6 +1829,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
     graph.add_conditional_edges("validate_query", after_validate)
     graph.add_conditional_edges("execute_query", after_execute)
     graph.add_edge("prepare_retry", "generate_query")
-    graph.add_edge("explain_result", "advance_task")
+    graph.add_conditional_edges("propose_modeling", after_delegated_success)
+    graph.add_conditional_edges("explain_result", after_explanation)
     graph.add_conditional_edges("advance_task", after_advance)
     return graph.compile(checkpointer=checkpointer)

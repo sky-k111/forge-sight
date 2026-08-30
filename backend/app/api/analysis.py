@@ -6,10 +6,11 @@ import time
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
-from app.agent import service, usage
+from app.agent import service, settings as planner_settings, usage
 from app.agent.contracts import BranchCreate, ClarificationResponse, RunCreate, SessionCreate
-from app.auth.deps import optional_user
+from app.auth.deps import effective_user_id, optional_user
 from app.db.platform import PlatformSession
 from app.tenancy.service import (
     TenantContext,
@@ -21,6 +22,34 @@ from app.tenancy.service import (
 )
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
+
+
+class PlannerSettingPayload(BaseModel):
+    enabled: bool
+    rolloutPercent: int = Field(default=100, ge=0, le=100)
+    modelPlanningEnabled: bool = True
+
+
+def _admin_identity(user: dict | None) -> str:
+    if user and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可调整 Agent 规划实验")
+    return effective_user_id("local-admin", user)
+
+
+@router.get("/planner-settings")
+def get_planner_settings(user: dict | None = Depends(optional_user)):
+    _admin_identity(user)
+    return {**planner_settings.snapshot_settings(), "experiment": planner_settings.experiment_summary()}
+
+
+@router.patch("/planner-settings")
+def set_planner_settings(payload: PlannerSettingPayload, user: dict | None = Depends(optional_user)):
+    return planner_settings.update_settings(
+        payload.enabled,
+        rollout_percent=payload.rolloutPercent,
+        model_planning_enabled=payload.modelPlanningEnabled,
+        updated_by=_admin_identity(user),
+    )
 
 
 def _not_found(exc: Exception) -> HTTPException:

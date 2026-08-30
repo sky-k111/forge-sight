@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
+import json
 from datetime import datetime
 
 from sqlalchemy import func
@@ -14,6 +16,7 @@ from app.db.models import (
     AnalysisArtifact,
     AnalysisMessage,
     AnalysisRun,
+    AnalysisSession,
     AnalysisTask,
     DataSource,
     KnowledgeMetric,
@@ -223,6 +226,154 @@ def create_report(payload, session_factory=PlatformSession) -> dict:
             session.commit()
         raise
     return get_report(report_id, session_factory=session_factory)
+
+
+def compose_report_from_evidence(
+    *,
+    run_id: str,
+    owner_id: str,
+    source_id: int,
+    template_id: str,
+    title: str,
+    session_factory=PlatformSession,
+) -> dict:
+    """Create a reviewable draft from an existing run without querying again.
+
+    The draft deliberately uses a separate schema version and cannot pass the
+    normal weekly-report publication gate until it is reviewed/normalized.  It
+    preserves every artifact reference so later publication can prove where a
+    number came from instead of silently re-running a drifting query.
+    """
+
+    with session_factory() as session:
+        run = session.query(AnalysisRun).filter_by(id=run_id, source_id=source_id).first()
+        if run is None:
+            raise ReportNotFound("当前运行不存在或不属于已冻结数据源")
+        template = session.query(ReportTemplate).filter_by(id=template_id, enabled=True).first()
+        if template is None:
+            template = session.query(ReportTemplate).filter_by(
+                id="tpl-operations-weekly", enabled=True
+            ).first()
+        if template is None:
+            raise ReportNotFound("没有可用于证据草稿的报告模板")
+        source = session.query(DataSource).filter_by(id=source_id).first()
+        if source is None:
+            raise ReportNotFound(f"数据源 {source_id} 不存在")
+        business_session = session.query(AnalysisSession).filter_by(id=run.session_id).first()
+        if business_session is None or business_session.user_id != owner_id:
+            raise ReportConflict("只有当前分析会话的所有者可以复用证据生成草稿")
+        tasks = (
+            session.query(AnalysisTask)
+            .filter_by(run_id=run_id)
+            .order_by(AnalysisTask.task_order)
+            .all()
+        )
+        artifacts = (
+            session.query(AnalysisArtifact)
+            .filter_by(run_id=run_id)
+            .order_by(AnalysisArtifact.created_at)
+            .all()
+        )
+        by_task: dict[str | None, list[AnalysisArtifact]] = {}
+        for artifact in artifacts:
+            by_task.setdefault(artifact.task_id, []).append(artifact)
+        if not artifacts:
+            raise ReportConflict("当前运行尚无可复用的分析证据")
+
+        now = datetime.now()
+        report = Report(
+            id=new_id("rpt"),
+            title=(title or f"{now:%Y-%m-%d} 分析证据草稿").strip()[:200],
+            template_id=template.id,
+            source_id=source_id,
+            report_type=template.report_type,
+            topic=template.topic,
+            status="draft",
+            owner_id=owner_id,
+            publish_source="planner_evidence",
+            period_start=run.started_at or run.created_at,
+            period_end=run.finished_at or now,
+            scope_json={
+                "originRunId": run_id,
+                "originSessionId": run.session_id,
+                "evidenceOnly": True,
+                "publicationRequiresNormalization": True,
+            },
+            analysis_session_id=run.session_id,
+            analysis_run_id=None,
+        )
+        version = ReportVersion(
+            id=new_id("rpv"),
+            report_id=report.id,
+            version=1,
+            status="draft",
+            schema_version="evidence-report-draft/v1",
+            workflow_version=run.workflow_version,
+            created_by="bounded-planner",
+            data_snapshot_json={
+                "sourceId": source_id,
+                "originRunId": run_id,
+                "artifactIds": [item.id for item in artifacts],
+            },
+        )
+        report.current_version_id = version.id
+        session.add_all([report, version])
+
+        frozen_sections = []
+        task_rows = tasks or [None]
+        for order, task in enumerate(task_rows, start=1):
+            task_artifacts = by_task.get(task.id if task else None, [])
+            if not task_artifacts and task is None:
+                task_artifacts = artifacts
+            by_type = {item.type: item for item in task_artifacts}
+            conclusion = (by_type.get("conclusion").content_json or {}) if by_type.get("conclusion") else {}
+            result = (by_type.get("result").content_json or {}) if by_type.get("result") else {}
+            confidence = conclusion.get("confidence") or {}
+            section_title = task.title if task else "分析结论"
+            summary = str(conclusion.get("text") or "当前步骤没有生成文字结论")
+            artifact_ids = [item.id for item in task_artifacts]
+            section_content = {
+                "summary": summary,
+                "resultPreview": {
+                    "columns": list(result.get("columns") or []),
+                    "rows": list(result.get("rows") or [])[:20],
+                    "rowCount": int(result.get("row_count") or 0),
+                },
+                "artifactRefs": artifact_ids,
+                "originTaskId": task.id if task else None,
+            }
+            session.add(
+                ReportSection(
+                    id=new_id("rps"),
+                    report_id=report.id,
+                    version_id=version.id,
+                    code=f"evidence-{order}",
+                    title=section_title[:160],
+                    section_order=order,
+                    status="succeeded",
+                    summary=summary,
+                    content_json=section_content,
+                    confidence=int(confidence.get("score") or 0),
+                    analysis_task_id=task.id if task else None,
+                    artifact_ids_json=artifact_ids,
+                )
+            )
+            frozen_sections.append({"title": section_title, **section_content})
+        version.summary = "\n\n".join(item["summary"] for item in frozen_sections)
+        version.content_json = {
+            "schemaVersion": "evidence-report-draft/v1",
+            "title": report.title,
+            "sections": frozen_sections,
+        }
+        version.content_checksum = hashlib.sha256(
+            json.dumps(version.content_json, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        session.commit()
+        report_id = report.id
+        artifact_ids = [item.id for item in artifacts]
+    result = get_report(report_id, session_factory=session_factory)
+    result["artifactRefs"] = artifact_ids
+    return result
 
 
 def _build_agent_question(report: Report, template: ReportTemplate, prompt: str | None) -> str:

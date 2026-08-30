@@ -3,6 +3,7 @@ import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
 import { Button, Card, PageFrame, SectionHeader, StatusPill } from "../../components/ui";
 import { getSkillSettings, updateSkillSettings } from "../../api/skills";
+import { getPlannerSettings, updatePlannerSettings } from "../../api/agentSettings";
 
 const configs = [
   { icon: "database", name: "华东制造数据底座", type: "PostgreSQL 16", detail: "manufacturing · 只读账号", status: "连接正常", tone: "green" },
@@ -16,6 +17,9 @@ export default function SettingsPage() {
   const [skillSetting, setSkillSetting] = useState({ enabled: false, experiment: {} });
   const [skillLoading, setSkillLoading] = useState(true);
   const [skillError, setSkillError] = useState("");
+  const [plannerSetting, setPlannerSetting] = useState({ enabled: true, rolloutPercent: 100, modelPlanningEnabled: true, experiment: {} });
+  const [plannerLoading, setPlannerLoading] = useState(true);
+  const [plannerError, setPlannerError] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -23,6 +27,10 @@ export default function SettingsPage() {
       .then((data) => active && setSkillSetting(data))
       .catch((error) => active && setSkillError(error.message))
       .finally(() => active && setSkillLoading(false));
+    getPlannerSettings()
+      .then((data) => active && setPlannerSetting(data))
+      .catch((error) => active && setPlannerError(error.message))
+      .finally(() => active && setPlannerLoading(false));
     return () => { active = false; };
   }, []);
 
@@ -37,6 +45,24 @@ export default function SettingsPage() {
       setSkillError(error.message);
     } finally {
       setSkillLoading(false);
+    }
+  };
+
+  const savePlannerSetting = async (patch) => {
+    const next = { ...plannerSetting, ...patch };
+    setPlannerLoading(true);
+    setPlannerError("");
+    try {
+      const changed = await updatePlannerSettings({
+        enabled: next.enabled,
+        rolloutPercent: next.rolloutPercent,
+        modelPlanningEnabled: next.modelPlanningEnabled,
+      });
+      setPlannerSetting((current) => ({ ...current, ...changed }));
+    } catch (error) {
+      setPlannerError(error.message);
+    } finally {
+      setPlannerLoading(false);
     }
   };
   return (
@@ -101,6 +127,48 @@ export default function SettingsPage() {
               className={cn("relative h-6 w-11 rounded-full transition-colors disabled:opacity-50", skillSetting.enabled ? "bg-green" : "bg-line-strong")}
             >
               <i className={cn("absolute top-1 h-4 w-4 rounded-full bg-white shadow-card transition-[left]", skillSetting.enabled ? "left-6" : "left-1")} />
+            </button>
+          </div>
+        </div>
+      </Card>
+      <Card>
+        <SectionHeader eyebrow="受限业务规划" title="Agent Planner 灰度实验" />
+        <div className="grid gap-4 px-5 pb-5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
+          <div className="max-w-3xl">
+            <div className="flex flex-wrap items-center gap-2">
+              <strong className="text-body font-semibold text-ink">复杂目标启用业务级规划，简单问析继续走固定快速链路</strong>
+              <StatusPill tone={plannerSetting.enabled ? "blue" : "gray"}>{plannerSetting.enabled ? `灰度 ${plannerSetting.rolloutPercent}%` : "仅基线链路"}</StatusPill>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-muted">
+              Planner 只能选择注册后的业务能力，SQL 仍必须经过只读、白名单、方言与成本校验。运行创建时会冻结实验变体和权限范围，可对照成功率、Token 与耗时。
+            </p>
+            {plannerError && <p className="mt-2 text-xs text-red">{plannerError}</p>}
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <ExperimentMetric label="基线组" value={plannerSetting.experiment?.baseline?.runs ?? 0} />
+            <ExperimentMetric label="Planner 组" value={plannerSetting.experiment?.planner?.runs ?? 0} />
+            <div className="flex rounded-control border border-line bg-surface-2 p-0.5" aria-label="Planner 灰度比例">
+              {[25, 50, 100].map((percent) => (
+                <button
+                  type="button"
+                  key={percent}
+                  disabled={plannerLoading || !plannerSetting.enabled}
+                  onClick={() => savePlannerSetting({ rolloutPercent: percent })}
+                  className={cn(
+                    "h-7 min-w-10 rounded-[7px] px-2 text-[10px] font-semibold transition-colors disabled:opacity-40",
+                    plannerSetting.rolloutPercent === percent ? "bg-white text-ink shadow-card" : "text-muted hover:text-ink",
+                  )}
+                >{percent}%</button>
+              ))}
+            </div>
+            <button
+              type="button"
+              disabled={plannerLoading}
+              onClick={() => savePlannerSetting({ enabled: !plannerSetting.enabled })}
+              aria-pressed={plannerSetting.enabled}
+              className={cn("relative h-6 w-11 rounded-full transition-colors disabled:opacity-50", plannerSetting.enabled ? "bg-primary" : "bg-line-strong")}
+            >
+              <i className={cn("absolute top-1 h-4 w-4 rounded-full bg-white shadow-card transition-[left]", plannerSetting.enabled ? "left-6" : "left-1")} />
             </button>
           </div>
         </div>

@@ -7,6 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.agent import runner as runner_service
 from app.agent import service as analysis_service
+from app.agent import settings as planner_settings_service
 from app.agent import usage as usage_service
 from app.agent import system_utility as system_utility_service
 from app.api import analysis as analysis_api
@@ -140,6 +141,7 @@ def analysis_session(monkeypatch):
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     monkeypatch.setattr(analysis_service, "PlatformSession", session_factory)
+    monkeypatch.setattr(planner_settings_service, "PlatformSession", session_factory)
     monkeypatch.setattr(usage_service, "PlatformSession", session_factory)
     monkeypatch.setattr(runner_service, "PlatformSession", session_factory)
     monkeypatch.setattr(system_utility_service, "PlatformSession", session_factory)

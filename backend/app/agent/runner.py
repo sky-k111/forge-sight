@@ -61,6 +61,17 @@ NODE_META = {
     "route_request": ("intent.route", 0, "判断问题类型"),
     "system_utility": ("system.utility", 1, "读取系统与数据范围"),
     "intent_guard": ("intent.guard", 1, "检查只读分析边界"),
+    "decide_planning_path": ("planner.route", 2, "选择快速路径或规划路径"),
+    "build_business_plan": ("planner.build", 3, "生成受限业务计划"),
+    "validate_business_plan": ("planner.validate", 4, "校验计划能力、依赖与预算"),
+    "select_business_step": ("planner.select", 5, "选择下一项业务能力"),
+    "authorize_capability": ("capability.authorize", 6, "校验能力权限与副作用"),
+    "invoke_business_capability": ("capability.invoke", 7, "执行业务能力"),
+    "record_business_observation": ("observation.record", 8, "记录结构化观察"),
+    "record_delegated_observation": ("observation.record", 8, "记录受治理子图观察"),
+    "evaluate_business_progress": ("planner.evaluate", 9, "判断继续、调整或结束"),
+    "revise_business_plan": ("planner.revise", 10, "有限调整业务计划"),
+    "finalize_business_plan": ("planner.finalize", 11, "汇总计划结果与限制"),
     "plan_tasks": ("intent.parse", 2, "理解并拆解业务问题"),
     "retrieve_memory": ("memory.retrieve", 3, "召回相关记忆"),
     "retrieve_skill": ("skill.retrieve", 3, "匹配分析技能"),
@@ -73,7 +84,15 @@ NODE_META = {
     "explain_result": ("result.explain", 7, "生成图表与结论"),
 }
 
-CHECKPOINT_NODES = {"plan_tasks", "retrieve_context", "validate_query", "execute_query", "explain_result"}
+CHECKPOINT_NODES = {
+    "build_business_plan", "validate_business_plan", "record_business_observation",
+    "record_delegated_observation", "revise_business_plan", "finalize_business_plan",
+    "plan_tasks", "retrieve_context", "validate_query", "execute_query", "explain_result",
+}
+PLANNER_LOOP_NODES = {
+    "select_business_step", "authorize_capability", "invoke_business_capability",
+    "record_business_observation", "record_delegated_observation", "evaluate_business_progress",
+}
 
 
 def _latest_call_id(run_id: str, task_id: str | None, step_key: str) -> str | None:
@@ -212,6 +231,26 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
         with PlatformSession() as session:
             run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
             row = session.query(AnalysisTask).filter_by(id=task.get("id")).first()
+            if row is None and task.get("id"):
+                row = AnalysisTask(
+                    id=task["id"],
+                    run_id=run.id,
+                    task_order=max(1, int(task.get("order") or 1)),
+                    title=str(task.get("title") or "计划分析")[:200],
+                    normalized_question=str(
+                        task.get("normalizedQuestion")
+                        or task.get("question")
+                        or state.get("analysis_question")
+                        or state.get("user_question")
+                        or ""
+                    ),
+                    mode=str(task.get("mode") or "planned"),
+                    analysis_type=str(task.get("analysisType") or "query"),
+                    status="pending",
+                    depends_on_json=list(task.get("dependsOn") or []),
+                    intent_json={"planStepId": state.get("active_plan_step_id")},
+                )
+                session.add(row)
             if row:
                 row.status = "running"
                 row.started_at = row.started_at or datetime.now()
@@ -261,11 +300,28 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
             run.status = "retrying"
         elif run.status == "retrying":
             run.status = "running"
+        if node in PLANNER_LOOP_NODES:
+            attempt = (
+                session.query(func.coalesce(func.max(AnalysisRunStep.attempt), 0))
+                .filter_by(run_id=run.id, task_scope=task_id or "run", step_key=step_key)
+                .scalar()
+                + 1
+            )
+        start_event_type = {
+            "build_business_plan": "planner.started",
+            "invoke_business_capability": "capability.started",
+        }.get(node, "step.started" if node != "prepare_retry" else "step.retrying")
         append_event(
             session,
             run,
-            "step.started" if node != "prepare_retry" else "step.retrying",
-            {"status": "running", "label": label, "attempt": attempt},
+            start_event_type,
+            {
+                "status": "running",
+                "label": label,
+                "attempt": attempt,
+                "capability": (state.get("active_plan_step") or {}).get("capability"),
+                "planStepId": state.get("active_plan_step_id"),
+            },
             task_id=task_id,
             step_key=step_key,
             attempt=attempt,
@@ -276,6 +332,10 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
         elif update.get("waiting_user"):
             status = "waiting_user"
         elif update.get("error"):
+            status = "failed"
+        capability_result = update.get("capability_result") or {}
+        observation = (update.get("observations") or [None])[-1] or {}
+        if capability_result.get("status") == "failed" or observation.get("status") == "failed":
             status = "failed"
         step = AnalysisRunStep(
             id=new_id("step"),
@@ -319,6 +379,67 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
                     )
             append_event(session, run, "tasks.planned", {"count": len(planned), "tasks": planned})
 
+        if node == "build_business_plan":
+            plan = update.get("plan") or {}
+            analysis_order = 0
+            for item in plan.get("steps") or []:
+                if item.get("capability") not in {"analysis.query_data", "modeling.propose"}:
+                    continue
+                analysis_order += 1
+                task_payload = (item.get("arguments") or {}).get("task") or {}
+                task_id_value = task_payload.get("id") or f"{run.id[:18]}-{analysis_order}"
+                if session.query(AnalysisTask.id).filter_by(id=task_id_value).first() is not None:
+                    continue
+                session.add(
+                    AnalysisTask(
+                        id=task_id_value,
+                        run_id=run.id,
+                        task_order=analysis_order,
+                        title=(task_payload.get("title") or item.get("purpose") or "计划分析")[:200],
+                        normalized_question=(
+                            task_payload.get("normalizedQuestion")
+                            or (item.get("arguments") or {}).get("question")
+                            or plan.get("goal")
+                            or ""
+                        ),
+                        mode="planned",
+                        analysis_type=(
+                            task_payload.get("analysisType")
+                            or ("modeling" if item.get("capability") == "modeling.propose" else "query")
+                        ),
+                        status="pending",
+                        depends_on_json=list(item.get("dependsOn") or []),
+                        intent_json={
+                            "planStepId": item.get("id"),
+                            "capability": item.get("capability"),
+                            "purpose": item.get("purpose"),
+                        },
+                    )
+                )
+            append_event(
+                session,
+                run,
+                "plan.created",
+                {
+                    "goal": plan.get("goal"),
+                    "revision": update.get("plan_revision", 1),
+                    "steps": plan.get("steps") or [],
+                    "budget": plan.get("budget") or {},
+                    "degraded": bool(update.get("planner_degraded")),
+                    "reason": update.get("planning_reason"),
+                },
+            )
+            if update.get("planner_degraded"):
+                append_event(
+                    session,
+                    run,
+                    "planner.degraded",
+                    {
+                        "reason": update.get("planning_reason") or "模型计划不可用，已切换确定性计划",
+                        "revision": update.get("plan_revision", 1),
+                    },
+                )
+
         if node == "intent_guard" and update.get("blocked"):
             business_session = session.query(AnalysisSession).filter_by(id=run.session_id).first()
             session.add(
@@ -332,7 +453,41 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
                 )
             )
 
+        observation_content = (update.get("observations") or [None])[-1]
+        if node in {"record_business_observation", "record_delegated_observation"} and observation_content:
+            observation_content = dict(observation_content)
+            artifact_query = session.query(AnalysisArtifact.id).filter_by(run_id=run.id)
+            if task_id:
+                artifact_query = artifact_query.filter_by(task_id=task_id)
+            evidence_refs = [
+                row[0]
+                for row in artifact_query.filter(
+                    AnalysisArtifact.type.in_([
+                        "context", "memory-context", "analysis-skill", "sql", "validation",
+                        "result", "conclusion", "modeling-proposal", "capability-result",
+                    ])
+                ).order_by(AnalysisArtifact.created_at).all()
+            ]
+            observation_content["artifactRefs"] = list(dict.fromkeys([
+                *(observation_content.get("artifactRefs") or []), *evidence_refs,
+            ]))
+
         artifact_map = {
+            "build_business_plan": ("agent-plan", {
+                "plan": update.get("plan"),
+                "revision": update.get("plan_revision", 1),
+                "degraded": update.get("planner_degraded", False),
+                "reason": update.get("planning_reason"),
+            }),
+            "validate_business_plan": ("plan-validation", update.get("plan_validation")),
+            "invoke_business_capability": ("capability-result", update.get("capability_result")),
+            "record_business_observation": ("capability-observation", observation_content),
+            "record_delegated_observation": ("capability-observation", observation_content),
+            "revise_business_plan": ("agent-plan-revision", {
+                "plan": update.get("plan"),
+                "revision": update.get("plan_revision"),
+                "replanCount": update.get("replan_count"),
+            }),
             "retrieve_memory": ("memory-context", update.get("memory_context")),
             "retrieve_skill": ("analysis-skill", update.get("skill_context")),
             "retrieve_context": ("context", update.get("semantic_context")),
@@ -364,16 +519,48 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
             step.output_refs_json = [artifact_id]
 
         event_type = {
-            "succeeded": "modeling.proposed" if node == "propose_modeling" else "step.completed",
-            "failed": "step.failed",
+            "succeeded": (
+                "modeling.proposed"
+                if node == "propose_modeling"
+                else {
+                    "validate_business_plan": "plan.validated",
+                    "invoke_business_capability": "capability.completed",
+                    "record_business_observation": "observation.recorded",
+                    "record_delegated_observation": "observation.recorded",
+                    "revise_business_plan": "plan.revised",
+                    "finalize_business_plan": "planner.completed",
+                }.get(node, "step.completed")
+            ),
+            "failed": "capability.failed" if node == "invoke_business_capability" else "step.failed",
             "blocked": "step.blocked",
             "waiting_user": "clarification.requested",
         }[status]
+        event_payload = {
+            "status": status,
+            "label": label,
+            "attempt": attempt,
+            "error": update.get("error"),
+        }
+        if node == "invoke_business_capability":
+            event_payload.update({
+                "capability": (state.get("active_plan_step") or {}).get("capability"),
+                "planStepId": state.get("active_plan_step_id"),
+                "summary": capability_result.get("summary"),
+                "reasonCode": capability_result.get("reasonCode"),
+            })
+        elif node in {"record_business_observation", "record_delegated_observation"}:
+            event_payload.update({
+                "capability": (observation_content or {}).get("capability"),
+                "planStepId": (observation_content or {}).get("stepId"),
+                "summary": (observation_content or {}).get("summary"),
+                "reasonCode": (observation_content or {}).get("reasonCode"),
+                "artifactRefs": (observation_content or {}).get("artifactRefs") or [],
+            })
         append_event(
             session,
             run,
             event_type,
-            {"status": status, "label": label, "attempt": attempt, "error": update.get("error")},
+            event_payload,
             task_id=task_id,
             step_key=step_key,
             attempt=attempt,
@@ -400,6 +587,7 @@ def _persist_interrupt(run_id: str, payload: dict[str, Any], state: dict) -> str
                 id=new_id("int"),
                 run_id=run.id,
                 task_id=task_id,
+                kind=payload.get("kind") or "clarification",
                 prompt_json=payload,
                 resume_node=resume_node,
             )
@@ -411,10 +599,11 @@ def _persist_interrupt(run_id: str, payload: dict[str, Any], state: dict) -> str
         task = session.query(AnalysisTask).filter_by(id=task_id).first() if task_id else None
         if task:
             task.status = "waiting"
+        interrupt_event = "approval.requested" if payload.get("kind") == "approval" else "clarification.requested"
         append_event(
             session,
             run,
-            "clarification.requested",
+            interrupt_event,
             {"interactionId": existing.id, **payload},
             task_id=task_id,
             step_key=resume_node,
@@ -1023,11 +1212,19 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
             "run.resumed" if is_resume else "run.started",
             {"status": "running", "interactionId": resolved_interaction.id if resolved_interaction else None},
         )
+        frozen_access = (run.budget_snapshot_json or {}).get("access") or {}
         initial = {
             "session_id": run.session_id,
             "run_id": run.id,
             "source_id": run.source_id,
-            "user_id": business_session.user_id if business_session else "local-test-user",
+            "tenant_id": frozen_access.get("tenantId") or (business_session.tenant_id if business_session else "tenant-default"),
+            "role": frozen_access.get("role") or "business",
+            "capability_scopes": list(frozen_access.get("capabilityScopes") or [
+                "analysis:read", "scope:read", "task:read",
+                "modeling:read", "modeling:draft", "modeling:predict",
+                "report:read", "report:draft", "investigation:read",
+            ]),
+            "user_id": frozen_access.get("userId") or (business_session.user_id if business_session else "local-test-user"),
             "user_question": message.content,
             "conversation_context": conversation_context,
             "memory_enabled": bool(run.memory_enabled),
@@ -1045,6 +1242,32 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
             "tasks": [],
             "task_index": 0,
             "task_results": [],
+            "planner_enabled": bool(
+                ((run.budget_snapshot_json or {}).get("planner") or {}).get(
+                    "enabled", settings.agent_planner_enabled
+                )
+            ),
+            "planner_model_enabled": bool(
+                ((run.budget_snapshot_json or {}).get("planner") or {}).get(
+                    "modelPlanningEnabled", settings.agent_planner_model_enabled
+                )
+            ),
+            "execution_path": "fast",
+            "planning_reason": "",
+            "plan": None,
+            "plan_validation": {},
+            "plan_revision": 0,
+            "active_plan_step_id": None,
+            "active_plan_step": None,
+            "capability_result": None,
+            "capability_calls": [],
+            "observations": [],
+            "replan_count": 0,
+            "capability_budget": {},
+            "pending_approval": None,
+            "progress_decision": {},
+            "finalization_reason": None,
+            "planner_degraded": False,
             "blocked": False,
             "waiting_user": False,
             "error": None,
