@@ -22,6 +22,8 @@ const SIDEBAR_MIN = 210;
 const SIDEBAR_MAX = 290;
 const SIDEBAR_DEFAULT = 252;
 const ANALYSIS_SESSION_KEY = "forgesight:analysis-session-id";
+const ANALYSIS_NEW_SESSION_KEY = "forgesight:analysis-new-session";
+const ANALYSIS_DRAFT_KEY = "forgesight:analysis-draft";
 const ANALYSIS_SESSION_SELECTED_EVENT = "forgesight:analysis-session-selected";
 
 export default function AppShell() {
@@ -37,7 +39,6 @@ export default function AppShell() {
         initials: (cachedUser.displayName || cachedUser.username).charAt(0),
       }
     : users[role];
-  const canSwitchAdmin = !cachedUser || cachedUser.role === "admin";
   const [collapsed, setCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
   const [evidenceOpen, setEvidenceOpen] = useState(true);
@@ -46,10 +47,11 @@ export default function AppShell() {
   const [sessions, setSessions] = useState(null);
   const [sessionsError, setSessionsError] = useState(null);
   const [activeSessionId, setActiveSessionId] = useState(null);
-  const [expandedItems, setExpandedItems] = useState(() => new Set(["analysis-center", "data-semantic-governance"]));
+  const [expandedItems, setExpandedItems] = useState(() => new Set(["data-semantic-governance"]));
   const [unreadCount, setUnreadCount] = useState(0);
   const [tenants, setTenants] = useState(() => cachedUser?.tenants ?? []);
   const [activeTenant, setActiveTenant] = useState(null);
+
 
   useEffect(() => {
     const activeParent = roleMenus[role]
@@ -160,11 +162,6 @@ export default function AppShell() {
     if (nextPage === "analysis") setEvidenceOpen(true);
   };
 
-  const switchRole = (nextRole) => {
-    setMobileNavOpen(false);
-    navigate(nextRole === "admin" ? routeByPage["admin-overview"] : routeByPage.overview);
-  };
-
   const switchTenant = (tenantId) => {
     if (!tenantId || tenantId === activeTenant?.id) return;
     setActiveTenantId(tenantId);
@@ -186,6 +183,18 @@ export default function AppShell() {
     } catch (error) {
       setSessionsError(error);
     }
+  };
+
+  const startFreshAnalysis = () => {
+    setSessionsError(null);
+    setActiveSessionId(null);
+    setMobileNavOpen(false);
+    window.sessionStorage.removeItem(ANALYSIS_SESSION_KEY);
+    window.sessionStorage.removeItem(ANALYSIS_DRAFT_KEY);
+    window.sessionStorage.setItem(ANALYSIS_NEW_SESSION_KEY, "1");
+    setEvidenceOpen(true);
+    navigate(routeByPage.analysis);
+    window.dispatchEvent(new CustomEvent(ANALYSIS_SESSION_SELECTED_EVENT, { detail: { newSession: true } }));
   };
 
   const deleteTask = async (sessionId) => {
@@ -237,6 +246,7 @@ export default function AppShell() {
         activeSessionId={activeSessionId}
         onNavigate={navigatePage}
         onCreateTask={createTask}
+        onStartAnalysis={startFreshAnalysis}
         onDeleteSession={deleteTask}
         onToggleDarkMode={() => setDarkMode((value) => !value)}
         onRetrySessions={() => refreshSessions()}
@@ -269,18 +279,16 @@ export default function AppShell() {
           page={page}
           user={user}
           evidenceOpen={evidenceOpen}
-          canSwitchAdmin={canSwitchAdmin}
           onOpenNavigation={() => setMobileNavOpen(true)}
           unreadCount={unreadCount}
           onOpenMessages={() => navigate(role === "admin" ? routeByPage["admin-messages"] : routeByPage.messages)}
-          onOpenMemory={() => navigate(routeByPage.memory)}
+          onOpenProfile={() => navigate(routeByPage.profile)}
           onToggleEvidence={() => setEvidenceOpen((value) => !value)}
-          onRoleChange={switchRole}
           activeTenant={activeTenant}
           tenants={tenants}
           onTenantChange={switchTenant}
         />
-        <main className={cn("min-h-0 flex-1", page === "analysis" ? "overflow-hidden" : "overflow-auto")}>
+        <main className={cn("app-main min-h-0 flex-1", page === "analysis" ? "overflow-hidden" : "overflow-auto")}>
           <Suspense fallback={<RouteSkeleton />}>
             <Outlet context={{ evidenceOpen, setEvidenceOpen, navigatePage, refreshSessions }} />
           </Suspense>
@@ -290,7 +298,7 @@ export default function AppShell() {
   );
 }
 
-function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessionsError, activeSessionId, onNavigate, onCreateTask, onDeleteSession, onSelectSession, onRetrySessions, onToggleDarkMode, onLogout, onToggle, onResizeStart, onResizeKeyDown, onResizeReset, mobileOpen, expandedItems, onToggleItem }) {
+function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessionsError, activeSessionId, onNavigate, onCreateTask, onStartAnalysis, onDeleteSession, onSelectSession, onRetrySessions, onToggleDarkMode, onLogout, onToggle, onResizeStart, onResizeKeyDown, onResizeReset, mobileOpen, expandedItems, onToggleItem }) {
   const [searchText, setSearchText] = useState("");
   const [openSessionMenuId, setOpenSessionMenuId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
@@ -301,6 +309,7 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
     [searchText, sessions],
   );
   const currentWidth = collapsed ? 82 : width;
+
 
   const removeSession = async (session) => {
     setDeletingSessionId(session.id);
@@ -364,7 +373,7 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
                   page={page}
                   collapsed={collapsed}
                   expanded={expandedItems.has(item.id)}
-                  onNavigate={onNavigate}
+                  onNavigate={item.id === "analysis" ? onStartAnalysis : onNavigate}
                   onToggle={onToggleItem}
                 />
               ))}
@@ -374,7 +383,7 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
       </nav>
 
       {role === "business" ? (
-        ["analysis", "sessions"].includes(page) ? <>
+        <>
           <div className="border-t border-line px-2 py-2.5">
             <Button variant="primary" className="sidebar-create-task relative h-10 w-full text-[13px]" onClick={onCreateTask} aria-label="发起分析">
               {collapsed ? (
@@ -491,7 +500,7 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
               )}
             </div>
           </div>
-        </> : null
+        </>
       ) : (
         !collapsed && (
           <div className="border-t border-line px-2 pb-2.5">
@@ -535,7 +544,6 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
             >
               <Icon name={darkMode ? "sun" : "moon"} size={15} />
             </button>
-            <span className="text-faint"><Icon name="more" size={16} /></span>
           </>
         )}
       </div>
@@ -661,29 +669,11 @@ function QueueItem({ dotClass, title, caption, count, onClick }) {
   );
 }
 
-function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, unreadCount, onToggleEvidence, onRoleChange, onOpenNavigation, onOpenMessages, onOpenMemory, activeTenant, tenants, onTenantChange }) {
+function Topbar({ page, user, evidenceOpen, unreadCount, onToggleEvidence, onOpenNavigation, onOpenMessages, onOpenProfile, activeTenant, tenants, onTenantChange }) {
   const meta = pageMeta[page] ?? pageMeta.overview;
-  const [accountOpen, setAccountOpen] = useState(false);
-  const accountMenuRef = useRef(null);
-
-  useEffect(() => {
-    if (!accountOpen) return undefined;
-    const closeOnOutsidePointer = (event) => {
-      if (!accountMenuRef.current?.contains(event.target)) setAccountOpen(false);
-    };
-    const closeOnEscape = (event) => {
-      if (event.key === "Escape") setAccountOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [accountOpen]);
 
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-line bg-surface/95 px-3 backdrop-blur md:gap-5 md:px-6">
+      <header className="app-topbar flex h-16 shrink-0 items-center justify-between gap-2 border-b border-line bg-surface/95 px-3 backdrop-blur md:gap-5 md:px-6">
       <div className="flex min-w-0 flex-1 items-center gap-2 md:gap-3">
         <button type="button" aria-label="打开导航" onClick={onOpenNavigation} className="grid h-8 w-8 shrink-0 cursor-pointer place-items-center rounded-control border border-line bg-surface text-muted md:hidden"><Icon name="menu" size={17} /></button>
         <h1 className="m-0 truncate text-lg font-semibold tracking-tight text-ink">{meta.title}</h1>
@@ -702,31 +692,6 @@ function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, unreadCount, o
             分析证据链
           </Button>
         )}
-        {!import.meta.env.PROD && <div className="flex items-center gap-0.5 rounded-control border border-line bg-surface-2 p-0.5" aria-label="切换工作区">
-          <button
-            type="button"
-            className={cn(
-              "flex h-7 cursor-pointer items-center gap-1.5 rounded-tag px-2.5 text-xs font-medium transition-colors",
-              role === "business" ? "bg-surface text-ink shadow-card" : "text-muted hover:text-ink",
-            )}
-            onClick={() => onRoleChange("business")}
-          >
-            <Icon name="user" size={14} />业务
-          </button>
-          <button
-            type="button"
-            disabled={!canSwitchAdmin}
-            title={canSwitchAdmin ? undefined : "当前账号无管理权限"}
-            className={cn(
-              "flex h-7 items-center gap-1.5 rounded-tag px-2.5 text-xs font-medium transition-colors",
-              role === "admin" ? "bg-surface text-ink shadow-card" : "text-muted hover:text-ink",
-              !canSwitchAdmin && "cursor-not-allowed opacity-55 hover:text-muted",
-            )}
-            onClick={() => onRoleChange("admin")}
-          >
-            <Icon name="admin" size={14} />管理
-          </button>
-        </div>}
         <button
           type="button"
           className="relative grid h-[34px] w-[34px] cursor-pointer place-items-center rounded-control border border-transparent text-muted transition-colors hover:border-line hover:bg-surface-2 hover:text-ink"
@@ -736,50 +701,15 @@ function Topbar({ role, page, user, evidenceOpen, canSwitchAdmin, unreadCount, o
           <Icon name="bell" />
           {unreadCount > 0 && <span className="absolute -right-1 -top-1 grid min-h-4 min-w-4 place-items-center rounded-full bg-critical px-1 text-[9px] font-bold text-white ring-2 ring-surface">{unreadCount > 99 ? "99+" : unreadCount}</span>}
         </button>
-        <div ref={accountMenuRef} className="relative">
-          <button
-            type="button"
-            aria-label="打开账户菜单"
-            aria-haspopup="menu"
-            aria-expanded={accountOpen}
-            onClick={() => setAccountOpen((value) => !value)}
-            className={cn(
-              "grid h-9 w-9 cursor-pointer place-items-center rounded-full border text-xs font-bold transition-colors",
-              accountOpen
-                ? "border-primary/30 bg-primary-soft text-primary"
-                : "border-transparent bg-surface-3 text-ink-2 hover:border-line-strong hover:bg-surface-2",
-            )}
-            title={`${user.name} · ${user.title}`}
-          >
-            {user.initials}
-          </button>
-          {accountOpen && (
-            <div role="menu" aria-label="账户菜单" className="absolute right-0 top-11 z-50 w-64 overflow-hidden rounded-card border border-line bg-surface shadow-card-hover">
-              <div className="border-b border-line px-4 py-3">
-                <strong className="block truncate text-sm font-semibold text-ink">{user.name}</strong>
-                <span className="mt-0.5 block truncate text-xs text-muted">{user.title}</span>
-              </div>
-              {role === "business" && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setAccountOpen(false);
-                    onOpenMemory();
-                  }}
-                  className="group flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-none"
-                >
-                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-control bg-primary-soft text-primary"><Icon name="memory" size={16} /></span>
-                  <span className="min-w-0 flex-1">
-                    <strong className="block text-xs font-semibold text-ink">分析偏好与记忆</strong>
-                    <small className="mt-0.5 block text-[10px] leading-4 text-muted">查看自动学习内容与隐私控制</small>
-                  </span>
-                  <Icon name="chevron" size={14} className="text-faint transition-transform group-hover:translate-x-0.5" />
-                </button>
-              )}
-            </div>
-          )}
-        </div>
+        <button
+          type="button"
+          aria-label="打开个人主页"
+          onClick={onOpenProfile}
+          className="grid h-9 w-9 cursor-pointer place-items-center rounded-full border border-transparent bg-surface-3 text-xs font-bold text-ink-2 transition-[transform,color,background-color,border-color] hover:-translate-y-0.5 hover:border-line-strong hover:bg-surface-2 hover:text-ink active:translate-y-0"
+          title={`${user.name} · ${user.title}`}
+        >
+          {user.initials}
+        </button>
       </div>
     </header>
   );

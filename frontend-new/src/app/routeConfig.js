@@ -4,6 +4,7 @@ export const routeByPage = {
   sessions: "/workspace/sessions",
   modeling: "/workspace/modeling",
   memory: "/workspace/memory",
+  profile: "/workspace/profile",
   reports: "/workspace/reports",
   alerts: "/workspace/alerts",
   messages: "/workspace/messages",

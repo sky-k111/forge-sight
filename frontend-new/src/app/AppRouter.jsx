@@ -26,6 +26,7 @@ const SessionHistoryPage = lazy(
 );
 const ModelingPage = lazy(() => import("../pages/business/ModelingPage"));
 const MemoryPage = lazy(() => import("../pages/business/MemoryPage"));
+const ProfilePage = lazy(() => import("../pages/business/ProfilePage"));
 const ReportsPage = lazy(() => import("../pages/business/ReportsPage"));
 const AlertsPage = lazy(() => import("../pages/business/AlertsPage"));
 const AlertDetailPage = lazy(() => import("../pages/business/AlertDetailPage"));
@@ -163,6 +164,7 @@ export default function AppRouter() {
               />
               <Route path="workspace/modeling" element={<ModelingPage />} />
               <Route path="workspace/memory" element={<MemoryPage />} />
+              <Route path="workspace/profile" element={<ProfilePage />} />
               <Route path="workspace/reports" element={<ReportsPage />} />
               <Route path="workspace/alerts" element={<AlertsPage />} />
               <Route path="workspace/alerts/:alertId" element={<AlertDetailPage />} />

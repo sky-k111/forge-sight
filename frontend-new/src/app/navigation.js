@@ -4,16 +4,8 @@ export const roleMenus = {
       label: "业务工作台",
       items: [
         { id: "overview", label: "今日工作台", icon: "overview" },
-        {
-          id: "analysis-center",
-          label: "分析与调查",
-          icon: "analysis",
-          children: [
-            { id: "analysis", label: "发起分析", icon: "question" },
-            { id: "sessions", label: "调查记录", icon: "history" },
-            { id: "modeling", label: "智能建模", icon: "model" },
-          ],
-        },
+        { id: "analysis", label: "智能分析", icon: "analysis" },
+        { id: "modeling", label: "智能建模", icon: "model" },
         { id: "reports", label: "报告与交接", icon: "report" },
         { id: "alerts", label: "智能异常监测", icon: "alert" },
       ],
@@ -69,7 +61,7 @@ export const pageMeta = {
   },
   analysis: {
     eyebrow: "业务人员工作区",
-    title: "发起分析",
+    title: "智能分析",
     subtitle: "用业务语言提出问题，获得可追溯的分析结果",
   },
   sessions: {
@@ -136,6 +128,11 @@ export const pageMeta = {
     eyebrow: "个人设置",
     title: "分析偏好与记忆",
     subtitle: "管理 ForgeSight 自动整理的偏好与调查经验",
+  },
+  profile: {
+    eyebrow: "个人空间",
+    title: "个人主页",
+    subtitle: "管理登录方式、外部账号与个人分析记忆",
   },
   "skill-governance": {
     eyebrow: "管理员工作区",
