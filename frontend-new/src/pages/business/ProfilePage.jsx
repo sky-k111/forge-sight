@@ -9,6 +9,7 @@ import {
   unbindFeishu,
 } from "../../api/auth";
 import { getMemorySettings, listMemories } from "../../api/memory";
+import { getLlmSettings, updateLlmSettings } from "../../api/modelSettings";
 import { Button, Card, EmptyState, ErrorNotice, Icon, Modal, PageFrame, RouteSkeleton, StatusPill } from "../../components/ui";
 import { getCachedUser } from "../../lib/auth";
 
@@ -60,20 +61,23 @@ export default function ProfilePage() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [llmSetupOpen, setLlmSetupOpen] = useState(false);
+  const [llmSettings, setLlmSettings] = useState({ configured: false, baseUrl: "", model: "", maskedKey: "" });
 
   const load = async () => {
     setLoading(true);
     setError("");
-    const [dingtalk, feishu, settings, memoryItems] = await Promise.all([
+    const [dingtalk, feishu, settings, memoryItems, llm] = await Promise.all([
       getDingTalkBinding().catch(() => null),
       getFeishuBinding().catch(() => null),
       getMemorySettings().catch(() => null),
       listMemories().catch(() => []),
+      getLlmSettings().catch(() => null),
     ]);
     setBindings({ dingtalk: dingtalk ?? { bound: false }, feishu: feishu ?? { bound: false } });
     setMemorySettings(settings && !Array.isArray(settings) ? settings : { enabled: false });
     const normalizedMemories = Array.isArray(memoryItems) ? memoryItems : memoryItems?.items ?? [];
     setMemories(normalizedMemories.filter((item) => !["deleted", "superseded"].includes(item.status)));
+    if (llm) setLlmSettings(llm);
     setLoading(false);
   };
 
@@ -173,8 +177,8 @@ export default function ProfilePage() {
                 </div>
               </div>
               <div className="profile-llm-card__meta mt-4 grid gap-2 sm:grid-cols-2">
-                <div><span>密钥状态</span><strong>不在浏览器展示</strong></div>
-                <div><span>生效方式</span><strong>保存后重启后端</strong></div>
+                <div><span>密钥状态</span><strong>{llmSettings.configured ? `已配置 ${llmSettings.maskedKey || ""}` : "尚未配置"}</strong></div>
+                <div><span>生效方式</span><strong>保存后立即生效</strong></div>
               </div>
             </div>
             <Button variant="primary" onClick={() => setLlmSetupOpen(true)} className="justify-self-start lg:justify-self-end">
@@ -223,7 +227,16 @@ export default function ProfilePage() {
           </div>
         </Card>
       </section>
-      <LlmKeySetupModal open={llmSetupOpen} onClose={() => setLlmSetupOpen(false)} onCopied={() => setNotice("LLM 配置模板已复制，请在服务端环境中完成配置。")} />
+      <LlmKeySetupModal
+        open={llmSetupOpen}
+        settings={llmSettings}
+        onClose={() => setLlmSetupOpen(false)}
+        onSaved={(next) => {
+          setLlmSettings(next);
+          setNotice("LLM 配置已保存，当前 API 进程已立即生效。");
+          setLlmSetupOpen(false);
+        }}
+      />
     </PageFrame>
   );
 }
@@ -238,54 +251,78 @@ function ProfileCardHeader({ eyebrow, title, description, icon, compact = false 
   );
 }
 
-function LlmKeySetupModal({ open, onClose, onCopied }) {
+function LlmKeySetupModal({ open, settings: initialSettings, onClose, onSaved }) {
+  const [form, setForm] = useState({ baseUrl: "", model: "", apiKey: "", clearKey: false });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setForm({ baseUrl: initialSettings.baseUrl || "", model: initialSettings.model || "", apiKey: "", clearKey: false });
+    setError("");
+  }, [open, initialSettings.baseUrl, initialSettings.model]);
+
+  const save = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const payload = { baseUrl: form.baseUrl, model: form.model, clearKey: form.clearKey };
+      if (!form.clearKey && form.apiKey.trim()) payload.apiKey = form.apiKey.trim();
+      const next = await updateLlmSettings(payload);
+      onSaved(next);
+    } catch (reason) {
+      setError(reason.message || "LLM 配置保存失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const copyTemplate = async () => {
     const template = [
-      "LLM_BASE_URL=https://api.deepseek.com",
-      "LLM_MODEL=deepseek-chat",
+      `LLM_BASE_URL=${form.baseUrl || "https://api.deepseek.com"}`,
+      `LLM_MODEL=${form.model || "deepseek-chat"}`,
       "LLM_API_KEY=请填入你的服务商密钥",
     ].join("\n");
     try {
       await navigator.clipboard.writeText(template);
-      onCopied();
     } catch {
-      // 剪贴板不可用时仍保留可复制的文本块，避免阻断配置流程。
+      // 浏览器剪贴板不可用时不阻断直接配置流程。
     }
   };
 
   return (
     <Modal open={open} onClose={onClose} label="配置 LLM Key" maxWidth={560}>
-      <div className="p-5 sm:p-6">
+      <form className="p-5 sm:p-6" onSubmit={save}>
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
             <span className="profile-llm-modal__icon" aria-hidden="true"><Icon name="cpu" size={18} /></span>
             <div>
               <span className="text-[10px] font-semibold tracking-[0.12em] text-primary">MODEL SERVICE / SECURE SETUP</span>
               <h2 className="mt-1 text-lg font-semibold tracking-tight text-ink">配置 LLM Key</h2>
-              <p className="mt-1 text-xs leading-5 text-muted">LLM Key 属于服务端凭据，请在部署环境中配置并由后端统一使用。</p>
+              <p className="mt-1 text-xs leading-5 text-muted">在浏览器中填写后由后端安全接收，保存后当前服务立即生效。</p>
             </div>
           </div>
           <button type="button" aria-label="关闭配置 LLM Key" onClick={onClose} className="grid h-8 w-8 shrink-0 cursor-pointer place-items-center rounded-control text-muted transition-colors hover:bg-surface-2 hover:text-ink"><Icon name="close" size={16} /></button>
         </div>
         <div className="profile-llm-modal__notice mt-5 flex items-start gap-2.5 rounded-control border px-3 py-3 text-xs leading-5">
           <Icon name="shield" size={16} />
-          <span>为避免密钥进入浏览器缓存、日志或分析记录，个人主页不直接收集明文 Key。配置只在后端生效。</span>
+          <span>明文 Key 只用于本次提交，页面不会回显已保存的 Key；后端仅返回脱敏状态。</span>
         </div>
         <div className="mt-5 grid gap-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <strong className="block text-sm font-semibold text-ink">服务端环境变量</strong>
-              <span className="mt-0.5 block text-[11px] text-muted">编辑 <code className="rounded-tag bg-surface-2 px-1 py-0.5 font-mono text-[10px] text-ink-2">backend/.env</code> 后重启 API 服务</span>
-            </div>
-            <StatusPill tone="gray">仅服务端可见</StatusPill>
-          </div>
-          <pre className="overflow-x-auto rounded-control border border-line bg-surface-2 px-3 py-3 font-mono text-[11px] leading-6 text-ink-2"><code>{"LLM_BASE_URL=https://api.deepseek.com\nLLM_MODEL=deepseek-chat\nLLM_API_KEY=请填入你的服务商密钥"}</code></pre>
+          <label className="grid gap-1.5 text-xs font-semibold text-ink">服务地址<input className="input-control" value={form.baseUrl} onChange={(event) => setForm((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://api.deepseek.com" required /></label>
+          <label className="grid gap-1.5 text-xs font-semibold text-ink">模型名称<input className="input-control" value={form.model} onChange={(event) => setForm((current) => ({ ...current, model: event.target.value }))} placeholder="deepseek-chat" required /></label>
+          <label className="grid gap-1.5 text-xs font-semibold text-ink">API Key<span className="text-[11px] font-normal text-muted">{initialSettings.configured ? `当前已配置：${initialSettings.maskedKey || "已脱敏"}，留空可保持不变` : "首次配置请输入服务商密钥"}</span><input className="input-control font-mono" type="password" value={form.apiKey} onChange={(event) => setForm((current) => ({ ...current, apiKey: event.target.value, clearKey: false }))} placeholder={initialSettings.configured ? "留空保持当前 Key" : "sk-…"} autoComplete="new-password" /></label>
+          {initialSettings.configured && <label className="flex items-center gap-2 text-xs text-muted"><input type="checkbox" checked={form.clearKey} onChange={(event) => setForm((current) => ({ ...current, clearKey: event.target.checked, apiKey: "" }))} />清除当前 Key</label>}
+          {error && <p className="text-xs text-red" role="alert">{error}</p>}
+          <details className="rounded-control border border-line bg-surface-2 px-3 py-2 text-[11px] text-muted"><summary className="cursor-pointer font-semibold text-ink-2">复制为服务端环境变量（可选）</summary><pre className="mt-2 overflow-x-auto font-mono leading-6 text-ink-2"><code>{`LLM_BASE_URL=${form.baseUrl || "https://api.deepseek.com"}\nLLM_MODEL=${form.model || "deepseek-chat"}\nLLM_API_KEY=请填入你的服务商密钥`}</code></pre></details>
         </div>
         <div className="mt-6 flex flex-wrap justify-end gap-2 border-t border-line pt-4">
-          <Button variant="ghost" onClick={copyTemplate}>复制配置模板</Button>
-          <Button variant="primary" onClick={onClose}>完成</Button>
+          <Button variant="ghost" type="button" onClick={copyTemplate}>复制配置模板</Button>
+          <Button variant="secondary" type="button" onClick={onClose}>完成</Button>
+          <Button variant="primary" type="submit" disabled={saving}>{saving ? "保存中…" : "保存并启用"}</Button>
         </div>
-      </div>
+      </form>
     </Modal>
   );
 }
