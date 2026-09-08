@@ -258,6 +258,14 @@ export default function AnalysisPage() {
           { id: run.id, role: "assistant", run, animate: false },
         ];
       });
+      // 刷新会话时同样应用“图表调整”：把调整运行作用到它前面最近一张带图表的运行。
+      items = items.reduce((acc, it) => {
+        const withIt = [...acc, it];
+        if (it.role === "assistant" && it.run?.chartAdjustment) {
+          return applyAdjustmentToMessageList(withIt, it.run.chartAdjustment, it.run.id);
+        }
+        return withIt;
+      }, []);
       if (!sessionView.branchContext && snapshots.length === 0 && (sessionView.messages ?? []).length > 0) {
         items = sessionView.messages.map((message) => {
           const created = new Date(message.createdAt);
