@@ -137,8 +137,14 @@ def split_sql(script: str) -> list[str]:
 
 def execute_sql_file(engine, path: Path) -> int:
     statements = split_sql(path.read_text(encoding="utf-8-sig"))
+    is_mysql = engine.dialect.name == "mysql"
     with engine.begin() as connection:
         for statement in statements:
+            if is_mysql:
+                # PyMySQL treats a literal "%" as a format placeholder even when
+                # no parameters are bound (SQLAlchemy passes an empty tuple), so
+                # double any literal percent to avoid "unsupported format character".
+                statement = statement.replace("%", "%%")
             connection.exec_driver_sql(statement)
     return len(statements)
 
