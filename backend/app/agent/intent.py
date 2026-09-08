@@ -216,7 +216,7 @@ def build_request_route(
     for index, segment in enumerate(segments):
         local_kind = classify_request_kind(segment, conversation_context)
         kind = labels.get(index, local_kind)
-        if kind not in {"analysis", "conversation", "report", "utility"}:
+        if kind not in {"analysis", "conversation", "report", "utility", "chart_adjustment"}:
             kind = "unknown"
         classified.append({"index": index, "text": segment, "kind": kind})
 
@@ -224,12 +224,15 @@ def build_request_route(
     conversation_parts = [item["text"] for item in classified if item["kind"] == "conversation"]
     report_parts = [item["text"] for item in classified if item["kind"] == "report"]
     utility_parts = [item["text"] for item in classified if item["kind"] == "utility"]
+    adjust_parts = [item["text"] for item in classified if item["kind"] == "chart_adjustment"]
     unknown_parts = [item for item in classified if item["kind"] == "unknown"]
     route_kind = (
         "mixed"
-        if analysis_parts and (conversation_parts or report_parts or utility_parts)
+        if analysis_parts and (conversation_parts or report_parts or utility_parts or adjust_parts)
         else "analysis"
         if analysis_parts
+        else "chart_adjustment"
+        if adjust_parts
         else "report"
         if report_parts
         else "utility"
@@ -243,6 +246,8 @@ def build_request_route(
         "reportSegments": [item for item in classified if item["kind"] == "report"],
         "utilitySegments": [item for item in classified if item["kind"] == "utility"],
         "utilityQuestion": "；".join(utility_parts),
+        "chartAdjustmentQuestion": "；".join(adjust_parts),
+        "chartAdjustmentSegments": [item for item in classified if item["kind"] == "chart_adjustment"],
         "analysisQuestion": "；".join(analysis_parts),
         "conversationResponse": build_conversation_response(conversation_parts, mixed=bool(analysis_parts)),
     }

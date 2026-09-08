@@ -12,9 +12,12 @@ class Settings(BaseSettings):
 
     llm_base_url: str = "https://api.deepseek.com"
     llm_api_key: str = ""
-    llm_model: str = "deepseek-v4-flash"
+    llm_model: str = "deepseek-chat"
     llm_timeout_seconds: int = 60
     llm_proxy_url: str = ""
+    # 瞬时 LLM 失败（空内容/网络/限流）在步骤内做受限重试，降低偶发失败对端到端结果的影响。
+    llm_retry_max_attempts: int = 3
+    llm_retry_delay_seconds: float = 0.8
 
     # 语义检索使用独立的 OpenAI-compatible Embeddings 服务。默认关闭，避免在
     # 未建索引或模型服务不可用时影响现有规则检索主链路。

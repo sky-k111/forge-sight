@@ -38,6 +38,7 @@ _TREND_QUESTION_RE = re.compile(r"(?:趋势|变化|走势|折线|逐月|每月|�
 _RANK_QUESTION_RE = re.compile(r"(?:最高|最低|排名|排行|Top|top|前[0-9一二三四五六七八九十]+)")
 _COMPARE_QUESTION_RE = re.compile(r"(?:对比|比较|与.*相比|同时|差异|和.*的?关系)")
 _HEATMAP_INDEXED = ("heatmap", "matrix", "热力图", "矩阵图")
+_MULTI_GROUP_RE = re.compile(r"(?:分别|各自|分别按照|同时按|同时看|两个维度|多个维度|并且按|都想|都要)")
 
 
 def _finite_number(value: Any) -> bool:
@@ -272,6 +273,7 @@ def decide_chart(
         return d
 
     chart_rows = [_to_row(row) for row in rows[:display_limit]]
+    chart_rows = _compress_month_labels(chart_rows, x_key)
 
     if corr:
         first, second = values[0], values[1] if len(values) > 1 else None
@@ -287,23 +289,11 @@ def decide_chart(
             "note": _note(rows, display_limit),
         }
 
-    if heatmap and len(categorical_cols(columns, numeric)) >= 2:
-        cats = categorical_cols(columns, numeric)
-        row_key, col_key = cats[0], cats[1]
+    heat_dims = _dimension_columns(columns, rows)
+    if heatmap and len(heat_dims) >= 2 and (values or numeric):
+        row_key, col_key = heat_dims[0], heat_dims[1]
         vkey = value_key or (values[0] if values else None)
-        return {
-            "type": "heatmap",
-            "kicker": "二维交叉分析 · 实时生成",
-            "rows": _distinct(chart_rows, row_key),
-            "columns": _distinct(chart_rows, col_key),
-            "cells": _heatmap_cells(chart_rows, row_key, col_key, vkey),
-            "rowName": row_key,
-            "columnName": col_key,
-            "valueName": vkey,
-            "valueKey": vkey,
-            "legend": [],
-            "note": _note(rows, display_limit),
-        }
+        return _build_heatmap(row_key, col_key, vkey, columns, rows, row_count, truncated)
 
     if share:
         vkey = value_key or (values[0] if values else None)
@@ -370,6 +360,222 @@ def decide_chart(
     }
 
 
+def _dimension_columns(columns: list[str], rows: list[list[Any]]) -> list[str]:
+    """真正的维度列 = 非指标值的所有列（类别 + 数值化的时间/编码维度，如 YEARWEEK 周数）。"""
+    values = _value_columns(columns, rows)
+    return [c for c in columns if c not in values]
+
+
+def _label_for_dim_value(key: str, raw: Any) -> str:
+    s = str(raw)
+    if s.endswith(".0"):
+        s = s[:-2]
+    if not _TIME_DIM_RE.match(str(key)):
+        return s
+    # YEARWEEK(202623) -> 23周；年月(202606) -> 2026-06；纯年(2026) -> 2026
+    if re.fullmatch(r"\d{6}", s):
+        return f"{s[4:]}周"
+    if re.fullmatch(r"\d{6,8}", s):
+        return f"{s[0:4]}-{s[4:6]}"
+    return s
+
+
+_MONTH_AXIS_RE = re.compile(r"^(?:((?:\d{4})[-/](?:\d{1,2}))|(\d{6}))$")
+
+
+def _month_label_parts(raw: Any) -> tuple[int, int] | None:
+    s = str(raw)
+    m = _MONTH_AXIS_RE.match(s)
+    if not m:
+        return None
+    if m.group(1):
+        year, month = m.group(1).split("-")
+        return int(year), int(month)
+    digits = m.group(2)
+    if len(digits) == 6 and digits.isdigit():
+        return int(digits[0:4]), int(digits[4:6])
+    return None
+
+
+def _compress_month_labels(data: list[dict[str, Any]], x_key: str | None) -> list[dict[str, Any]]:
+    """同一年的 YYYY-MM / YYYYMM 横轴值压缩为 'N月'，避免柱/折线横轴重复年份。
+
+    仅在所有月份都属于同一年时才压缩；跨年（如今年 vs 去年）保留完整格式。
+    """
+    if not data or not x_key:
+        return data
+    parsed: list[tuple[int, int] | None] = [_month_label_parts(row.get(x_key)) for row in data]
+    if not any(p is not None for p in parsed):
+        return data
+    years = {p[0] for p in parsed if p is not None}
+    if len(years) != 1:
+        return data
+    out: list[dict[str, Any]] = []
+    for item, row in zip(parsed, data):
+        if item is None:
+            out.append(row)
+            continue
+        new_row = dict(row)
+        new_row[x_key] = f"{item[1]}月"
+        out.append(new_row)
+    return out
+
+
+def _group_label(series_dims: list[str], row: dict[str, Any]) -> str:
+    return " · ".join(_label_for_dim_value(k, row.get(k, "")) for k in series_dims)
+
+
+def _auto_y_domain_multi(data: list[dict[str, Any]], value_keys: list[str], unit: str) -> dict[str, Any]:
+    values: list[float] = []
+    for row in data:
+        for key in value_keys:
+            if _finite_number(row.get(key)):
+                values.append(float(row[key]))
+    if not values:
+        return {}
+    minimum, maximum = min(values), max(values)
+    rate_scale = unit == "%" and 0 <= minimum <= 100
+    rng = maximum - minimum
+    padding = max(rng * 0.18, rate_scale and 0.1 or 0) if rng > 0 else max(rate_scale and 0.1 or 1, abs(maximum) * 0.05)
+    raw_min = max(0, minimum - padding) if rate_scale else minimum - padding
+    raw_max = min(100, maximum + padding) if rate_scale else maximum + padding
+    step = _axis_step(max(raw_max - raw_min, 1e-9) / 4)
+    dom_min = __import__("math").floor(raw_min / step) * step
+    dom_max = __import__("math").ceil(raw_max / step) * step
+    if rate_scale:
+        dom_min = max(0, dom_min)
+        dom_max = min(100, dom_max)
+    if dom_min == dom_max:
+        dom_max = dom_min + step
+    precision = 3 if step < 0.01 else 2 if step < 0.1 else 1 if step < 1 else 0
+    return {
+        "yDomain": [round(dom_min, precision + 1), round(dom_max, precision + 1)],
+        "unit": unit,
+        "yPrecision": precision,
+    }
+
+
+def _build_heatmap(row_dim: str, col_dim: str, vkey: str | None, columns: list[str], rows: list[list[Any]], row_count: int, truncated: bool) -> dict[str, Any]:
+    numeric = _numeric_columns(columns, rows)
+    chart_rows: list[dict[str, Any]] = []
+    for entry in rows:
+        d = dict(zip(columns, entry))
+        for k in set(numeric):
+            try:
+                d[k] = float(d[k])
+            except (TypeError, ValueError):
+                pass
+        chart_rows.append(d)
+    return {
+        "type": "heatmap",
+        "kicker": "二维交叉分析 · 实时生成",
+        "rows": _distinct(chart_rows, row_dim),
+        "columns": _distinct(chart_rows, col_dim),
+        "cells": _heatmap_cells(chart_rows, row_dim, col_dim, vkey),
+        "rowName": row_dim,
+        "columnName": col_dim,
+        "valueName": vkey,
+        "valueKey": vkey,
+        "legend": [],
+        "note": _note(rows, max(len(rows), 1)),
+    }
+
+
+def _pivot_chart(x_key: str, series_dims: list[str], value_key: str, columns: list[str], rows: list[list[Any]], row_count: int, truncated: bool, chart_type: str) -> dict[str, Any]:
+    display_limit = 36 if chart_type == "line" else 24
+    numeric = _numeric_columns(columns, rows)
+    chart_rows: list[dict[str, Any]] = []
+    for entry in rows[:display_limit]:
+        d = dict(zip(columns, entry))
+        for k in set(numeric):
+            try:
+                d[k] = float(d[k])
+            except (TypeError, ValueError):
+                pass
+        chart_rows.append(d)
+    x_order = list(dict.fromkeys(str(row.get(x_key, "")) for row in chart_rows))
+    series_order = list(dict.fromkeys(_group_label(series_dims, row) for row in chart_rows))
+    cell: dict[tuple[str, str], Any] = {}
+    for row in chart_rows:
+        cell[(str(row.get(x_key, "")), _group_label(series_dims, row))] = row.get(value_key)
+    data: list[dict[str, Any]] = []
+    for xv in x_order:
+        entry: dict[str, Any] = {x_key: _label_for_dim_value(x_key, xv)}
+        for label in series_order:
+            v = cell.get((xv, label))
+            entry[label] = float(v) if _finite_number(v) else None
+        data.append(entry)
+    data = _compress_month_labels(data, x_key)
+    series = [{"key": label, "name": label} for label in series_order]
+    unit = "%" if _is_rate_key(value_key) else ""
+    y = _auto_y_domain_multi(data, series_order, unit) if data else {}
+    base = {
+        "data": data,
+        "xKey": x_key,
+        "valueKey": value_key,
+        "unit": unit,
+        "note": _note(rows, display_limit),
+        **y,
+    }
+    if chart_type == "line":
+        base["type"] = "line"
+        base["kicker"] = "趋势分析 · 实时生成"
+        base["series"] = series
+    else:
+        base["type"] = "bar"
+        base["kicker"] = "查询结果 · 实时生成"
+        base["bars"] = series
+    return base
+
+
+def decide_charts(
+    *,
+    analysis_type: str,
+    requested_chart: str | None,
+    question: str,
+    group_by: list[str],
+    metric_name: str,
+    columns: list[str],
+    rows: list[list[Any]],
+    row_count: int,
+    truncated: bool,
+    metric_key: str | None = None,
+) -> list[dict[str, Any]]:
+    """图表契约：多维/热力图场景可产出多张图；否则回退到单图 decide_chart。"""
+    values = _value_columns(columns, rows) or _numeric_columns(columns, rows)
+    dims = _dimension_columns(columns, rows)
+    want_heat = requested_chart in ("heatmap", "matrix") or any(k in question for k in _HEATMAP_INDEXED)
+    if want_heat and len(dims) >= 2 and values:
+        vkey = metric_key or _pick_value_column(values, metric_name, question, False) or values[0]
+        return [_build_heatmap(dims[0], dims[1], vkey, columns, rows, row_count, truncated)]
+    if len(values) == 1 and len(dims) >= 2:
+        vkey = metric_key or values[0]
+        time_dims = [d for d in dims if _TIME_DIM_RE.match(str(d))]
+        if _MULTI_GROUP_RE.search(str(question)):
+            charts: list[dict[str, Any]] = []
+            for d in dims:
+                others = [x for x in dims if x != d]
+                base_type = requested_chart if requested_chart in ("line", "bar") else ("line" if _TIME_DIM_RE.match(str(d)) else "bar")
+                charts.append(_pivot_chart(d, others, vkey, columns, rows, row_count, truncated, base_type))
+            return charts
+        x = time_dims[0] if time_dims else dims[0]
+        others = [c for c in dims if c != x]
+        base_type = requested_chart if requested_chart in ("line", "bar") else ("line" if _TIME_DIM_RE.match(str(x)) else "bar")
+        return [_pivot_chart(x, others, vkey, columns, rows, row_count, truncated, base_type)]
+    return [decide_chart(
+        analysis_type=analysis_type,
+        requested_chart=requested_chart,
+        question=question,
+        group_by=group_by,
+        metric_name=metric_name,
+        columns=columns,
+        rows=rows,
+        row_count=row_count,
+        truncated=truncated,
+        metric_key=metric_key,
+    )]
+
+
 def categorical_cols(columns: list[str], numeric: list[str]) -> list[str]:
     return [c for c in columns if c not in numeric]
 
@@ -426,7 +632,7 @@ def build_interpretation(
     truncated = bool(execution.get("truncated") or False)
     metric = metric_resolution or {}
     task = task or {}
-    chart = decide_chart(
+    charts = decide_charts(
         analysis_type=str(task.get("analysisType") or "query"),
         requested_chart=task.get("requestedChart") or None,
         question=str(task.get("normalizedQuestion") or task.get("originalQuestion") or ""),
@@ -438,11 +644,13 @@ def build_interpretation(
         truncated=truncated,
         metric_key=(metric.get("chartValueKey") or None),
     )
+    chart = charts[0] if charts else None
     return {
         "kind": INTERPRETATION_KIND,
         "version": INTERPRETATION_VERSION,
+        "charts": charts,
         "chart": chart,
-        "kpis": _build_kpis(columns, rows, metric, chart),
+        "kpis": _build_kpis(columns, rows, metric, chart or {}),
     }
 
 
@@ -482,7 +690,7 @@ def _fmt_kpi(value: Any, key: str) -> str:
     formatted = f"{num:,.2f}"
     return f"{formatted}%" if _is_rate_key(key) else formatted
 
-_LLM_CHART_TYPES = {"bar", "line", "donut"}
+_LLM_CHART_TYPES = {"bar", "line", "donut", "heatmap"}
 
 
 def chart_contract_is_ambiguous(
@@ -502,8 +710,11 @@ def chart_contract_is_ambiguous(
     """
     if not chart:
         return True
-    # 多指标对比/相关/热力由规则负责（combo/scatter/heatmap），不升级，避免选错单轴丢多序列。
+    # 多维度（>=2 个维度 + 单指标）由确定性规则生成多张图/热力图，不再用 LLM 拆成单轴；
+    # 多指标对比/相关/热力也由规则负责，避免选错单轴丢多序列。
     if chart.get("type") in ("combo", "scatter", "heatmap", "donut"):
+        return False
+    if len(_dimension_columns(columns, rows)) >= 2 and _value_columns(columns, rows):
         return False
     numeric = _numeric_columns(columns, rows)
     vk = chart.get("valueKey") or (chart.get("bars") or [{}])[0].get("key")
@@ -543,7 +754,7 @@ def build_visual_contract_prompt(
         "你是图表参数选择器。根据用户问题、指标口径与查询结果列，选出最合适的图表配置。"
         "只能从下方给定的列名中选值，不要虚构列名。"
         "只输出一个 JSON，不要任何解释或代码块："
-        '{"chartType":"bar|line|donut","xKey":"<列名>","valueKey":"<列名>","unit":"%或空"}'
+        '{"chartType":"bar|line|donut|heatmap","xKey":"<列名>","valueKey":"<列名>","unit":"%或空"}'
         f"用户问题：{question}"
         f"指标名称：{metric_name}（口径：{metric.get('name') or '—'}；来源：{metric.get('source') or '—'}）"
         f"结果列：{json.dumps(columns, ensure_ascii=False)}"
@@ -552,6 +763,7 @@ def build_visual_contract_prompt(
         "- xKey 是要做横轴/维度的列（时间、类别、名称均可；周/月/季度优先于年份）。"
         "- valueKey 是要画到纵轴的指标列，必须是数值列。"
         "- 若问题含“占比/构成/比例/份额”，chartType 用 donut；含“趋势/走势/变化/折线”用 line；其余用 bar。"
+        "- 若问题含“交叉/矩阵/热力图”，且存在两个维度列，chartType 用 heatmap。"
         "- unit 是纵轴单位，比率列给 \"%\"，其余给 \"\"。"
     )
 
@@ -599,6 +811,11 @@ def refine_chart_contract(
     # valueKey 必须是真正的指标列，不能是时间/类别/编码这类维度；
     # xKey 交由 LLM 按语义决定（可能是我方规则未覆盖的列名），只要与 valueKey 不同即可。
     if _is_dimension_label(value_key, numeric):
+        return None
+    if chart_type == "heatmap":
+        dims = _dimension_columns(columns, rows)
+        if len(dims) >= 2:
+            return _build_heatmap(dims[0], dims[1], value_key, columns, rows, len(rows), False)
         return None
     unit = str(payload.get("unit") or "").strip()
     if unit not in ("", "%"):

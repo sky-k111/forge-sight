@@ -43,6 +43,7 @@ from app.gateway.cost_guard import ExplainCheckResult, explain_readonly
 from app.gateway.executor import ExecutionResult, execute_readonly
 from app.gateway.sql_validator import validate_sql
 from app.llm import provider
+from app.llm.provider import LLMError
 from app.retrieval.service import build_context_package
 
 CHAT_REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
@@ -60,6 +61,7 @@ TERMINAL_STATUSES = {"succeeded", "failed", "blocked", "cancelled"}
 NODE_META = {
     "route_request": ("intent.route", 0, "判断问题类型"),
     "system_utility": ("system.utility", 1, "读取系统与数据范围"),
+    "apply_chart_adjustment": ("chart.adjust", 2, "自动调整图表展示"),
     "intent_guard": ("intent.guard", 1, "检查只读分析边界"),
     "decide_planning_path": ("planner.route", 2, "选择快速路径或规划路径"),
     "build_business_plan": ("planner.build", 3, "生成受限业务计划"),
@@ -107,52 +109,76 @@ def _latest_call_id(run_id: str, task_id: str | None, step_key: str) -> str | No
         return row[0] if row else None
 
 
+def _llm_error_is_transient(exc: Exception) -> bool:
+    """瞬时 LLM 失败（空内容/网络/限流）才在步骤内重试；配置、鉴权错误不重试放大成本。"""
+    msg = str(exc)
+    if "未配置" in msg or "API_KEY" in msg or "api_key" in msg:
+        return False
+    if any(tag in msg for tag in ("AuthenticationError", "PermissionDeniedError", "BadRequestError")):
+        return False
+    lowered = msg.lower()
+    return "返回空内容" in msg or "调用失败" in msg or "timeout" in lowered or "timed out" in lowered
+
+
 def _tracked_generate(state: dict, step_key: str, system: str, user: str) -> str:
     task_id = (state.get("task") or {}).get("id")
-    retry_of = _latest_call_id(state["run_id"], task_id, step_key) if state.get("retry_count", 0) else None
-    call_id = usage.start_call(
-        state["run_id"],
-        provider="openai-compatible",
-        model=settings.llm_model,
-        step_key=step_key,
-        task_id=task_id,
-        retry_of_call_id=retry_of,
-    )
-    started = time.perf_counter()
-    try:
-        max_tokens = {
-            "intent.route": 500,
-            "conversation.reply": 600,
-            "result.explain": 1200,
-        }.get(step_key, 2400)
-        response = provider.chat_completion(
-            system,
-            user,
-            temperature=0.1,
-            max_tokens=max_tokens,
+    max_tokens = {
+        "intent.route": 500,
+        "conversation.reply": 600,
+        "result.explain": 1200,
+    }.get(step_key, 2400)
+    max_attempts = max(1, int(settings.llm_retry_max_attempts))
+    base_delay = max(0.0, float(settings.llm_retry_delay_seconds))
+    previous_call_id: str | None = None
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        retry_of = previous_call_id or (
+            _latest_call_id(state["run_id"], task_id, step_key) if state.get("retry_count") else None
         )
-    except Exception:
+        call_id = usage.start_call(
+            state["run_id"],
+            provider="openai-compatible",
+            model=settings.llm_model,
+            step_key=step_key,
+            task_id=task_id,
+            retry_of_call_id=retry_of,
+        )
+        started = time.perf_counter()
+        try:
+            response = provider.chat_completion(
+                system,
+                user,
+                temperature=0.1,
+                max_tokens=max_tokens,
+            )
+        except Exception as exc:  # noqa: BLE001
+            usage.finish_call(
+                call_id,
+                status="failed",
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                error_code="LLM_UNAVAILABLE",
+            )
+            previous_call_id = call_id
+            last_error = exc
+            if attempt < max_attempts and _llm_error_is_transient(exc):
+                time.sleep(base_delay * attempt)
+                continue
+            raise
+        u = response.usage
         usage.finish_call(
             call_id,
-            status="failed",
+            status="succeeded",
             latency_ms=int((time.perf_counter() - started) * 1000),
-            error_code="LLM_UNAVAILABLE",
+            input_tokens=u.input_tokens,
+            cached_input_tokens=u.cached_input_tokens,
+            output_tokens=u.output_tokens,
+            reasoning_tokens=u.reasoning_tokens,
+            total_tokens=u.total_tokens,
+            provider_request_id=response.provider_request_id,
+            usage_raw=u.raw,
         )
-        raise
-    u = response.usage
-    usage.finish_call(
-        call_id,
-        status="succeeded",
-        latency_ms=int((time.perf_counter() - started) * 1000),
-        input_tokens=u.input_tokens,
-        cached_input_tokens=u.cached_input_tokens,
-        output_tokens=u.output_tokens,
-        reasoning_tokens=u.reasoning_tokens,
-        total_tokens=u.total_tokens,
-        provider_request_id=response.provider_request_id,
-        usage_raw=u.raw,
-    )
-    return response.content
+        return response.content
+    raise last_error if last_error else LLMError("LLM 调用失败")
 
 
 def _execute_for_source(sql: str, source_id: int) -> ExecutionResult:
@@ -517,6 +543,7 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
             ),
             "validate_query": ("validation", update.get("validation")),
             "execute_query": ("result", update.get("execution")),
+            "apply_chart_adjustment": ("chart-adjustment", update.get("chart_adjustment")),
             "explain_result": (
                 "conclusion",
                 {
@@ -1093,12 +1120,12 @@ def execute_inline_route(run_id: str) -> dict:
     unknown = local_route["unknownSegments"]
     system, user = _route_model_prompt(unknown, context)
     try:
-        labels, responses = _model_route_decision(
+        labels, responses, specs = _model_route_decision(
             _tracked_generate(state, "intent.route", system, user),
             unknown,
         )
     except Exception:  # noqa: BLE001 - let the worker retry ambiguous routing later
-        labels, responses = {}, {}
+        labels, responses, specs = {}, {}, {}
 
     routed = build_request_route(
         state["user_question"],
@@ -1111,7 +1138,7 @@ def execute_inline_route(run_id: str) -> dict:
     # requests and do not send it through SQL retrieval first.
     if routed.get("reportSegments") and not routed.get("analysisQuestion"):
         return execute_inline_report_clarification(run_id)
-    if not labels or routed["kind"] in {"analysis", "mixed"}:
+    if not labels or routed["kind"] in {"analysis", "mixed", "chart_adjustment"}:
         with PlatformSession() as session:
             run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
             if run.status in TERMINAL_STATUSES or run.lease_owner != "inline-conversation":

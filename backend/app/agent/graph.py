@@ -22,6 +22,7 @@ from app.agent.interpretation import (
     build_visual_contract_prompt,
     chart_contract_is_ambiguous,
     refine_chart_contract,
+    _dimension_columns,
     _build_kpis as rebuild_interpretation_kpis,
 )
 from app.agent.intent import build_intent_plan, build_request_route
@@ -35,6 +36,16 @@ from app.config import settings
 from app.gateway.executor import ExecutionResult
 from app.gateway.connectors import get_adapter
 from app.gateway.sql_validator import SqlCheckResult, validate_dialect_compatibility
+
+def _dimension_columns_for_explain(execution: dict[str, Any]) -> list[str]:
+    """给结论助手展示真实维度列，供其用行值作标签。"""
+    columns = list(execution.get("columns") or [])
+    rows = list(execution.get("rows") or [])
+    try:
+        return _dimension_columns(columns, rows)
+    except Exception:  # noqa: BLE001
+        return []
+
 
 WRITE_TERMS = (
     "删除", "修改", "更新", "写入", "插入", "新增记录", "建表", "删表", "清空",
@@ -52,6 +63,9 @@ _VISUAL_CONTRACT_SYSTEM = (
 def _maybe_refine_visual_contract(state, execution, interpretation, resolution, deps, question):
     """规则拿不准时，用一次受限 LLM 调用来选定图表/维度契约，失败则回退规则结果。"""
     if not settings.visual_contract_llm_enabled:
+        return interpretation
+    # 确定性已产出多张图（多维度/热力图），不再用 LLM 拆成单轴。
+    if len(interpretation.get("charts") or []) > 1:
         return interpretation
     chart = interpretation.get("chart")
     columns = list(execution.get("columns") or [])
@@ -73,6 +87,7 @@ def _maybe_refine_visual_contract(state, execution, interpretation, resolution, 
         return interpretation
     interpretation = dict(interpretation)
     interpretation["chart"] = refined
+    interpretation["charts"] = [refined]
     interpretation["kpis"] = rebuild_interpretation_kpis(columns, rows, resolution or {}, refined)
     interpretation["chart_source"] = "llm"
     return interpretation
@@ -862,19 +877,20 @@ def _clarification_answers(response: Any, fields: list[dict[str, Any]]) -> dict[
 
 def _model_route_decision(
     raw: str, unknown_segments: list[dict[str, Any]]
-) -> tuple[dict[int, str], dict[int, str]]:
+) -> tuple[dict[int, str], dict[int, str], dict[int, dict[str, Any]]]:
     fenced = re.search(r"```(?:json)?\s*(.*?)```", str(raw), flags=re.IGNORECASE | re.DOTALL)
     candidate = (fenced.group(1) if fenced else str(raw)).strip()
     try:
         decoded = json.loads(candidate)
     except json.JSONDecodeError:
-        return {item["index"]: "conversation" for item in unknown_segments}, {}
+        return {item["index"]: "conversation" for item in unknown_segments}, {}, {}
     items = decoded.get("segments", decoded) if isinstance(decoded, dict) else decoded
     if not isinstance(items, list):
-        return {item["index"]: "conversation" for item in unknown_segments}, {}
+        return {item["index"]: "conversation" for item in unknown_segments}, {}, {}
     allowed_indices = {item["index"] for item in unknown_segments}
     labels: dict[int, str] = {}
     responses: dict[int, str] = {}
+    specs: dict[int, dict[str, Any]] = {}
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -883,19 +899,22 @@ def _model_route_decision(
         except (TypeError, ValueError):
             continue
         kind = str(item.get("kind", "")).lower()
-        if index in allowed_indices and kind in {"analysis", "conversation", "report"}:
+        if index in allowed_indices and kind in {"analysis", "conversation", "report", "chart_adjustment"}:
             labels[index] = kind
             response = str(item.get("response") or "").strip()
-            if kind == "conversation" and response:
+            if kind in {"conversation", "chart_adjustment"} and response:
                 responses[index] = response[:800]
+            if kind == "chart_adjustment" and isinstance(item.get("spec"), dict):
+                specs[index] = item["spec"]
     for item in unknown_segments:
         labels.setdefault(item["index"], "conversation")
-    return labels, responses
+    return labels, responses, specs
 
 
 def _route_model_prompt(
     unknown_segments: list[dict[str, Any]],
     conversation_context: list[dict[str, str]],
+    chart_context: str | None = None,
 ) -> tuple[str, str]:
     system = (
         "你是 ForgeSight，面向制造业数据底座的智能问析 Agent。你的角色是帮助企业用户理解生产、"
@@ -908,12 +927,18 @@ def _route_model_prompt(
         "不要在路由阶段查询数据。"
         "conversation=不需要企业数据的正常对话。对 conversation 应以 ForgeSight 身份自然、简洁地回应，"
         "可以正常交流，但不得假装已经查询过企业数据；必要时再引导用户提出业务问题。"
-        "仅输出 JSON：{\"segments\":[{\"index\":0,\"kind\":\"analysis|conversation|report\","
-        "\"response\":\"仅 conversation 填写的中文回答\"}]}。"
+        "chart_adjustment=某条消息是针对上一张/当前图表的调整指令，而不是新的数据查询。"
+        "例如“横坐标能不能就一个 2026”“纵坐标改成百分比”“横轴换成按周”“不要重复年份”“改成折线图”。"
+        "对 chart_adjustment 不要查询数据；response 用简短中文说明已自动调整，"
+        "并用 spec 结构化表达调整，如 {\"axis\":\"x\",\"granularity\":\"year\"}、"
+        "{\"axis\":\"y\",\"format\":\"percent\"} 或 {\"chartType\":\"line\"}；未指明时 axis 默认 \"x\"。"
+        "仅输出 JSON：{\"segments\":[{\"index\":0,\"kind\":\"analysis|conversation|report|chart_adjustment\","
+        "\"response\":\"仅 conversation/chart_adjustment 填写的中文回答\",\"spec\":{}}]}。"
     )
     user = json.dumps(
         {
             "recentConversation": conversation_context[-4:],
+            "chartContext": chart_context or "",
             "segments": [
                 {"index": item["index"], "text": item["text"]}
                 for item in unknown_segments
@@ -922,6 +947,58 @@ def _route_model_prompt(
         ensure_ascii=False,
     )
     return system, user
+
+
+_GRANULARITY_LABEL = {"year": "年", "month": "月", "week": "周", "quarter": "季度", "day": "日"}
+_CHART_TYPE_LABEL = {"bar": "柱状图", "line": "折线图", "donut": "饼图", "heatmap": "热力图", "combo": "柱线组合"}
+
+
+def _chart_adjustment_message(spec: dict[str, Any]) -> str:
+    axis = "横轴" if str(spec.get("axis", "x")) in ("x", "横", "横轴") else "纵轴"
+    granularity = spec.get("granularity")
+    chart_type = spec.get("chartType")
+    bits: list[str] = []
+    if granularity:
+        label = _GRANULARITY_LABEL.get(str(granularity), str(granularity))
+        bits.append("去掉横轴重复年份（按月展示）" if str(granularity) == "year" else f"{axis}改为按{label}展示")
+    if chart_type:
+        label = _CHART_TYPE_LABEL.get(str(chart_type), str(chart_type))
+        bits.append(f"切换为{label}")
+    if spec.get("format") == "percent":
+        bits.append("纵轴改为百分比")
+    if not bits:
+        return "已按你的要求自动调整当前图表展示，无需重新查询数据。"
+    return f"已自动调整当前图表（{'；'.join(bits)}），无需重新查询数据。"
+
+
+def _build_chart_adjustment(
+    route: dict[str, Any], responses: dict[int, str], specs: dict[int, dict[str, Any]]
+) -> tuple[dict[str, Any], str]:
+    segs = route.get("chartAdjustmentSegments") or []
+    spec: dict[str, Any] = {}
+    message = ""
+    for item in segs:
+        idx = item["index"]
+        if idx in specs:
+            spec.update(specs[idx])
+        msg = (responses.get(idx) or "").strip()
+        if msg:
+            message = msg
+    instruction = route.get("chartAdjustmentQuestion") or ""
+    # 用户可见消息用确定性模板，避免 LLM 对“聚合到单个年份”等过度承诺；
+    # 模型回复仅作为原始说明存进 note，供证据链参考。
+    message = _chart_adjustment_message(spec)
+    payload: dict[str, Any] = {
+        "action": "adjust_current_chart",
+        "instruction": instruction,
+        "axis": spec.get("axis", "x"),
+        "granularity": spec.get("granularity"),
+        "chartType": spec.get("chartType"),
+        "format": spec.get("format"),
+        "note": message or None,
+        "message": message,
+    }
+    return payload, message
 
 
 def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
@@ -937,10 +1014,11 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             int(index): response
             for index, response in (state.get("preclassified_route_responses") or {}).items()
         }
+        conversation_context = state.get("conversation_context") or []
         route = build_request_route(
             state["user_question"],
             preclassified_labels,
-            conversation_context=state.get("conversation_context") or [],
+            conversation_context=conversation_context,
         )
         model_responses = [
             preclassified_responses[item["index"]]
@@ -950,13 +1028,18 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         if model_responses:
             route["conversationResponse"] = "\n\n".join(model_responses)
         unknown = route["unknownSegments"]
+        responses: dict[int, str] = {}
+        specs: dict[int, dict[str, Any]] = {}
         if unknown:
-            system, user = _route_model_prompt(
-                unknown,
-                state.get("conversation_context") or [],
-            )
+            last_user_text = ""
+            for item in reversed(conversation_context):
+                if item.get("role") == "user":
+                    last_user_text = str(item.get("content") or "")
+                    break
+            chart_context = f"上一张图表对应的用户问题：{last_user_text[:200]}" if last_user_text else ""
+            system, user = _route_model_prompt(unknown, conversation_context, chart_context)
             try:
-                labels, responses = _model_route_decision(
+                labels, responses, specs = _model_route_decision(
                     deps.generate_text(state, "intent.route", system, user),
                     unknown,
                 )
@@ -965,10 +1048,11 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                 # SQL rather than being silently promoted to an executable analysis.
                 labels = {item["index"]: "conversation" for item in unknown}
                 responses = {}
+                specs = {}
             route = build_request_route(
                 state["user_question"],
                 labels,
-                state.get("conversation_context") or [],
+                conversation_context,
             )
             model_responses = [
                 responses[item["index"]]
@@ -977,6 +1061,18 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             ]
             if model_responses:
                 route["conversationResponse"] = "\n\n".join(model_responses)
+        if route["kind"] == "chart_adjustment":
+            payload, message = _build_chart_adjustment(route, responses, specs)
+            return {
+                "intent_kind": "chart_adjustment",
+                "analysis_question": "",
+                "direct_response": message,
+                "chart_adjustment": payload,
+                "utility_question": "",
+                "request_segments": route["segments"],
+                "blocked": False,
+                "error": None,
+            }
         return {
             "intent_kind": route["kind"],
             "analysis_question": route["analysisQuestion"],
@@ -995,6 +1091,11 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         existing = str(state.get("direct_response") or "").strip()
         combined = "\n\n".join(item for item in (existing, response) if item)
         return {"direct_response": combined}
+
+    def apply_chart_adjustment(state: AnalysisState) -> dict:
+        payload = state.get("chart_adjustment") or {}
+        message = payload.get("message") or "已按你的要求自动调整当前图表展示，无需重新查询数据。"
+        return {"direct_response": message, "chart_adjustment": payload}
 
     def intent_guard(state: AnalysisState) -> dict:
         lowered = state.get("analysis_question", state["user_question"]).lower()
@@ -2099,11 +2200,15 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         system = (
             "你是制造业数据分析助手。仅根据查询结果和已确认指标口径给出简洁结论；"
             "不得编造结果中没有的数字，空结果应明确说明无数据。"
+            "逐条罗列结果时，每条前面的标签必须是该行维度列的真实取值（例如 \"1月: 2,070,718\"、\"产线A: 98.2%\"）。"
+            "严禁把用户的问题文本或图表要求（如 \"柱状图\"、\"我想要看图表\"）当作数据行标签；"
+            "若结果含维度列（月份/周数/产线/产品等），一律使用维度列的值作标签。"
         )
         user = (
             f"问题：{state.get('task', {}).get('normalizedQuestion') or state['user_question']}\n"
             f"指标：{json.dumps(state['semantic_context'].get('metrics', []), ensure_ascii=False)}\n"
             f"本次口径解析：{json.dumps(state.get('metric_resolution', {}), ensure_ascii=False)}\n"
+            f"维度列：{json.dumps(_dimension_columns_for_explain(execution), ensure_ascii=False)}\n"
             f"结果：{json.dumps(preview, ensure_ascii=False, default=str)}"
         )
         try:
@@ -2182,6 +2287,8 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         return {"task_results": results, "task_index": state.get("task_index", 0) + 1}
 
     def after_route(state: AnalysisState) -> str:
+        if state.get("chart_adjustment"):
+            return "apply_chart_adjustment"
         if state.get("utility_question"):
             return "system_utility"
         return END if not state.get("analysis_question") else "intent_guard"
@@ -2263,6 +2370,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
     graph = StateGraph(AnalysisState)
     graph.add_node("route_request", route_request)
     graph.add_node("system_utility", system_utility)
+    graph.add_node("apply_chart_adjustment", apply_chart_adjustment)
     graph.add_node("intent_guard", intent_guard)
     graph.add_node("decide_planning_path", decide_planning_path)
     graph.add_node("build_business_plan", build_business_plan)
@@ -2289,6 +2397,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
     graph.add_node("advance_task", advance_task)
     graph.add_edge(START, "route_request")
     graph.add_conditional_edges("route_request", after_route)
+    graph.add_conditional_edges("apply_chart_adjustment", lambda _state: END)
     graph.add_conditional_edges("system_utility", after_utility)
     graph.add_conditional_edges("intent_guard", after_guard)
     graph.add_conditional_edges("decide_planning_path", after_planning_decision)

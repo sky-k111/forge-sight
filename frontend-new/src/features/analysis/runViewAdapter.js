@@ -95,6 +95,13 @@ function detailFor(step, artifact) {
         content.metricResolution?.source === "agent_inferred" ? "Agent 临时推导口径" : "企业已发布口径",
       ];
     }
+  } else if (artifact?.type === "chart-adjustment") {
+    const bit = [];
+    if (content?.granularity) bit.push(`横轴聚合到${content.granularity}`);
+    if (content?.chartType) bit.push(`切换为${content.chartType}`);
+    if (content?.format === "percent") bit.push("纵轴改为百分比");
+    detail.body = bit.length ? `Agent 选择“调整当前图表”（${bit.join("；")}），未执行新的数据查询。` : "Agent 选择“调整当前图表”，未执行新的数据查询。";
+    detail.tags = ["不触发 SQL", "仅调整展示", `指令：${content?.instruction ?? "图表调整"}`].slice(0, 3);
   }
   if (step.status === "failed" || step.status === "blocked") {
     const costGateReason = artifact?.type === "validation" ? content?.costGate?.reason : "";
@@ -137,6 +144,30 @@ function dateAxisValue(value) {
 function clampPrecision(digits) {
   if (!Number.isFinite(digits)) return 2;
   return Math.max(0, Math.min(6, Math.round(digits)));
+}
+
+const MONTH_AXIS_RE = /^(\d{4})[-/](\d{1,2})$/;
+const YYYYMM_RE = /^(\d{6})$/;
+
+export function compressMonthAxis(chart) {
+  if (!chart || !Array.isArray(chart.data) || !chart.xKey) return chart;
+  const xKey = chart.xKey;
+  const parsed = chart.data.map((row) => {
+    const raw = String(row?.[xKey] ?? "");
+    const dashed = raw.match(MONTH_AXIS_RE);
+    if (dashed) return { year: Number(dashed[1]), month: Number(dashed[2]) };
+    if (YYYYMM_RE.test(raw)) return { year: Number(raw.slice(0, 4)), month: Number(raw.slice(4, 6)) };
+    return null;
+  });
+  if (!parsed.some(Boolean)) return chart;
+  const years = new Set(parsed.filter(Boolean).map((p) => p.year));
+  if (years.size !== 1) return chart;
+  const data = chart.data.map((row, index) => {
+    const p = parsed[index];
+    if (!p) return row;
+    return { ...row, [xKey]: `${p.month}月` };
+  });
+  return { ...chart, data };
 }
 
 function hydrateChart(chart) {
@@ -292,17 +323,19 @@ export function adaptAnalysisRun(snapshot) {
       return orderFor(a, 0) - orderFor(b, 0);
     });
   const charts = interpretations
-    .map((item) => {
+    .flatMap((item) => {
       const content = item.content ?? {};
-      let next = content.chart ? hydrateChart(content.chart) : null;
-      if (next && !next.title) {
-        const task = tasks.find((t) => t.id === item.taskId);
-        const taskTitle = (task?.title ?? "").trim();
-        next = { ...next, title: taskTitle || (next.xKey ? `按${next.xKey}查看` : "查询结果") };
-      }
-      return next;
-    })
-    .filter(Boolean);
+      const rawCharts = content.charts?.length ? content.charts : (content.chart ? [content.chart] : []);
+      return rawCharts.map((raw) => {
+        let next = raw ? hydrateChart(raw) : null;
+        if (next && !next.title) {
+          const task = tasks.find((t) => t.id === item.taskId);
+          const taskTitle = (task?.title ?? "").trim();
+          next = { ...next, title: taskTitle || (next.xKey ? `按${next.xKey}查看` : "查询结果") };
+        }
+        return next;
+      }).filter(Boolean);
+    });
   const chart = charts.length ? charts.at(-1) : buildChart(snapshot, execution);
   const lastInterpKpis = interpretations.at(-1)?.content?.kpis;
   const fallbackKpis = buildBusinessKpis(execution, chart);
@@ -377,6 +410,7 @@ export function adaptAnalysisRun(snapshot) {
       allowCustom: interactionPrompt.allowCustom,
     } : null,
     error: businessError,
+    chartAdjustment: artifacts.find((item) => item.type === "chart-adjustment")?.content ?? null,
     plan,
     planDetails,
     planner: {

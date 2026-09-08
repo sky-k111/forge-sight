@@ -18,7 +18,7 @@ import {
   submitAnalysisRun,
   subscribeAnalysisRun,
 } from "../../features/analysis/api";
-import { adaptAnalysisRun } from "../../features/analysis/runViewAdapter";
+import { adaptAnalysisRun, compressMonthAxis } from "../../features/analysis/runViewAdapter";
 import AnalysisAdjustmentPanel from "../../features/analysis/AnalysisAdjustmentPanel";
 import { buildTracePath, getTraceFitTransform } from "./traceGraphLayout";
 import { waitForAgentThinking } from "./analysisThinking";
@@ -1337,7 +1337,7 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
   const [feedback, setFeedback] = useState("");
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const chart = run.chart;
-  const charts = run.charts?.length ? run.charts : (chart ? [chart] : []);
+  const charts = (run.charts?.length ? run.charts : (chart ? [chart] : [])).map(compressMonthAxis);
   const tableRequested = run.tasks?.some((task) => (task.requestedChart ?? task.intent?.requestedChart) === "table");
   const [showTable, setShowTable] = useState(tableRequested || !chart);
   const sqlCode = run.planDetails?.query?.code;
