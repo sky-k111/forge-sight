@@ -422,4 +422,24 @@ describe("chart axis adjustments", () => {
     expect(out.type).toBe("line");
     expect(out.data).toEqual([{ month: "2026", v: 12 }]);
   });
+
+  test("aggregateYearAxis uses fallback year when x values are month-only labels", () => {
+    const chart = {
+      type: "bar", xKey: "month", valueKey: "total_output",
+      data: [{ month: "1月", total_output: 100 }, { month: "2月", total_output: 200 }, { month: "7月", total_output: 50 }],
+      bars: [{ key: "total_output", name: "total_output" }],
+    };
+    const out = aggregateYearAxis(chart, "2026");
+    expect(out.data).toEqual([{ month: "2026", total_output: 350 }]);
+  });
+
+  test("applyChartAdjustment aggregates month-only chart to year from instruction", () => {
+    const chart = {
+      type: "bar", xKey: "month", valueKey: "v",
+      data: [{ month: "1月", v: 5 }, { month: "2月", v: 7 }],
+      bars: [{ key: "v", name: "v" }],
+    };
+    const out = applyChartAdjustment(chart, { granularity: "year", instruction: "横坐标能不能就一个 2026" });
+    expect(out.data).toEqual([{ month: "2026", v: 12 }]);
+  });
 });

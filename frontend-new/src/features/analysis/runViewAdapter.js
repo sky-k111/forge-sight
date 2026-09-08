@@ -180,12 +180,10 @@ function yearOf(value) {
 }
 
 
-export function aggregateYearAxis(chart) {
+export function aggregateYearAxis(chart, fallbackYear = null) {
   if (!chart || !Array.isArray(chart.data) || !chart.xKey) return chart;
   const xKey = chart.xKey;
   const years = chart.data.map((row) => yearOf(row?.[xKey]));
-  if (!years.some(Boolean)) return chart;
-  // 只有当下钻到月/周/日等子粒度时才聚合；若已是年粒度则保持原样。
   const valueKeys = new Set();
   (chart.bars ?? []).forEach((b) => valueKeys.add(b.key));
   (chart.series ?? []).forEach((s) => valueKeys.add(s.key));
@@ -194,18 +192,30 @@ export function aggregateYearAxis(chart) {
       if (k !== xKey && typeof row[k] === "number") valueKeys.add(k);
     }));
   }
-  const distinctYears = [...new Set(years.filter(Boolean))];
-  const data = distinctYears.map((y) => {
-    const row = { [xKey]: y };
+  const sumRows = (rows) => {
+    const row = {};
     valueKeys.forEach((k) => {
       let sum = 0; let count = 0;
-      chart.data.forEach((r, i) => {
-        if (years[i] === y && typeof r?.[k] === "number") { sum += r[k]; count += 1; }
-      });
+      rows.forEach((r) => { if (typeof r?.[k] === "number") { sum += r[k]; count += 1; } });
       row[k] = count ? Number(sum.toFixed(2)) : undefined;
     });
     return row;
-  });
+  };
+  let data;
+  if (years.some(Boolean)) {
+    // 横轴仍含年份（如 2026-01 / 2025-12）：按年分组汇总。
+    const distinctYears = [...new Set(years.filter(Boolean))];
+    data = distinctYears.map((y) => {
+      const rows = chart.data.filter((_, i) => years[i] === y);
+      return { [xKey]: y, ...sumRows(rows) };
+    });
+  } else if (fallbackYear) {
+    // 数据已被压缩成“月度无年份”标签（如 1月..7月），但指令给出目标年份：
+    // 把所有月份求和成一根该年份柱，满足“横坐标就一个 2026”的诉求。
+    data = [{ [xKey]: String(fallbackYear), ...sumRows(chart.data) }];
+  } else {
+    return chart;
+  }
   const values = data.flatMap((row) => [...valueKeys].map((k) => row[k]).filter((v) => typeof v === "number"));
   const max = values.length ? Math.max(...values) : 0;
   const next = { ...chart, data, note: chart.note };
@@ -218,7 +228,10 @@ export function aggregateYearAxis(chart) {
 export function applyChartAdjustment(chart, adjustment = {}) {
   if (!chart) return chart;
   let next = chart;
-  if (adjustment.granularity === "year") next = aggregateYearAxis(next);
+  if (adjustment.granularity === "year") {
+    const fallbackYear = String(adjustment.instruction ?? "").match(/(?:19|20)\d{2}/)?.[0] ?? null;
+    next = aggregateYearAxis(next, fallbackYear);
+  }
   const target = adjustment.chartType;
   if ((target === "line" || target === "bar" || target === "combo" || target === "donut") && next.type !== target) {
     next = switchChartType(next, target);
