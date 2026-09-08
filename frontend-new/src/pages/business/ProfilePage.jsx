@@ -281,7 +281,7 @@ function LlmKeySetupModal({ open, settings: initialSettings, onClose, onSaved })
   const copyTemplate = async () => {
     const template = [
       `LLM_BASE_URL=${form.baseUrl || "https://api.deepseek.com"}`,
-      `LLM_MODEL=${form.model || "deepseek-chat"}`,
+      `LLM_MODEL=${form.model || "deepseek-v4-flash"}`,
       "LLM_API_KEY=请填入你的服务商密钥",
     ].join("\n");
     try {
@@ -311,11 +311,11 @@ function LlmKeySetupModal({ open, settings: initialSettings, onClose, onSaved })
         </div>
         <div className="mt-5 grid gap-3">
           <label className="grid gap-1.5 text-xs font-semibold text-ink">服务地址<input className="input-control" value={form.baseUrl} onChange={(event) => setForm((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://api.deepseek.com" required /></label>
-          <label className="grid gap-1.5 text-xs font-semibold text-ink">模型名称<input className="input-control" value={form.model} onChange={(event) => setForm((current) => ({ ...current, model: event.target.value }))} placeholder="deepseek-chat" required /></label>
+          <label className="grid gap-1.5 text-xs font-semibold text-ink">模型名称<input className="input-control" value={form.model} onChange={(event) => setForm((current) => ({ ...current, model: event.target.value }))} placeholder="deepseek-v4-flash" required /></label>
           <label className="grid gap-1.5 text-xs font-semibold text-ink">API Key<span className="text-[11px] font-normal text-muted">{initialSettings.configured ? `当前已配置：${initialSettings.maskedKey || "已脱敏"}，留空可保持不变` : "首次配置请输入服务商密钥"}</span><input className="input-control font-mono" type="password" value={form.apiKey} onChange={(event) => setForm((current) => ({ ...current, apiKey: event.target.value, clearKey: false }))} placeholder={initialSettings.configured ? "留空保持当前 Key" : "sk-…"} autoComplete="new-password" /></label>
           {initialSettings.configured && <label className="flex items-center gap-2 text-xs text-muted"><input type="checkbox" checked={form.clearKey} onChange={(event) => setForm((current) => ({ ...current, clearKey: event.target.checked, apiKey: "" }))} />清除当前 Key</label>}
           {error && <p className="text-xs text-red" role="alert">{error}</p>}
-          <details className="rounded-control border border-line bg-surface-2 px-3 py-2 text-[11px] text-muted"><summary className="cursor-pointer font-semibold text-ink-2">复制为服务端环境变量（可选）</summary><pre className="mt-2 overflow-x-auto font-mono leading-6 text-ink-2"><code>{`LLM_BASE_URL=${form.baseUrl || "https://api.deepseek.com"}\nLLM_MODEL=${form.model || "deepseek-chat"}\nLLM_API_KEY=请填入你的服务商密钥`}</code></pre></details>
+          <details className="rounded-control border border-line bg-surface-2 px-3 py-2 text-[11px] text-muted"><summary className="cursor-pointer font-semibold text-ink-2">复制为服务端环境变量（可选）</summary><pre className="mt-2 overflow-x-auto font-mono leading-6 text-ink-2"><code>{`LLM_BASE_URL=${form.baseUrl || "https://api.deepseek.com"}\nLLM_MODEL=${form.model || "deepseek-v4-flash"}\nLLM_API_KEY=请填入你的服务商密钥`}</code></pre></details>
         </div>
         <div className="mt-6 flex flex-wrap justify-end gap-2 border-t border-line pt-4">
           <Button variant="ghost" type="button" onClick={copyTemplate}>复制配置模板</Button>

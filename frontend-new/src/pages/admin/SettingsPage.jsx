@@ -7,7 +7,7 @@ import { getPlannerSettings, updatePlannerSettings } from "../../api/agentSettin
 
 const configs = [
   { icon: "database", name: "华东制造数据底座", type: "PostgreSQL 16", detail: "manufacturing · 只读账号", status: "连接正常", tone: "green" },
-  { icon: "cpu", name: "DeepSeek 主模型", type: "OpenAI Compatible", detail: "deepseek-chat · 32K context", status: "服务正常", tone: "green" },
+  { icon: "cpu", name: "DeepSeek 主模型", type: "OpenAI Compatible", detail: "deepseek-v4-flash", status: "服务正常", tone: "green" },
   { icon: "model", name: "Python 建模引擎", type: "隔离执行环境", detail: "scikit-learn · 2 CPU / 4GB", status: "可用", tone: "green" },
   { icon: "knowledge", name: "语义检索服务", type: "Embedding + PostgreSQL", detail: "77 个已发布知识项", status: "已同步", tone: "blue" },
 ];

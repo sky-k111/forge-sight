@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     llm_base_url: str = "https://api.deepseek.com"
     llm_api_key: str = ""
-    llm_model: str = "deepseek-chat"
+    llm_model: str = "deepseek-v4-flash"
     llm_timeout_seconds: int = 60
     llm_proxy_url: str = ""
 
