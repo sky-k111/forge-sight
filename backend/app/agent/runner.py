@@ -177,6 +177,21 @@ def _explain_for_source(sql: str, source_id: int) -> ExplainCheckResult:
     return explain_readonly(sql, source)
 
 
+def _probe_horizon(source_id: int, table: str, field: str) -> str | None:
+    """对业务数据源探测某时间字段的最大值，用于把“上个月/最近 N 天”锚定到真实数据地平线。"""
+    with PlatformSession() as session:
+        source = session.query(DataSource).filter_by(id=source_id).first()
+        if source is None:
+            return None
+    if not table or not field:
+        return None
+    sql = f"SELECT MAX({field}) AS horizon FROM {table}"
+    result = execute_readonly(sql, action="Agent 探测数据时间地平线", source=source)
+    if not result.ok or not result.rows:
+        return None
+    return str(result.rows[0][0])
+
+
 def default_dependencies() -> GraphDependencies:
     from app.modeling.service import find_reusable_models
     from app.memory.service import retrieve_memories
@@ -193,6 +208,7 @@ def default_dependencies() -> GraphDependencies:
             question, source_id, user_id, session_id=session_id, run_id=run_id
         ),
         find_reusable_models=find_reusable_models,
+        resolve_time_horizon=lambda source_id, table, field: _probe_horizon(source_id, table, field),
     )
 
 
@@ -512,6 +528,8 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
         }
         if node in artifact_map and artifact_map[node][1] is not None:
             artifact_id = _artifact(session, run, task_id, *artifact_map[node])
+        if node == "explain_result" and update.get("interpretation"):
+            _artifact(session, run, task_id, "interpretation", update.get("interpretation"))
         if node == "retrieve_skill":
             from app.skills.service import record_usage
 
@@ -1347,3 +1365,5 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
         _mark_unexpected_failure(run_id, exc)
         raise
     return {"runId": run_id, "status": state.get("error") and "failed" or "succeeded", "state": state}
+
+

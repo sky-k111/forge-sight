@@ -444,9 +444,17 @@ def _direct_table_candidates(
         rank_constant=settings.retrieval_rrf_k,
     )
     for item in candidates:
-        ranking = fusion[item["candidateId"]]
-        item["score"] = ranking["fusedScore"]
-        item["semanticScore"] = ranking["semanticScore"]
+        # Semantic hits carry a bare table-name objectId while the multi-datasource
+        # catalog keys tables by a qualified "schema.table" candidateId, so fall
+        # back to the bare name before giving up; otherwise the run aborts with a
+        # KeyError for a semantic-only table hit.
+        ranking = fusion.get(item["candidateId"]) or fusion.get(item["table"].name)
+        if ranking is None:
+            item["score"] = item.get("lexicalScore", 0)
+            item["semanticScore"] = 0.0
+        else:
+            item["score"] = ranking["fusedScore"]
+            item["semanticScore"] = ranking["semanticScore"]
     return sorted(candidates, key=lambda item: (-item["score"], item["table"].name))
 
 

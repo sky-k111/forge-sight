@@ -17,11 +17,13 @@ from app.agent.capabilities import build_default_registry
 from app.agent.capability_executor import CapabilityExecutor, capability_idempotency_key
 from app.agent.capability_registry import CapabilityContext
 from app.agent.ids import new_id
+from app.agent.interpretation import build_interpretation
 from app.agent.intent import build_intent_plan, build_request_route
 from app.agent.plan_schema import AgentPlan, CapabilityObservation, PlanBudget, dump_contract
 from app.agent.planner import build_plan, revise_plan, should_use_planner, validate_plan
 from app.agent.progress import evaluate_progress, select_next_step
 from app.agent.state import AnalysisState
+from app.agent.time_resolution import resolve_time_constraint
 from app.agent.system_utility import build_system_utility_response
 from app.config import settings
 from app.gateway.executor import ExecutionResult
@@ -47,6 +49,7 @@ class GraphDependencies:
     retrieve_skills: Callable[[str, int], dict[str, Any]] | None = None
     retrieve_memories: Callable[[str, int, str, str | None, str | None], dict[str, Any]] | None = None
     find_reusable_models: Callable[[str, int, str], list[dict[str, Any]]] | None = None
+    resolve_time_horizon: Callable[[int, str, str], str | None] | None = None
 
 
 # ---- 建模提案：确定性规则（无 LLM 调用），产出 ModelingProposalCard 需要的全部字段 ----
@@ -435,6 +438,23 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
             return None
     return decoded if isinstance(decoded, dict) else None
 
+
+
+
+def _clarification_question(task: dict[str, Any], metrics: list[dict[str, Any]]) -> str:
+    dimensions = list(task.get("groupBy") or [])
+    dim_text = f"，按 {' / '.join(dimensions)} 分组" if dimensions else ""
+    base = f"您的问题（{task.get('normalizedQuestion') or task.get('originalQuestion') or ''}）对应多个指标口径，请确认要统计哪一个{dim_text}。"
+    lines = []
+    for item in metrics[:4]:
+        definition = str(item.get("definition") or "").strip()
+        hint = f"该指标：{definition}" if definition else ""
+        if item.get("physicalFormula"):
+            hint = (hint + "；" if hint else "") + f"公式：{str(item.get('physicalFormula'))}"
+        lines.append(f"· {item.get('name') or item.get('id')}（{hint}）" if hint else f"· {item.get('name') or item.get('id')}")
+    if lines:
+        base += "\n" + "\n".join(lines)
+    return base
 
 def _published_metric_resolution(context: dict[str, Any]) -> dict[str, Any] | None:
     metrics = context.get("metrics") or []
@@ -1456,9 +1476,14 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             response = interrupt(
                 {
                     "kind": "clarification",
-                    "question": "检测到多个可能的指标口径，请确认本次要使用哪一个。",
+                    "question": _clarification_question(state.get("task") or {}, metrics),
                     "options": [
-                        {"label": item.get("name", item.get("id", "未命名指标")), "value": item.get("id") or item.get("name")}
+                        {
+                            "label": item.get("name", item.get("id", "未命名指标")),
+                            "value": item.get("id") or item.get("name"),
+                            "definition": str(item.get("definition") or "")[:120],
+                            "topic": str(item.get("topic") or ""),
+                        }
                         for item in metrics[:5]
                     ],
                     "allowCustom": True,
@@ -1606,7 +1631,31 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             })
         return {"modeling_proposal": proposal, "error": None}
 
+    def _data_horizon_for(state: AnalysisState) -> str | None:
+        """优先用已登记指标的时间字段探测数据源实际最大日期（用于解析相对时间）。"""
+        if not deps.resolve_time_horizon:
+            return None
+        metrics = (state.get("semantic_context") or {}).get("metrics") or []
+        for metric in metrics:
+            field = metric.get("physicalTimeField") or metric.get("semanticTimeField")
+            tables = metric.get("sourceTables") or []
+            if field and tables:
+                try:
+                    return deps.resolve_time_horizon(state["source_id"], tables[0], field)
+                except Exception:  # noqa: BLE001 - 探测失败回退系统日期
+                    return None
+        return None
+
     def generate_query(state: AnalysisState) -> dict:
+        # 相对时间（上个月/上周/最近N天）锚定：数据地平线优先，越界时回退系统日期。
+        resolved_task = state.get("task") or {}
+        time_constraint = resolved_task.get("timeConstraint")
+        if time_constraint:
+            horizon = _data_horizon_for(state)
+            resolved_constraint = resolve_time_constraint(time_constraint, horizon)
+            if resolved_constraint:
+                resolved_task = {**resolved_task, "timeConstraint": resolved_constraint}
+
         repair = ""
         if state.get("error") and state.get("retry_count", 0) > 0:
             repair = f"\n上一次失败：{json.dumps(state['error'], ensure_ascii=False)}。请修复，不要重复原 SQL。"
@@ -1636,7 +1685,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             )
         )
         task_contract = {
-            key: state.get("task", {}).get(key)
+            key: resolved_task.get(key)
             for key in (
                 "originalQuestion",
                 "normalizedQuestion",
@@ -1828,10 +1877,16 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                     f"假设：{assumptions}。该口径仅对本次分析有效。"
                 )
             text = "\n\n".join(item for item in (disclosure, conclusion.strip()) if item)
+            interpretation = build_interpretation(
+                state.get("task") or {},
+                resolution,
+                execution,
+            )
             return {
                 "conclusion": text,
                 "confidence": confidence,
                 "metric_resolution": resolution,
+                "interpretation": interpretation,
                 "error": None,
             }
         except Exception as exc:  # noqa: BLE001
@@ -1983,3 +2038,4 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
     graph.add_conditional_edges("explain_result", after_explanation)
     graph.add_conditional_edges("advance_task", after_advance)
     return graph.compile(checkpointer=checkpointer)
+

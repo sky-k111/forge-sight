@@ -117,6 +117,42 @@ function resultArtifact(snapshot) {
   return [...(snapshot.artifacts ?? [])].reverse().find((item) => item.type === "result");
 }
 
+function interpretationArtifact(snapshot) {
+  return [...(snapshot.artifacts ?? [])].reverse().find((item) => item.type === "interpretation")?.content ?? null;
+}
+
+function isDateKey(key) {
+  return /(?:date|time|day|month|year|日期|时间|月份|年度)/i.test(String(key ?? ""));
+}
+
+function dateAxisValue(value) {
+  const text = String(value ?? "");
+  const match = text.match(/^(\d{4})[-/](\d{1,2})(?:[-/](\d{1,2}))?/);
+  if (match) return match[3]
+    ? `${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`
+    : `${match[1]}-${match[2].padStart(2, "0")}`;
+  return text.length > 10 ? `${text.slice(0, 9)}…` : text;
+}
+
+function clampPrecision(digits) {
+  if (!Number.isFinite(digits)) return 2;
+  return Math.max(0, Math.min(6, Math.round(digits)));
+}
+
+function hydrateChart(chart) {
+  if (!chart) return chart;
+  const next = { ...chart };
+  if (isDateKey(next.xKey)) next.xTickFormatter = (value) => dateAxisValue(value);
+  if (next.yPrecision != null || next.unit) {
+    const digits = clampPrecision(Number(next.yPrecision ?? 2));
+    next.yTickFormatter = (value) => Number(value).toLocaleString("zh-CN", {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    });
+  }
+  return next;
+}
+
 function requiresPeriodComparison(tasks = []) {
   return tasks.some((task) => {
     const question = String(
@@ -248,8 +284,16 @@ export function adaptAnalysisRun(snapshot) {
   if (firstSql) planDetails.query = { title: "实际执行 SQL", body: "已通过只读安全链路生成。", code: firstSql };
 
   const execution = resultArtifact(snapshot)?.content ?? {};
-  const chart = buildChart(snapshot, execution);
-  const businessKpis = buildBusinessKpis(execution, chart);
+  const interpretation = interpretationArtifact(snapshot);
+  let chart = interpretation?.chart
+    ? hydrateChart(interpretation.chart)
+    : buildChart(snapshot, execution);
+  if (chart && !chart.title) {
+    const taskTitle = (snapshot.tasks?.at?.(-1)?.title ?? "").trim();
+    chart = { ...chart, title: taskTitle || (chart.xKey ? `按${chart.xKey}查看` : "查询结果") };
+  }
+  const fallbackKpis = buildBusinessKpis(execution, chart);
+  const kpis = interpretation?.kpis?.length ? interpretation.kpis : fallbackKpis;
   const validation = [...artifacts].reverse().find((item) => item.type === "validation")?.content ?? {};
   const rowCount = execution.row_count ?? execution.rowCount ?? 0;
   const conversationOnly = snapshot.status === "succeeded"
@@ -330,7 +374,7 @@ export function adaptAnalysisRun(snapshot) {
     },
     result: {
       kind: conversationOnly ? "conversation" : "execution",
-      kpis: conversationOnly ? [] : businessKpis,
+      kpis: conversationOnly ? [] : kpis,
     },
     chart: conversationOnly ? null : chart,
     conclusion: {

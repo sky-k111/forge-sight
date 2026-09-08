@@ -399,6 +399,14 @@ def _time_constraint(text: str) -> dict[str, Any] | None:
         return {"kind": "current_week", "label": "本周", "timeGrain": "day"}
     if re.search(r"(?:这个季度|本季度)", text):
         return {"kind": "current_quarter", "label": "本季度", "timeGrain": "month"}
+    if re.search(r"(?:上周|上一周)", text):
+        return {"kind": "previous_week", "label": "上周", "timeGrain": "day", "reference": "data_horizon"}
+    if re.search(r"(?:上季度|上个季度)", text):
+        return {"kind": "previous_quarter", "label": "上季度", "timeGrain": "month", "reference": "data_horizon"}
+    if re.search(r"(?:去年|上年)", text):
+        return {"kind": "previous_year", "label": "去年", "timeGrain": "month", "reference": "data_horizon"}
+    if re.search(r"(?:上个月|上月)", text):
+        return {"kind": "previous_month", "label": "上个月", "timeGrain": "month", "reference": "data_horizon"}
     if "今年" in text:
         return {"kind": "current_year", "label": "今年", "timeGrain": "month"}
     recent = re.search(r"(?:最近|近)\s*(\d+|一|两|三|四|五|六|七|八|九|十)\s*(天|日|周|个月|月)", text)
@@ -543,6 +551,23 @@ def build_intent_plan(
                 "dependsOn": [tasks[index - 1]["id"]] if dependent else [],
             }
         )
+
+    # Inherit shared context (dimensions / time / chart) from the primary
+    # sub-question into any downstream comparative sub-question, so compound
+    # asks like "last month per-line pass rate, also compare with defect rate"
+    # keep the same dimension & time basis instead of degrading to a bare query.
+    if multi and len(tasks) > 1:
+        primary = tasks[0]
+        for task in tasks[1:]:
+            if task.get("analysisType") != "comparison":
+                continue
+            if not task.get("groupBy") and primary.get("groupBy"):
+                task["groupBy"] = list(primary["groupBy"])
+            if not task.get("timeConstraint") and primary.get("timeConstraint"):
+                task["timeConstraint"] = primary["timeConstraint"]
+            if not task.get("requestedChart") and primary.get("requestedChart"):
+                task["requestedChart"] = primary["requestedChart"]
+
     return {"tasks": tasks, "clarification": None}
 
 

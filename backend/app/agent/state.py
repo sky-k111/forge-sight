@@ -35,6 +35,7 @@ class AnalysisState(TypedDict, total=False):
     skill_enhancement_enabled: bool
     skill_context: dict[str, Any]
     metric_resolution: dict[str, Any]
+    interpretation: dict[str, Any]
     confidence: dict[str, Any]
     sql: str
     validation: dict[str, Any]
@@ -60,3 +61,4 @@ class AnalysisState(TypedDict, total=False):
     finalization_reason: str | None
     planner_degraded: bool
     error: dict[str, Any] | None
+
