@@ -1,6 +1,6 @@
 import { useId } from "react";
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { axisDefaults, gridDefaults, seriesColors } from "./chartTheme";
+import { axisDefaults, gridDefaults, numericAxisWidth, seriesColors } from "./chartTheme";
 import { ChartTooltip } from "./ChartTooltip";
 
 export function ComboMetricChart({
@@ -25,6 +25,8 @@ export function ComboMetricChart({
   }));
   const lineKeys = new Set(lineSeries.map((item) => item.key));
   const xInterval = data.length > 10 ? Math.max(1, Math.ceil(data.length / 7) - 1) : 0;
+  const leftAxisWidth = numericAxisWidth(data, barSeries.map((item) => item.key), (value) => `${value}${leftUnit}`);
+  const rightAxisWidth = numericAxisWidth(data, lineSeries.map((item) => item.key), (value) => `${value}${rightUnit}`);
   const formatTooltip = (value, entry) => {
     const unit = lineKeys.has(entry.dataKey) ? rightUnit : leftUnit;
     return `${Number.isFinite(Number(value)) ? Number(value).toLocaleString() : value}${unit}`;
@@ -35,7 +37,7 @@ export function ComboMetricChart({
       <div className="chart-frame__backdrop" aria-hidden="true" />
       <div className="chart-frame__inner">
         <ResponsiveContainer width="100%" height={height}>
-          <ComposedChart data={data} margin={{ top: 12, right: 4, bottom: 4, left: -4 }}>
+          <ComposedChart data={data} margin={{ top: 12, right: 8, bottom: 4, left: 8 }}>
             <defs>
               {barSeries.map((item) => (
                 <linearGradient key={item.key} id={item.gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -46,8 +48,8 @@ export function ComboMetricChart({
             </defs>
             <CartesianGrid {...gridDefaults} />
             <XAxis dataKey={xKey} {...axisDefaults} interval={xInterval} minTickGap={12} tickFormatter={xTickFormatter} />
-            <YAxis yAxisId="left" {...axisDefaults} tickFormatter={(value) => `${value}${leftUnit}`} />
-            <YAxis yAxisId="right" orientation="right" {...axisDefaults} tickFormatter={(value) => `${value}${rightUnit}`} />
+            <YAxis yAxisId="left" {...axisDefaults} tickFormatter={(value) => `${value}${leftUnit}`} width={leftAxisWidth} />
+            <YAxis yAxisId="right" orientation="right" {...axisDefaults} tickFormatter={(value) => `${value}${rightUnit}`} width={rightAxisWidth} />
             <Tooltip content={<ChartTooltip formatter={formatTooltip} />} cursor={{ fill: "rgb(17 24 39 / 5%)" }} />
             {barSeries.map((item) => (
               <Bar

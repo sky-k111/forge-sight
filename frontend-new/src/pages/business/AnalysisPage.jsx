@@ -37,6 +37,23 @@ const ANALYSIS_SESSION_KEY = "forgesight:analysis-session-id";
 const ANALYSIS_NEW_SESSION_KEY = "forgesight:analysis-new-session";
 const ANALYSIS_SESSION_SELECTED_EVENT = "forgesight:analysis-session-selected";
 
+function chartTypeLabel(chart) {
+  return {
+    line: "折线图",
+    bar: "柱状图",
+    donut: "环形图",
+    scatter: "散点图",
+    combo: "组合图",
+    heatmap: "热力图",
+  }[chart?.type] ?? "图表";
+}
+
+function chartLegendItems(chart) {
+  return chart?.legend
+    ?? (chart?.series ?? [...(chart?.bars ?? []), ...(chart?.lines ?? [])])
+      .map((item) => ({ label: item.name, color: item.color }));
+}
+
 export default function AnalysisPage() {
   const { evidenceOpen, setEvidenceOpen, navigatePage, refreshSessions } = useOutletContext();
   const navigate = useNavigate();
@@ -589,6 +606,12 @@ export default function AnalysisPage() {
                 ref={composerRef}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    submit();
+                  }
+                }}
                 placeholder="用业务语言描述你想分析的问题…"
                 rows={2}
                 className="w-full resize-none border-0 bg-transparent text-body text-ink outline-none placeholder:text-faint"
@@ -1314,20 +1337,12 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
   const [feedback, setFeedback] = useState("");
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const chart = run.chart;
+  const charts = run.charts?.length ? run.charts : (chart ? [chart] : []);
   const tableRequested = run.tasks?.some((task) => (task.requestedChart ?? task.intent?.requestedChart) === "table");
   const [showTable, setShowTable] = useState(tableRequested || !chart);
   const sqlCode = run.planDetails?.query?.code;
-  const chartTypeName = {
-    line: "折线图",
-    bar: "柱状图",
-    donut: "环形图",
-    scatter: "散点图",
-    combo: "组合图",
-    heatmap: "热力图",
-  }[chart?.type] ?? "图表";
+  const chartTypeName = chartTypeLabel(chart);
   const showBusinessKpis = run.result?.kpis?.length > 0;
-  const legendItems = chart?.legend
-    ?? (chart?.series ?? [...(chart?.bars ?? []), ...(chart?.lines ?? [])]).map((item) => ({ label: item.name, color: item.color }));
   const analysisDuration = run.execution.processingDurationMs ?? run.execution.durationMs;
   const confidence = run.conclusion?.confidence;
   const metricResolution = run.conclusion?.metricResolution;
@@ -1430,42 +1445,42 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
           <Finding key={kpi.label} label={kpi.label} value={kpi.value} caption={kpi.caption} captionTone={kpi.tone === "red" ? "text-red" : "text-faint"} />
         ))}
       </div>}
-      {chart && (
-        <section className="border-t border-line">
+      {sqlCode && (
+        <div className="flex items-center justify-end gap-1 px-5 pt-3">
+          <button
+            type="button"
+            onClick={() => setShowSql((value) => !value)}
+            className={cn(
+              "flex cursor-pointer items-center gap-1 rounded-control px-2 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
+              showSql ? "bg-surface-3 text-ink" : "text-muted hover:bg-surface-3 hover:text-ink",
+            )}
+          >
+            <Icon name="code" size={14} />{showSql ? "收起 SQL" : "查看 SQL"}
+          </button>
+        </div>
+      )}
+      {showSql && sqlCode && (
+        <div className="mx-5 mt-3 rounded-control bg-ink">
+          <div className="flex items-center justify-between px-4 pt-3">
+            <span className="text-[11px] text-white/60">实际执行 SQL</span>
+            <StatusPill tone="green">只读校验通过</StatusPill>
+          </div>
+          <pre className="m-0 overflow-auto px-4 py-3 font-mono text-[11px] leading-relaxed text-white/90"><code>{sqlCode}</code></pre>
+          <footer className="flex items-center justify-between border-t border-white/10 px-4 py-2.5 text-[11px] text-white/60">
+            <span>{run.execution.engine} · 查询 {formatDuration(run.execution.durationMs)} · 返回 {run.execution.rowCount} 行</span>
+            <button type="button" onClick={copySql} className="cursor-pointer rounded-tag font-medium text-white/80 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35">{copied ? "已复制" : "复制 SQL"}</button>
+          </footer>
+        </div>
+      )}
+      {charts.map((chart, chartIndex) => (
+        <section key={chartIndex} className="border-t border-line">
           <div className="flex flex-wrap items-center justify-between gap-3 px-5 pb-1 pt-4">
             <div className="min-w-0">
               <span className="text-[11px] font-semibold tracking-wide text-faint">{chart.kicker}</span>
               <h3 className="mt-0.5 truncate text-body font-semibold text-ink">{chart.title}</h3>
             </div>
-            <div className="flex shrink-0 items-center gap-1">
-              {sqlCode && (
-                <button
-                  type="button"
-                  onClick={() => setShowSql((value) => !value)}
-                  className={cn(
-                    "flex cursor-pointer items-center gap-1 rounded-control px-2 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
-                    showSql ? "bg-surface-3 text-ink" : "text-muted hover:bg-surface-3 hover:text-ink",
-                  )}
-                >
-                  <Icon name="code" size={14} />{showSql ? "收起 SQL" : "查看 SQL"}
-                </button>
-              )}
-            </div>
           </div>
-          {showSql && sqlCode && (
-            <div className="mx-5 mt-3 rounded-control bg-ink">
-              <div className="flex items-center justify-between px-4 pt-3">
-                <span className="text-[11px] text-white/60">实际执行 SQL</span>
-                <StatusPill tone="green">只读校验通过</StatusPill>
-              </div>
-              <pre className="m-0 overflow-auto px-4 py-3 font-mono text-[11px] leading-relaxed text-white/90"><code>{sqlCode}</code></pre>
-              <footer className="flex items-center justify-between border-t border-white/10 px-4 py-2.5 text-[11px] text-white/60">
-                <span>{run.execution.engine} · 查询 {formatDuration(run.execution.durationMs)} · 返回 {run.execution.rowCount} 行</span>
-                <button type="button" onClick={copySql} className="cursor-pointer rounded-tag font-medium text-white/80 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35">{copied ? "已复制" : "复制 SQL"}</button>
-              </footer>
-            </div>
-          )}
-          <div className="px-5 pb-2 pt-3" aria-label={`${chart.title}${chartTypeName}`}>
+          <div className="px-5 pb-2 pt-3" aria-label={`${chart.title}${chartTypeLabel(chart)}`}>
             {chart.type === "line" ? (
               <TrendLineChart data={chart.data} xKey={chart.xKey} series={chart.series} unit={chart.unit} yDomain={chart.yDomain} yTickFormatter={chart.yTickFormatter} xTickFormatter={chart.xTickFormatter} height={250} />
             ) : chart.type === "donut" ? (
@@ -1481,11 +1496,11 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
             )}
           </div>
           <div className="px-5 pb-4">
-            {legendItems.length > 0 && <ChartLegend items={legendItems} />}
+            {chartLegendItems(chart).length > 0 && <ChartLegend items={chartLegendItems(chart)} />}
             <p className="mt-2 text-[11px] text-faint">{chart.note}</p>
           </div>
         </section>
-      )}
+      ))}
       {run.execution?.columns?.length > 0 && (
         <section className="border-t border-line">
           <button

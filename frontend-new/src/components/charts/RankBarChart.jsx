@@ -1,6 +1,6 @@
 import { useId } from "react";
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { axisDefaults, gridDefaults, seriesColors } from "./chartTheme";
+import { axisDefaults, gridDefaults, numericAxisWidth, seriesColors } from "./chartTheme";
 import { ChartTooltip } from "./ChartTooltip";
 
 export function RankBarChart({ data, xKey, bars, lines = [], height = 240, unit = "", yDomain, yTickFormatter, xTickFormatter, barSize = 22 }) {
@@ -15,13 +15,15 @@ export function RankBarChart({ data, xKey, bars, lines = [], height = 240, unit 
     color: item.color ?? seriesColors[(bars.length + index) % seriesColors.length],
   }));
   const xInterval = data.length > 8 ? Math.max(1, Math.ceil(data.length / 6) - 1) : 0;
+  const yAxisKeys = [...barSeries, ...lineSeries].map((item) => item.key);
+  const yAxisWidth = numericAxisWidth(data, yAxisKeys, yTickFormatter);
 
   return (
     <div className="chart-frame chart-frame--elevated" data-chart-series-colors={barSeries.map((item) => item.color).join(",")}>
       <div className="chart-frame__backdrop" aria-hidden="true" />
       <div className="chart-frame__inner">
         <ResponsiveContainer width="100%" height={height}>
-          <ComposedChart data={data} margin={{ top: 12, right: 12, bottom: 4, left: -4 }}>
+          <ComposedChart data={data} margin={{ top: 12, right: 12, bottom: 4, left: 8 }}>
             <defs>
               {barSeries.map((item) => {
                 return (
@@ -35,7 +37,7 @@ export function RankBarChart({ data, xKey, bars, lines = [], height = 240, unit 
             </defs>
             <CartesianGrid {...gridDefaults} />
             <XAxis dataKey={xKey} {...axisDefaults} interval={xInterval} tickFormatter={xTickFormatter} minTickGap={12} />
-            <YAxis {...axisDefaults} domain={yDomain} tickFormatter={yTickFormatter} />
+            <YAxis {...axisDefaults} domain={yDomain} tickFormatter={yTickFormatter} width={yAxisWidth} />
             <Tooltip content={<ChartTooltip unit={unit} />} cursor={{ fill: "rgb(17 24 39 / 6%)", opacity: 1 }} />
             {barSeries.map((item) => (
               <Bar

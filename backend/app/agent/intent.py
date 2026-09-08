@@ -316,7 +316,7 @@ def split_questions(question: str) -> list[str]:
     for part in coarse:
         # 只有连接词后的片段本身具有新的分析动作时才拆分，避免把
         # “分析良率并与标准比较”错误拆成两个缺少主语的任务。
-        pieces = re.split(r"[，,]\s*(?=(?:然后|再|并且|同时|另外|此外)?[^，,]{0,12}(?:分析|统计|比较|对比|查找|找出|查看|计算|汇总|生成|识别))", part)
+        pieces = re.split(r"[，,]\s*(?=(?:然后|再|并且|同时|另外|此外)?[^，,]{0,12}(?:分析|统计|比较|对比|查找|找出|查看|计算|汇总|生成|识别|占比|构成|份额))", part)
         result.extend(piece.strip(" ，,") for piece in pieces if piece.strip(" ，,"))
     return result or [normalized]
 
@@ -529,6 +529,7 @@ def build_intent_plan(
             text.startswith(DEPENDENCY_PREFIXES)
             or has_reference
             or any(word in text for word in ("上述", "其中"))
+            or text.startswith(("同时", "并且", "以及", "另外", "此外", "还要", "并"))
         )
         normalized = text
         if has_reference:
@@ -559,7 +560,7 @@ def build_intent_plan(
     if multi and len(tasks) > 1:
         primary = tasks[0]
         for task in tasks[1:]:
-            if task.get("analysisType") != "comparison":
+            if task.get("mode") != "dependent" and task.get("analysisType") != "comparison":
                 continue
             if not task.get("groupBy") and primary.get("groupBy"):
                 task["groupBy"] = list(primary["groupBy"])

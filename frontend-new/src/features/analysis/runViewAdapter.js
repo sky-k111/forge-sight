@@ -284,16 +284,29 @@ export function adaptAnalysisRun(snapshot) {
   if (firstSql) planDetails.query = { title: "实际执行 SQL", body: "已通过只读安全链路生成。", code: firstSql };
 
   const execution = resultArtifact(snapshot)?.content ?? {};
-  const interpretation = interpretationArtifact(snapshot);
-  let chart = interpretation?.chart
-    ? hydrateChart(interpretation.chart)
-    : buildChart(snapshot, execution);
-  if (chart && !chart.title) {
-    const taskTitle = (snapshot.tasks?.at?.(-1)?.title ?? "").trim();
-    chart = { ...chart, title: taskTitle || (chart.xKey ? `按${chart.xKey}查看` : "查询结果") };
-  }
+  const tasks = snapshot.tasks ?? [];
+  const interpretations = (snapshot.artifacts ?? [])
+    .filter((item) => item.type === "interpretation")
+    .sort((a, b) => {
+      const orderFor = (item, fallback) => tasks.find((t) => t.id === item.taskId)?.order ?? fallback;
+      return orderFor(a, 0) - orderFor(b, 0);
+    });
+  const charts = interpretations
+    .map((item) => {
+      const content = item.content ?? {};
+      let next = content.chart ? hydrateChart(content.chart) : null;
+      if (next && !next.title) {
+        const task = tasks.find((t) => t.id === item.taskId);
+        const taskTitle = (task?.title ?? "").trim();
+        next = { ...next, title: taskTitle || (next.xKey ? `按${next.xKey}查看` : "查询结果") };
+      }
+      return next;
+    })
+    .filter(Boolean);
+  const chart = charts.length ? charts.at(-1) : buildChart(snapshot, execution);
+  const lastInterpKpis = interpretations.at(-1)?.content?.kpis;
   const fallbackKpis = buildBusinessKpis(execution, chart);
-  const kpis = interpretation?.kpis?.length ? interpretation.kpis : fallbackKpis;
+  const kpis = lastInterpKpis?.length ? lastInterpKpis : fallbackKpis;
   const validation = [...artifacts].reverse().find((item) => item.type === "validation")?.content ?? {};
   const rowCount = execution.row_count ?? execution.rowCount ?? 0;
   const conversationOnly = snapshot.status === "succeeded"
@@ -377,6 +390,7 @@ export function adaptAnalysisRun(snapshot) {
       kpis: conversationOnly ? [] : kpis,
     },
     chart: conversationOnly ? null : chart,
+    charts: conversationOnly ? [] : charts,
     conclusion: {
       text: narrative.summary || "分析已完成，结果与执行证据已保存。",
       highlights: narrative.highlights.length ? narrative.highlights : conclusions.length > 1 ? conclusions.map((item, index) => ({
