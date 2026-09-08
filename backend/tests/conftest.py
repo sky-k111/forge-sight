@@ -185,6 +185,22 @@ def modeling_session(monkeypatch, tmp_path):
     monkeypatch.setattr(modeling_service, "write_audit", lambda **_kwargs: None)
     monkeypatch.setattr(settings, "modeling_storage_dir", str(tmp_path))
 
+    with session_factory() as session:
+        session.add(
+            DataSource(
+                id=1,
+                name="建模测试数据源",
+                type="mysql",
+                host="127.0.0.1",
+                port=3306,
+                db_name="modeling_test",
+                username="reader",
+                status="连接正常",
+                is_default=True,
+            )
+        )
+        session.commit()
+
     def _make_rows(n=240):
         rng = np.random.default_rng(7)
         df = pd.DataFrame(

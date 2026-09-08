@@ -123,7 +123,11 @@ def _target_values(y: pd.Series, task_type: str) -> tuple[pd.Series, str, dict[s
         return y.astype(str).map(mapping).astype(int), "binary", mapping
     numeric = pd.to_numeric(y, errors="coerce")
     if numeric.isna().any():
-        raise ModelingEngineError("回归目标包含无法转换为数值的内容")
+        invalid_count = int(numeric.isna().sum())
+        raise ModelingEngineError(
+            f"回归目标包含 {invalid_count} 个无法转换为数值的内容，"
+            "请确认目标是数量、时长、金额等数值字段，而不是 ID 或编号"
+        )
     return numeric.astype(float), "continuous", {}
 
 
@@ -191,6 +195,14 @@ def diagnose_dataset(
                 message = f"目标字段缺失 {missing_target} 条（{ratio:.1%}）"
                 (blockers if ratio >= 0.2 else warnings).append(message)
             usable_target = target.dropna()
+            regression_invalid = 0
+            if task_type == "regression" and usable_target.nunique() > 2:
+                numeric_target = pd.to_numeric(usable_target, errors="coerce")
+                regression_invalid = int(numeric_target.isna().sum())
+                if regression_invalid:
+                    blockers.append(
+                        f"回归目标含 {regression_invalid} 条非数值，请选择数量、时长或金额字段"
+                    )
             if task_type == "classification" or usable_target.nunique() <= 2:
                 counts = usable_target.astype(str).value_counts()
                 class_distribution = [
@@ -205,7 +217,14 @@ def diagnose_dataset(
                     warnings.append(f"类别分布失衡，少数类别占比仅 {float(counts.min() / counts.sum()):.1%}")
             checks.append({
                 "key": "target", "label": "预测目标", "status": "fail" if any("目标" in item or "类别" in item for item in blockers) else ("warn" if missing_target else "pass"),
-                "value": target_field, "message": f"目标字段缺失 {missing_target} 条" if missing_target else "目标字段完整",
+                "value": target_field,
+                "message": (
+                    f"回归目标含 {regression_invalid} 条非数值"
+                    if regression_invalid
+                    else f"目标字段缺失 {missing_target} 条"
+                    if missing_target
+                    else "目标字段完整"
+                ),
             })
 
     missing_features: list[dict[str, Any]] = []

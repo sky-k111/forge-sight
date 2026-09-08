@@ -81,6 +81,16 @@ def test_create_task_rejects_bad_sql(modeling_session, monkeypatch):
         create_task(make_task_payload())
 
 
+def test_create_task_rejects_identifier_as_regression_target(modeling_session):
+    with pytest.raises(ModelingError, match="记录标识"):
+        create_task(make_task_payload(
+            taskType="regression",
+            targetField="output_id",
+            targetLabel="产量记录 ID",
+            candidates=["linear", "tree", "forest"],
+        ))
+
+
 def test_train_full_flow(modeling_session):
     task, _ = create_task(make_task_payload())
     result = train_task(task["id"], "auto", ["logistic", "tree", "forest"], None, "zhangsan")
@@ -134,7 +144,7 @@ def test_train_failure_marks_failed(modeling_session, monkeypatch):
 
     def fake(sql, action="", user_name="", source=None):
         if action != "建模取数":
-            return ExecutionResult(ok=True, columns=["工序"], rows=[["SMT贴片"]],
+            return ExecutionResult(ok=True, columns=["工序", "high_defect_risk"], rows=[["SMT贴片", 1]],
                                    row_count=1, tables=[], truncated=False)
         raise RuntimeError("数据库连接断开")
 
@@ -205,7 +215,7 @@ def test_publish_blocks_model_that_is_worse_than_regression_baseline(modeling_se
     task, _ = create_task(make_task_payload(
         title="停机时长预测",
         taskType="regression",
-        targetField="downtime_minutes",
+        targetField="停机时长",
         targetLabel="停机时长",
         features=["工序", "产线"],
         candidates=["linear"],

@@ -19,7 +19,7 @@ import pandas as pd
 from app.agent.ids import new_id
 from app.audit.service import write_audit
 from app.config import settings
-from app.db.models import GovernedModel, ModelingEvaluation, ModelingInferenceLog, ModelingTask
+from app.db.models import DataSource, GovernedModel, ModelingEvaluation, ModelingInferenceLog, ModelingTask
 from app.db.platform import PlatformSession
 from app.gateway.executor import execute_readonly
 from app.modeling import engine
@@ -159,6 +159,41 @@ def list_algorithms() -> list[dict]:
     return list(engine.ALGORITHMS)
 
 
+def _find_source(source_id: int) -> DataSource:
+    with PlatformSession() as session:
+        source = session.get(DataSource, int(source_id))
+    if source is None:
+        raise ModelingError(f"建模数据源 {source_id} 不存在")
+    return source
+
+
+def _looks_like_identifier(field_name: str) -> bool:
+    normalized = str(field_name or "").strip().lower()
+    return normalized == "id" or normalized.endswith("_id") or normalized.startswith("id_")
+
+
+def _validate_target_preview(payload, result) -> None:
+    """在创建任务时就验证目标列，避免用户到训练阶段才发现选中了 ID/文本列。"""
+    if payload.taskType not in {"classification", "regression"}:
+        return
+    target = str(payload.targetField or "").strip()
+    if not target:
+        raise ModelingError("分类或回归任务必须指定预测目标")
+    if _looks_like_identifier(target):
+        raise ModelingError(f"预测目标「{target}」是记录标识，不能用作建模目标")
+    if target not in result.columns:
+        raise ModelingError(f"预测目标「{target}」不在取数结果中")
+    if payload.taskType != "regression":
+        return
+    target_index = result.columns.index(target)
+    values = [row[target_index] for row in result.rows if row[target_index] is not None]
+    if not values:
+        raise ModelingError(f"回归目标「{target}」没有可用数值")
+    numeric = pd.to_numeric(pd.Series(values), errors="coerce")
+    if numeric.isna().any():
+        raise ModelingError(f"回归目标「{target}」包含非数值内容，请选择数量、时长或金额字段")
+
+
 def _find_task(task_id: str) -> ModelingTask:
     with PlatformSession() as session:
         task = session.get(ModelingTask, task_id)
@@ -176,11 +211,13 @@ def create_task(payload) -> tuple[dict, bool]:
                 return _task_dict(existing), True
 
     # 预检取数 SQL：校验 + 审计，失败即拒绝（红线：LLM 生成的 SQL 必须过校验器）
+    source = _find_source(payload.sourceId)
     check = execute_readonly(
-        payload.datasetSql, action="建模取数预检", user_name=payload.ownerId
+        payload.datasetSql, action="建模取数预检", user_name=payload.ownerId, source=source
     )
     if not check.ok:
         raise ModelingError(f"取数 SQL 未通过安全校验：{check.error}")
+    _validate_target_preview(payload, check)
 
     task = ModelingTask(
         id=new_id("mt"),
@@ -228,7 +265,8 @@ def get_task(task_id: str) -> dict:
 
 
 def _training_frame(task: ModelingTask, user_id: str, action: str) -> pd.DataFrame:
-    result = execute_readonly(task.dataset_sql, action=action, user_name=user_id)
+    source = _find_source(task.source_id)
+    result = execute_readonly(task.dataset_sql, action=action, user_name=user_id, source=source)
     if not result.ok:
         raise ModelingError(f"取数失败：{result.error}")
     if result.truncated:

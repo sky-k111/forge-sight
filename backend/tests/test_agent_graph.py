@@ -1147,7 +1147,7 @@ def _modeling_context():
     }
 
 
-def _modeling_deps(validate_ok=True):
+def _modeling_deps(validate_ok=True, context_factory=_modeling_context):
     def execute(sql, _source_id):
         if "COUNT(*)" in sql.upper():
             return ExecutionResult(ok=True, columns=["n"], rows=[[200]], row_count=1, tables=["mes_process_output"])
@@ -1159,7 +1159,7 @@ def _modeling_deps(validate_ok=True):
         return SqlCheckResult(ok=True, tables=["mes_process_output"], checks=["只读通过"])
 
     return GraphDependencies(
-        retrieve_context=lambda _q, _s: _modeling_context(),
+        retrieve_context=lambda _q, _s: context_factory(),
         generate_text=lambda *_args: (_ for _ in ()).throw(AssertionError("建模提案不应调用 LLM")),
         validate_sql=validate,
         execute_sql=execute,
@@ -1195,9 +1195,11 @@ def test_modeling_question_proposes_classification_task_without_llm():
     assert proposal["sampleCount"] == 200
     # 特征排除主键/日期列；SQL 由白名单字段拼接并带 LIMIT
     assert proposal["features"] == ["工序", "产线", "停机时长", "计划数量"]
-    assert "SELECT `工序`, `产线`, `停机时长`, `计划数量`, `high_defect_risk`" in proposal["datasetSql"]
+    assert "SELECT `工序`, `产线`, `停机时长`, `计划数量`, `stat_date`, `high_defect_risk`" in proposal["datasetSql"]
     assert "LIMIT 10000" in proposal["datasetSql"]
     assert proposal["dataset"] == "工序产量事实表"
+    assert proposal["splitStrategy"] == "time"
+    assert proposal["timeField"] == "stat_date"
 
 
 def test_regression_modeling_proposal_targets_duration():
@@ -1209,6 +1211,91 @@ def test_regression_modeling_proposal_targets_duration():
     assert proposal["target"] == "停机时长"
     assert proposal["candidates"] == ["linear", "tree", "forest"]
     assert proposal["metric"] == "R² / MAE"
+
+
+def test_production_forecast_never_uses_record_id_as_regression_target():
+    def production_context():
+        return {
+            "question": "预测9月份产量",
+            "source": {"id": 1, "name": "测试数据源", "type": "mysql"},
+            "metrics": [],
+            "tables": [{
+                "name": "mes_process_output",
+                "semanticName": "工序产量事实表",
+                "fields": [
+                    {"name": "output_id", "semanticName": "产量记录 ID", "dataType": "varchar", "isPrimary": True},
+                    {"name": "work_order_id", "semanticName": "工单 ID", "dataType": "varchar"},
+                    {"name": "stat_date", "semanticName": "统计日期", "dataType": "date"},
+                    {"name": "input_qty", "semanticName": "投入数量", "dataType": "int"},
+                    {"name": "good_qty", "semanticName": "合格数量", "dataType": "int"},
+                    {"name": "defect_qty", "semanticName": "不良数量", "dataType": "int"},
+                    {"name": "rework_qty", "semanticName": "返工数量", "dataType": "int"},
+                    {"name": "shift_code", "semanticName": "班次", "dataType": "char"},
+                ],
+            }],
+            "relations": [],
+            "businessRules": [],
+            "executionPolicy": {"allowedTables": ["mes_process_output"]},
+            "coverage": {"status": "ready"},
+        }
+
+    graph = build_analysis_graph(
+        _modeling_deps(context_factory=production_context),
+        checkpointer=InMemorySaver(),
+    )
+    proposal = _invoke_modeling(graph, "预测9月份产量")["modeling_proposal"]
+
+    assert proposal["taskType"] == "regression"
+    assert proposal["target"] == "output_qty"
+    assert proposal["targetLabel"] == "产量"
+    assert proposal["target"] != "output_id"
+    assert "good_qty" not in proposal["features"]
+    assert "defect_qty" not in proposal["features"]
+    assert proposal["splitStrategy"] == "time"
+    assert proposal["timeField"] == "stat_date"
+    assert proposal["groupField"] == "work_order_id"
+    assert "`output_id`" not in proposal["datasetSql"]
+    assert "`stat_date`" in proposal["datasetSql"]
+    assert "COALESCE(`good_qty`, 0) + COALESCE(`defect_qty`, 0) AS `output_qty`" in proposal["datasetSql"]
+
+
+def test_yield_forecast_builds_numeric_target_without_component_leakage():
+    def production_context():
+        return {
+            "question": "预测一下8月良率",
+            "source": {"id": 1, "name": "测试数据源", "type": "mysql"},
+            "metrics": [],
+            "tables": [{
+                "name": "mes_process_output",
+                "semanticName": "工序产量事实表",
+                "fields": [
+                    {"name": "output_id", "semanticName": "产量记录 ID", "dataType": "varchar", "isPrimary": True},
+                    {"name": "stat_date", "semanticName": "统计日期", "dataType": "date"},
+                    {"name": "process_id", "semanticName": "工序 ID", "dataType": "varchar"},
+                    {"name": "input_qty", "semanticName": "投入数量", "dataType": "int"},
+                    {"name": "good_qty", "semanticName": "合格数量", "dataType": "int"},
+                    {"name": "defect_qty", "semanticName": "不良数量", "dataType": "int"},
+                    {"name": "rework_qty", "semanticName": "返工数量", "dataType": "int"},
+                ],
+            }],
+            "relations": [],
+            "businessRules": [],
+            "executionPolicy": {"allowedTables": ["mes_process_output"]},
+            "coverage": {"status": "ready"},
+        }
+
+    graph = build_analysis_graph(
+        _modeling_deps(context_factory=production_context),
+        checkpointer=InMemorySaver(),
+    )
+    proposal = _invoke_modeling(graph, "预测一下8月良率")["modeling_proposal"]
+
+    assert proposal["target"] == "yield_rate"
+    assert proposal["targetLabel"] == "良率"
+    assert "good_qty" not in proposal["features"]
+    assert "input_qty" not in proposal["features"]
+    assert "CASE WHEN COALESCE(`input_qty`, 0) > 0" in proposal["datasetSql"]
+    assert "AS `yield_rate`" in proposal["datasetSql"]
 
 
 def test_modeling_proposal_prefers_reusable_published_model():

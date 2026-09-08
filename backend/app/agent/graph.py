@@ -74,6 +74,12 @@ _REGRESSION_TARGET_HINTS = ("时长", "产量", "数量", "金额", "成本", "�
 _MODELING_SKIP_COLUMN_TOKENS = (
     "id", "日期", "时间", "date", "time", "created", "updated", "序号", "备注", "说明",
 )
+_NUMERIC_DATA_TYPE_TOKENS = (
+    "int", "decimal", "numeric", "number", "float", "double", "real",
+)
+_IDENTIFIER_SEMANTIC_TOKENS = ("编号", "编码", "序号", "主键")
+_TIME_FIELD_TOKENS = ("date", "time", "timestamp", "日期", "时间")
+_GROUP_FIELD_TOKENS = ("work_order_id", "batch_id", "lot_id", "工单id", "批次id", "工单编号", "批次编号")
 MODELING_SAMPLE_LIMIT = 10000
 
 
@@ -112,16 +118,72 @@ def _detect_modeling_task_type(question: str) -> str:
     return "regression"
 
 
-def _pick_modeling_target(question: str, fields: list[dict], task_type: str) -> tuple[str, str]:
-    """按问题关键词匹配字段中文名/物理名；返回 (字段名, 中文名)，未命中返回 ('', '')。"""
+def _is_numeric_modeling_field(field: dict) -> bool:
+    data_type = str(field.get("dataType") or field.get("type") or "").lower()
+    return any(token in data_type for token in _NUMERIC_DATA_TYPE_TOKENS)
+
+
+def _is_identifier_or_time_field(field: dict) -> bool:
+    if field.get("isPrimary"):
+        return True
+    name = str(field.get("name") or "").strip().lower()
+    semantic = str(field.get("semanticName") or "").strip().lower()
+    if name == "id" or name.endswith("_id") or name.startswith("id_"):
+        return True
+    if re.search(r"(?:^|\s)id(?:$|\s)", semantic) or any(
+        token in semantic for token in _IDENTIFIER_SEMANTIC_TOKENS
+    ):
+        return True
+    return any(token in name or token in semantic for token in _TIME_FIELD_TOKENS)
+
+
+def _target_match_score(question: str, field: dict, task_type: str) -> int:
+    """用问题与字段语义打分，并将 ID/日期/非数值回归列挡在提案阶段。"""
+    if _is_identifier_or_time_field(field):
+        return -1
+    if task_type == "regression" and not _is_numeric_modeling_field(field):
+        return -1
+    name = str(field.get("name") or "").lower()
+    semantic = str(field.get("semanticName") or "").lower()
+    haystack = f"{semantic} {name}"
+    normalized_question = str(question or "").lower()
     hints = _CLASSIFICATION_TARGET_HINTS if task_type == "classification" else _REGRESSION_TARGET_HINTS
+    score = 0
+    if semantic and semantic in normalized_question:
+        score += 30 + len(semantic)
+    if name and name in normalized_question:
+        score += 24 + len(name)
+    for hint in hints:
+        if hint in normalized_question and hint in haystack:
+            score += 12 + len(hint)
+        elif hint in haystack:
+            score += 1
+
+    # 企业库常用英文物理字段的稳定语义补充。它只参与排序，不放宽类型和主键约束。
+    aliases = (
+        (("产量", "产出"), ("output_qty", "actual_qty", "completed_qty", "good_qty")),
+        (("停机时长", "停机时间"), ("downtime_minutes", "downtime_duration")),
+        (("成本", "费用", "金额"), ("cost", "amount", "expense")),
+        (("温度",), ("temperature", "temp")),
+    )
+    for question_terms, field_terms in aliases:
+        if any(term in normalized_question for term in question_terms):
+            for index, term in enumerate(field_terms):
+                if name == term or name.endswith(f"_{term}"):
+                    score += 28 - index
+                    break
+    return score
+
+
+def _pick_modeling_target(question: str, fields: list[dict], task_type: str) -> tuple[str, str]:
+    """选择与问题最匹配且类型可训练的目标字段。"""
     best_name = ""
     best_semantic = ""
     best_hits = 0
     for field in fields:
         name = str(field.get("name") or "")
         semantic = str(field.get("semanticName") or "")
-        hits = sum(1 for hint in hints if hint in semantic or hint in name)
+        hits = _target_match_score(question, field, task_type)
         if hits > best_hits:
             best_hits = hits
             best_name = name
@@ -129,13 +191,77 @@ def _pick_modeling_target(question: str, fields: list[dict], task_type: str) -> 
     return best_name, best_semantic
 
 
-def _modeling_features(fields: list[dict], target_field: str) -> list[str]:
+def _derived_modeling_target(question: str, fields: list[dict]) -> dict[str, Any] | None:
+    """识别制造业常见派生指标，避免把指标组成列或记录 ID 误当预测目标。"""
+    normalized_question = str(question or "").lower()
+    available = {
+        str(field.get("name") or "").lower(): field
+        for field in fields
+        if str(field.get("name") or "").strip()
+    }
+    if "良率" in normalized_question and {"good_qty", "input_qty"} <= set(available):
+        return {
+            "name": "yield_rate",
+            "label": "良率",
+            "kind": "yield_rate",
+            "components": ["good_qty", "input_qty"],
+        }
+    if any(term in normalized_question for term in ("产量", "产出")) and {
+        "good_qty", "defect_qty",
+    } <= set(available):
+        return {
+            "name": "output_qty",
+            "label": "产量",
+            "kind": "output_qty",
+            "components": ["good_qty", "defect_qty"],
+        }
+    return None
+
+
+def _derived_target_sql(spec: dict[str, Any], dialect: str) -> str:
+    components = [_quoted_name(name, dialect) for name in spec["components"]]
+    alias = _quoted_name(spec["name"], dialect)
+    if spec["kind"] == "yield_rate":
+        good_qty, input_qty = components
+        return (
+            f"CASE WHEN COALESCE({input_qty}, 0) > 0 "
+            f"THEN ({good_qty} * 1.0) / {input_qty} ELSE NULL END AS {alias}"
+        )
+    good_qty, defect_qty = components
+    return f"COALESCE({good_qty}, 0) + COALESCE({defect_qty}, 0) AS {alias}"
+
+
+def _pick_split_fields(fields: list[dict]) -> tuple[str, str]:
+    """找到只用于防泄漏切分的时间列和业务实体列。"""
+    time_field = ""
+    group_field = ""
+    for field in fields:
+        name = str(field.get("name") or "").strip()
+        semantic = str(field.get("semanticName") or "").strip()
+        data_type = str(field.get("dataType") or field.get("type") or "").lower()
+        lowered = name.lower()
+        if not time_field and (
+            any(token in data_type for token in ("date", "time", "timestamp"))
+            or any(token in lowered or token in semantic for token in _TIME_FIELD_TOKENS)
+        ):
+            time_field = name
+        if not group_field and any(token in lowered or token in semantic.lower() for token in _GROUP_FIELD_TOKENS):
+            group_field = name
+    return time_field, group_field
+
+
+def _modeling_features(
+    fields: list[dict],
+    target_field: str,
+    excluded_fields: set[str] | None = None,
+) -> list[str]:
     """特征列：排除主键/时间/id 类列与目标列，保留建模可用列（上限 20）。"""
+    excluded = {str(item).lower() for item in (excluded_fields or set())}
     features: list[str] = []
     for field in fields:
         name = str(field.get("name") or "")
         lowered = name.lower()
-        if name == target_field or field.get("isPrimary"):
+        if name == target_field or lowered in excluded or field.get("isPrimary"):
             continue
         if any(token in lowered for token in _MODELING_SKIP_COLUMN_TOKENS):
             continue
@@ -1392,7 +1518,12 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         table = tables[0]
         task_type = _detect_modeling_task_type(question)
         fields = table.get("fields") or []
-        target_field, target_label = _pick_modeling_target(question, fields, task_type)
+        derived_target = _derived_modeling_target(question, fields) if task_type == "regression" else None
+        if derived_target:
+            target_field = derived_target["name"]
+            target_label = derived_target["label"]
+        else:
+            target_field, target_label = _pick_modeling_target(question, fields, task_type)
         if task_type in ("classification", "regression") and not target_field:
             return {
                 "error": {
@@ -1400,12 +1531,28 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                     "message": "未能从已登记字段中识别预测目标列，可前往智能建模人工补充目标字段后创建任务",
                 }
             }
-        features = _modeling_features(fields, target_field)
+        features = _modeling_features(
+            fields,
+            target_field,
+            set(derived_target["components"]) if derived_target else None,
+        )
         if not features:
             return {"error": {"code": "MODELING_NO_FEATURES", "message": "该表没有可用于建模的特征列"}}
-        select_columns = [*features, target_field] if target_field else features
+        time_field, group_field = _pick_split_fields(fields)
+        split_strategy = "time" if time_field and task_type == "regression" else (
+            "group" if group_field else ("time" if time_field else "random")
+        )
+        split_columns = [column for column in (time_field, group_field) if column]
+        select_columns = list(dict.fromkeys([
+            *features,
+            *split_columns,
+            *([target_field] if target_field and not derived_target else []),
+        ]))
         dialect = str(context.get("source", {}).get("type") or "mysql").lower()
-        quoted = ", ".join(_quoted_name(column, dialect) for column in select_columns)
+        select_expressions = [_quoted_name(column, dialect) for column in select_columns]
+        if derived_target:
+            select_expressions.append(_derived_target_sql(derived_target, dialect))
+        quoted = ", ".join(select_expressions)
         table_sql = _context_table_name(table, dialect)
         sql = get_adapter(dialect).apply_row_limit(
             f"SELECT {quoted} FROM {table_sql}", MODELING_SAMPLE_LIMIT
@@ -1435,6 +1582,9 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             "metric": MODELING_METRIC_LABELS[task_type],
             "features": features,
             "candidates": MODELING_RECOMMENDED_CANDIDATES[task_type],
+            "splitStrategy": split_strategy,
+            "timeField": time_field,
+            "groupField": group_field,
         }
         reusable = (
             deps.find_reusable_models(question, state["source_id"], task_type)

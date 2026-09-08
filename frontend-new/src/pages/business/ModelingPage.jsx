@@ -180,6 +180,7 @@ export default function ModelingPage() {
   const running = training.active;
   const hasResult = task.status === "trained";
   const hasFailed = task.status === "failed";
+  const needsNewPlan = hasFailed && /(^id$|_id$|^id_)/i.test(task.targetField ?? "");
   const selectedModel = catalog.find((item) => item.id === (strategy === "auto" ? task.selectedModel : manualModelId));
   const recommendedResult = (results?.models ?? []).find((item) => item.algorithm === results?.recommendedModel);
   const qualityAssessment = results?.qualityAssessment ?? recommendedResult?.qualityAssessment ?? recommendedResult?.explanation?.qualityAssessment ?? null;
@@ -277,6 +278,7 @@ export default function ModelingPage() {
         results={results}
         hasResult={hasResult}
         hasFailed={hasFailed}
+        needsNewPlan={needsNewPlan}
         running={running}
         trainError={trainError}
         diagnostics={diagnostics}
@@ -286,6 +288,7 @@ export default function ModelingPage() {
         onConfirm={train}
         onReviewPlan={() => setOpenPanel("plan")}
         onRetry={train}
+        onNewPlan={() => navigatePage("analysis")}
       />
 
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
@@ -399,9 +402,17 @@ export default function ModelingPage() {
   );
 }
 
-function TaskOutcome({ task, results, diagnostics, qualityAssessment, canUseModel, hasResult, hasFailed, running, trainError, onUse, onConfirm, onReviewPlan, onRetry }) {
+function TaskOutcome({ task, results, diagnostics, qualityAssessment, canUseModel, hasResult, hasFailed, needsNewPlan, running, trainError, onUse, onConfirm, onReviewPlan, onRetry, onNewPlan }) {
   const qualityBlocked = hasResult && qualityAssessment?.status === "blocked";
-  const state = hasFailed ? {
+  const state = needsNewPlan ? {
+    eyebrow: "旧方案需要更新",
+    title: "预测目标选择错误，请重新生成方案",
+    description: `原方案把记录标识 ${task.targetField} 当作预测目标，不能直接重新训练。新方案会使用正确的数值指标并重新检查特征。`,
+    icon: "warning",
+    tone: "text-red bg-red-soft border-red/20",
+    statusLabel: "方案不可用",
+    statusTone: "red",
+  } : hasFailed ? {
     eyebrow: "训练未完成",
     title: "模型训练失败，可以重新发起",
     description: trainError || "训练过程中发生错误。可检查建模方案后重新发起训练。",
@@ -464,7 +475,7 @@ function TaskOutcome({ task, results, diagnostics, qualityAssessment, canUseMode
           <p className="mt-1 text-xs leading-relaxed text-muted">{state.description}</p>
         </div>
         <div className="flex gap-2">
-          {hasFailed ? <><Button variant="secondary" onClick={onReviewPlan}>检查建模方案</Button><Button variant="primary" onClick={onRetry}><Icon name="play" size={15} />重新训练</Button></> : qualityBlocked ? <><Button variant="secondary" onClick={onReviewPlan}>调整方案</Button><Button variant="primary" onClick={onRetry}><Icon name="refresh" size={15} />重新评估</Button></> : hasResult && canUseModel ? <><Button variant="secondary" onClick={onReviewPlan}>评估新版本</Button><Button variant="primary" onClick={onUse}><Icon name="analysis" size={15} />使用模型分析</Button></> : hasResult ? <Button variant="secondary" onClick={onReviewPlan}>评估新版本</Button> : running ? <Button variant="secondary" disabled><Icon name="refresh" size={15} />训练中</Button> : <Button variant="primary" onClick={diagnostics?.status === "blocked" ? onReviewPlan : onConfirm} disabled={!diagnostics}><Icon name={diagnostics?.status === "blocked" ? "warning" : "play"} size={15} />{diagnostics?.status === "blocked" ? "查看阻断原因" : "确认并开始训练"}</Button>}
+          {needsNewPlan ? <Button variant="primary" onClick={onNewPlan}><Icon name="refresh" size={15} />重新生成方案</Button> : hasFailed ? <><Button variant="secondary" onClick={onReviewPlan}>检查建模方案</Button><Button variant="primary" onClick={onRetry}><Icon name="play" size={15} />重新训练</Button></> : qualityBlocked ? <><Button variant="secondary" onClick={onReviewPlan}>调整方案</Button><Button variant="primary" onClick={onRetry}><Icon name="refresh" size={15} />重新评估</Button></> : hasResult && canUseModel ? <><Button variant="secondary" onClick={onReviewPlan}>评估新版本</Button><Button variant="primary" onClick={onUse}><Icon name="analysis" size={15} />使用模型分析</Button></> : hasResult ? <Button variant="secondary" onClick={onReviewPlan}>评估新版本</Button> : running ? <Button variant="secondary" disabled><Icon name="refresh" size={15} />训练中</Button> : <Button variant="primary" onClick={diagnostics?.status === "blocked" ? onReviewPlan : onConfirm} disabled={!diagnostics}><Icon name={diagnostics?.status === "blocked" ? "warning" : "play"} size={15} />{diagnostics?.status === "blocked" ? "查看阻断原因" : "确认并开始训练"}</Button>}
         </div>
       </div>
       {hasResult && (

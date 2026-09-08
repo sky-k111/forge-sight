@@ -14,8 +14,19 @@ CREATE TABLE IF NOT EXISTS tenant (
 CREATE INDEX IF NOT EXISTS ix_tenant_slug ON tenant (slug);
 CREATE INDEX IF NOT EXISTS ix_tenant_status ON tenant (status);
 
-INSERT INTO tenant (id, slug, name, status, plan_code)
-VALUES ('tenant-default', 'forgesight-demo', 'ForgeSight 演示企业', 'active', 'enterprise')
+-- Base.metadata.create_all() may have created this table before numbered
+-- migrations run. ORM-side defaults are not PostgreSQL server defaults, so
+-- restore the SQL defaults expected by this migration for that bootstrap path.
+ALTER TABLE tenant ALTER COLUMN status SET DEFAULT 'active';
+ALTER TABLE tenant ALTER COLUMN plan_code SET DEFAULT 'enterprise';
+ALTER TABLE tenant ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE tenant ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP;
+
+INSERT INTO tenant (id, slug, name, status, plan_code, created_at, updated_at)
+VALUES (
+    'tenant-default', 'forgesight-demo', 'ForgeSight 演示企业',
+    'active', 'enterprise', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+)
 ON CONFLICT (id) DO NOTHING;
 
 ALTER TABLE data_source ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(40);
@@ -43,11 +54,18 @@ CREATE INDEX IF NOT EXISTS ix_tenant_membership_tenant_id ON tenant_membership (
 CREATE INDEX IF NOT EXISTS ix_tenant_membership_user_id ON tenant_membership (user_id);
 CREATE INDEX IF NOT EXISTS ix_tenant_membership_member_role ON tenant_membership (member_role);
 
-INSERT INTO tenant_membership (id, tenant_id, user_id, member_role, is_default, enabled)
+ALTER TABLE tenant_membership ALTER COLUMN member_role SET DEFAULT 'member';
+ALTER TABLE tenant_membership ALTER COLUMN is_default SET DEFAULT FALSE;
+ALTER TABLE tenant_membership ALTER COLUMN enabled SET DEFAULT TRUE;
+ALTER TABLE tenant_membership ALTER COLUMN joined_at SET DEFAULT CURRENT_TIMESTAMP;
+
+INSERT INTO tenant_membership (
+    id, tenant_id, user_id, member_role, is_default, enabled, joined_at
+)
 SELECT 'tm_' || substr(md5('tenant-default:' || id), 1, 24),
        'tenant-default', id,
        CASE WHEN role = 'admin' THEN 'owner' ELSE 'member' END,
-       TRUE, TRUE
+       TRUE, TRUE, CURRENT_TIMESTAMP
 FROM platform_user
 ON CONFLICT (tenant_id, user_id) DO NOTHING;
 

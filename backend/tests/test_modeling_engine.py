@@ -197,6 +197,23 @@ def test_dataset_diagnostics_blocks_bad_labels_and_recommends_group_split():
     assert any("2 个类别" in item for item in blocked["blockers"])
 
 
+def test_dataset_diagnostics_blocks_text_regression_target_before_training():
+    df = make_classification_df(240)
+    df["output_id"] = [f"OUT-{index:05d}" for index in range(len(df))]
+
+    report = diagnose_dataset(
+        df,
+        "regression",
+        target_field="output_id",
+        features=["工序", "停机时长", "计划数量"],
+    )
+
+    assert report["status"] == "blocked"
+    assert any("非数值" in item for item in report["blockers"])
+    target_check = next(item for item in report["checks"] if item["key"] == "target")
+    assert target_check["status"] == "fail"
+
+
 def test_balanced_automl_uses_training_cv_and_returns_threshold_policy():
     prepared = prepare_dataset(make_classification_df(300), "classification", target_field="high_defect_risk")
     model, tuning = tune_model("classification", "logistic", prepared, optimization_level="balanced")
