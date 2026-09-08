@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     agent_planner_max_capability_calls: int = 8
     agent_planner_max_database_executions: int = 3
     agent_planner_max_replans: int = 1
+    # planner 在确定性规则判“目标完成”后，若结果仍有限制/建议，是否再用一次 LLM 决定是否加一步追问。
+    agent_planner_llm_evaluate_enabled: bool = True
     agent_planner_max_async_jobs: int = 1
     agent_worker_enabled: bool = True
     agent_worker_poll_seconds: float = 0.75

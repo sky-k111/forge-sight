@@ -55,6 +55,21 @@ def resolve_time_constraint(constraint: dict[str, Any] | None, horizon: Any = No
     return dict(constraint)
 
 
+_CN_NUM = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10, "半": 1}
+
+
+def _amount(value: Any) -> int:
+    """支持 "最近一个月/两周/三天" 里的中文数字（一~十/两/半），否则回退默认 7。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        pass
+    text = str(value or "").strip()
+    if text in _CN_NUM:
+        return _CN_NUM[text]
+    return 7
+
+
 def _month_start(d: date) -> date:
     return d.replace(day=1)
 
@@ -148,7 +163,7 @@ def _resolve_relative(constraint: dict[str, Any], ref: date) -> dict[str, Any]:
             "endExclusive": end.isoformat(),
         }]
     elif kind == "recent":
-        amount = int(constraint.get("amount") or 7)
+        amount = _amount(constraint.get("amount"))
         unit = constraint.get("unit") or "天"
         days = amount * (1 if unit in {"天", "日"} else 30 if unit in {"月", "个月"} else 7)
         out["periods"] = [{

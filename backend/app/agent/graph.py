@@ -25,7 +25,7 @@ from app.agent.interpretation import (
     _build_kpis as rebuild_interpretation_kpis,
 )
 from app.agent.intent import build_intent_plan, build_request_route
-from app.agent.plan_schema import AgentPlan, CapabilityObservation, PlanBudget, dump_contract
+from app.agent.plan_schema import AgentPlan, CapabilityObservation, PlanBudget, PlanStep, StepFailurePolicy, dump_contract
 from app.agent.planner import build_plan, revise_plan, should_use_planner, validate_plan
 from app.agent.progress import evaluate_progress, select_next_step
 from app.agent.state import AnalysisState
@@ -1325,10 +1325,177 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             "error": state.get("error"),
         }
 
+    def _planner_allowed_capabilities(state: AnalysisState) -> set[str]:
+        return capability_registry.names_for(
+            state.get("role", "business"),
+            frozenset(state.get("capability_scopes") or [
+                "analysis:read", "scope:read", "task:read", "report:draft",
+                "modeling:read", "modeling:draft", "modeling:predict",
+            ]),
+        )
+
+    def _appendable_step(plan: AgentPlan, step: PlanStep) -> bool:
+        """校验追加步骤是否在预算、依赖与唯一性范围内，防止模型制造死循环或超预算。"""
+        ids = {s.id for s in plan.steps}
+        if step.id in ids:
+            return False
+        if len(plan.steps) + 1 > plan.budget.max_capability_calls:
+            return False
+        db = sum(s.capability == "analysis.query_data" for s in plan.steps)
+        if step.capability == "analysis.query_data":
+            db += 1
+        if db > plan.budget.max_database_executions:
+            return False
+        if not set(step.depends_on).issubset(ids):
+            return False
+        return True
+
+    def _planner_proposed_step(state: AnalysisState, step: dict[str, Any], plan: AgentPlan) -> PlanStep | None:
+        """把 LLM 提议的追加查询步骤落到受控 PlanStep；任何越界都返回 None。"""
+        cap = str(step.get("capability") or "")
+        if cap not in _planner_allowed_capabilities(state):
+            return None
+        # 目前只允许自动追加只读分析查询，模型不能自发触发报告/建模/外部动作。
+        if cap != "analysis.query_data":
+            return None
+        question = str(step.get("question") or "").strip()
+        if not (0 < len(question) <= 1000):
+            return None
+        existing_questions = {str((s.arguments or {}).get("question") or "") for s in plan.steps}
+        if question == plan.goal or question in existing_questions:
+            return None  # 避免死循环
+        done = {o.get("stepId") for o in state.get("observations") or [] if o.get("status") in {"succeeded", "accepted"}}
+        deps = [d for d in (step.get("dependsOn") or []) if d in done]
+        if not set(deps).issubset({s.id for s in plan.steps}):
+            return None
+        step_id = new_id("pst")
+        task = {
+            "id": f"tsk-{state.get('run_id', 'run')[-12:]}-{step_id[-8:]}",
+            "order": len(done) + 1,
+            "title": str(step.get("purpose") or question[:80]),
+            "originalQuestion": question,
+            "normalizedQuestion": question,
+            "mode": "planned",
+            "analysisType": "query",
+            "dependsOn": list(deps),
+            "requestedChart": None,
+            "timeConstraint": None,
+            "groupBy": [],
+        }
+        candidate = PlanStep(
+            id=step_id,
+            capability="analysis.query_data",
+            purpose=str(step.get("purpose") or question[:120]),
+            arguments={"question": question, "task": task},
+            dependsOn=deps,
+            successCriteria=["返回只读查询结果", "披露指标口径与数据限制"],
+            onFailure=StepFailurePolicy.REPLAN_ONCE,
+        )
+        budget_ok = (
+            len(plan.steps) + 1 <= plan.budget.max_capability_calls
+            and (sum(s.capability == "analysis.query_data" for s in plan.steps) + 1) <= plan.budget.max_database_executions
+        )
+        return candidate if budget_ok else None
+
+    def _planner_evaluate_with_llm(state: AnalysisState, plan: AgentPlan) -> dict[str, Any] | None:
+        """确定性规则判“目标完成”后，若结果仍有限制/建议且预算允许，交 LLM 决定是否加一步追问。"""
+        if not settings.agent_planner_llm_evaluate_enabled:
+            return None
+        if state.get("replan_count", 0) >= plan.budget.max_replans:
+            return None
+        observations = state.get("observations") or []
+        usable = [
+            o for o in observations
+            if o.get("status") in {"succeeded", "accepted"}
+            and o.get("capability") in {"analysis.query_data", "analysis.inspect_context", "analysis.inspect_result_quality"}
+        ]
+        if not usable:
+            return None
+        if not any((o.get("quality") or {}).get("limitations") or o.get("suggestedNext") for o in usable):
+            return None
+        obs_payload = [{
+            "stepId": o.get("stepId"),
+            "capability": o.get("capability"),
+            "status": o.get("status"),
+            "summary": str(o.get("summary") or "")[:200],
+            "sampleCount": (o.get("quality") or {}).get("sampleCount"),
+            "coverage": (o.get("quality") or {}).get("coverage"),
+            "limitations": (o.get("quality") or {}).get("limitations") or [],
+            "suggestedNext": o.get("suggestedNext") or [],
+        } for o in usable[:3]]
+        done = {o.get("stepId") for o in observations if o.get("status") in {"succeeded", "accepted"}}
+        completed = [s.id for s in plan.steps if s.id in done]
+        db = sum(o.get("capability") == "analysis.query_data" for o in observations if o.get("status") in {"succeeded", "accepted", "failed"})
+        system = (
+            "你是受限业务规划器。只能判断是否继续、重新规划或结束，并至多提议一个后续只读查询步骤。"
+            "不得生成 SQL，不得选择未在 allowedCapabilities 中的能力，不得超出剩余预算。"
+            "若现有结果已足够回答目标则 finalize；若存在明确缺口且预算允许则 replan 并给 step。"
+            "只返回 JSON：action 取 continue/replan/finalize，reason 为原因；"
+            "若 replan 则附带 step，含 capability 固定为 analysis.query_data、purpose、question、"
+            "dependsOn 为已完成 stepId 列表。step 不需要时省略。"
+        )
+        user = json.dumps({
+            "goal": plan.goal,
+            "completedSteps": completed,
+            "observations": obs_payload,
+            "allowedCapabilities": sorted(_planner_allowed_capabilities(state)),
+            "remainingBudget": {
+                "maxCapabilityCalls": plan.budget.max_capability_calls,
+                "usedCapabilityCalls": len(state.get("capability_calls") or []),
+                "maxDatabaseExecutions": plan.budget.max_database_executions,
+                "usedDatabaseExecutions": db,
+                "maxReplans": plan.budget.max_replans,
+                "usedReplans": state.get("replan_count", 0),
+            },
+        }, ensure_ascii=False, default=str)
+        try:
+            raw = deps.generate_text(state, "planner.evaluate", system, user)
+            payload = _extract_json_object(raw)
+            if not isinstance(payload, dict):
+                return None
+            action = str(payload.get("action") or "").strip().lower()
+            if action not in {"continue", "replan", "finalize"}:
+                return None
+            if action in {"replan", "continue"}:
+                step = payload.get("step")
+                if isinstance(step, dict):
+                    sanitized = _planner_proposed_step(state, step, plan)
+                    if sanitized:
+                        return {
+                            "action": "replan",
+                            "reasonCode": "LLM_REFINED_GOAL",
+                            "summary": str(payload.get("reason") or "自动补充分析")[:300],
+                            "step": dump_contract(sanitized),
+                        }
+            return {
+                "action": action,
+                "reasonCode": "LLM_GOAL_SATISFIED" if action == "finalize" else "LLM_CONTINUE",
+                "summary": str(payload.get("reason") or "")[:300],
+            }
+        except Exception:  # noqa: BLE001 - LLM 不可用或不合法时回退确定性规则
+            return None
+
     def evaluate_business_progress(state: AnalysisState) -> dict:
         plan = AgentPlan.model_validate(state["plan"])
         decision = evaluate_progress(plan, state.get("observations") or [], replan_count=state.get("replan_count", 0))
-        return {"progress_decision": {"action": decision.action, "reasonCode": decision.reason_code, "summary": decision.summary}}
+        proposed = None
+        # 确定性规则判定“目标完成”，但结果仍有限制/建议且还有重规划预算时，交给 LLM 决定是否加一步追问。
+        if (
+            decision.action == "finalize"
+            and decision.reason_code == "GOAL_SATISFIED"
+            and state.get("replan_count", 0) < plan.budget.max_replans
+        ):
+            llm_dec = _planner_evaluate_with_llm(state, plan)
+            if llm_dec and llm_dec.get("step"):
+                proposed = llm_dec["step"]
+                return {
+                    "progress_decision": {"action": "replan", "reasonCode": llm_dec["reasonCode"], "summary": llm_dec["summary"]},
+                    "proposed_plan_step": proposed,
+                }
+        return {
+            "progress_decision": {"action": decision.action, "reasonCode": decision.reason_code, "summary": decision.summary},
+            "proposed_plan_step": proposed,
+        }
 
     def revise_business_plan(state: AnalysisState) -> dict:
         plan = AgentPlan.model_validate(state["plan"])
@@ -1339,7 +1506,17 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                 "modeling:read", "modeling:draft", "modeling:predict",
             ]),
         )
-        revised = revise_plan(plan, state.get("observations") or [], available_capabilities)
+        proposed_step = state.get("proposed_plan_step")
+        revised = None
+        if proposed_step:
+            try:
+                step = PlanStep.model_validate(proposed_step)
+                if step.capability in available_capabilities and _appendable_step(plan, step):
+                    revised = plan.model_copy(update={"steps": [*plan.steps, step]})
+            except Exception:  # noqa: BLE001
+                revised = None
+        if revised is None:
+            revised = revise_plan(plan, state.get("observations") or [], available_capabilities)
         return {
             "plan": dump_contract(revised),
             "plan_revision": state.get("plan_revision", 1) + 1,
@@ -1347,6 +1524,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             "progress_decision": {},
             "active_plan_step": None,
             "active_plan_step_id": None,
+            "proposed_plan_step": None,
         }
 
     def finalize_business_plan(state: AnalysisState) -> dict:
@@ -1370,6 +1548,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             "direct_response": direct,
             "active_plan_step": None,
             "active_plan_step_id": None,
+            "proposed_plan_step": None,
             "error": None if has_usable_result else state.get("error"),
         }
 
