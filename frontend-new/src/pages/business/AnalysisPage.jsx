@@ -18,7 +18,7 @@ import {
   submitAnalysisRun,
   subscribeAnalysisRun,
 } from "../../features/analysis/api";
-import { adaptAnalysisRun, compressMonthAxis } from "../../features/analysis/runViewAdapter";
+import { adaptAnalysisRun, compressMonthAxis, applyChartAdjustment } from "../../features/analysis/runViewAdapter";
 import AnalysisAdjustmentPanel from "../../features/analysis/AnalysisAdjustmentPanel";
 import { buildTracePath, getTraceFitTransform } from "./traceGraphLayout";
 import { waitForAgentThinking } from "./analysisThinking";
@@ -53,6 +53,23 @@ function chartLegendItems(chart) {
     ?? (chart?.series ?? [...(chart?.bars ?? []), ...(chart?.lines ?? [])])
       .map((item) => ({ label: item.name, color: item.color }));
 }
+
+function applyAdjustmentToMessageList(messages, adjustment, adjustmentRunId) {
+  let index = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const item = messages[i];
+    if (item.role === "assistant" && item.run?.id !== adjustmentRunId && item.run?.charts?.length) {
+      index = i; break;
+    }
+  }
+  if (index < 0) return messages;
+  const target = messages[index];
+  const charts = (target.run.charts ?? []).map((chart) => applyChartAdjustment(chart, adjustment));
+  const next = [...messages];
+  next[index] = { ...target, run: { ...target.run, charts, chart: charts.at(-1) ?? null } };
+  return next;
+}
+
 
 export default function AnalysisPage() {
   const { evidenceOpen, setEvidenceOpen, navigatePage, refreshSessions } = useOutletContext();
@@ -133,9 +150,14 @@ export default function AnalysisPage() {
     const run = adaptAnalysisRun(snapshot);
     setMessages((current) => {
       if (current == null) return current;
-      const existingIndex = current.findIndex((item) => item.role === "assistant" && item.run?.id === run.id);
-      if (existingIndex < 0) return [...current, { id: run.id, role: "assistant", run, animate: false }];
-      const next = [...current];
+      let base = current;
+      // 图调整运行到达终态：把调整应用到上一张带图表的运行，实现“不弹面板、不重查库”的自动处理。
+      if (run.chartAdjustment && TERMINAL_STATUSES.has(run.status)) {
+        base = applyAdjustmentToMessageList(base, run.chartAdjustment, run.id);
+      }
+      const existingIndex = base.findIndex((item) => item.role === "assistant" && item.run?.id === run.id);
+      if (existingIndex < 0) return [...base, { id: run.id, role: "assistant", run, animate: false }];
+      const next = [...base];
       next[existingIndex] = { ...next[existingIndex], run, animate: false };
       return next;
     });

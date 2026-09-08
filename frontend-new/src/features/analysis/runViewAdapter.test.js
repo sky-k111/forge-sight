@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { adaptAnalysisRun, parseAnalysisNarrative } from "./runViewAdapter";
+import { adaptAnalysisRun, parseAnalysisNarrative, aggregateYearAxis, applyChartAdjustment } from "./runViewAdapter";
 
 function snapshotWithResult({ question, analysisType = "query", requestedChart = null, columns, rows }) {
   return {
@@ -382,5 +382,44 @@ AOI检测 | 99.21%`);
     expect(run.chart).toBeNull();
     expect(run.execution.rows).toHaveLength(2);
     expect(run.result.kpis).toHaveLength(3);
+  });
+});
+
+
+describe("chart axis adjustments", () => {
+  test("aggregateYearAxis collapses same-year months into one year bar", () => {
+    const chart = {
+      type: "bar", xKey: "month", valueKey: "total_output",
+      data: [
+        { month: "2026-01", total_output: 100 },
+        { month: "2026-02", total_output: 200 },
+        { month: "2026-07", total_output: 50 },
+      ],
+      bars: [{ key: "total_output", name: "total_output" }],
+    };
+    const out = aggregateYearAxis(chart);
+    expect(out.data).toEqual([{ month: "2026", total_output: 350 }]);
+    expect(out.xKey).toBe("month");
+  });
+
+  test("aggregateYearAxis keeps cross-year months distinct", () => {
+    const chart = {
+      type: "bar", xKey: "month", valueKey: "v",
+      data: [{ month: "2025-12", v: 10 }, { month: "2026-01", v: 20 }],
+      bars: [{ key: "v", name: "v" }],
+    };
+    const out = aggregateYearAxis(chart);
+    expect(out.data).toEqual([{ month: "2025", v: 10 }, { month: "2026", v: 20 }]);
+  });
+
+  test("applyChartAdjustment switches granularity and chart type", () => {
+    const chart = {
+      type: "bar", xKey: "month", valueKey: "v",
+      data: [{ month: "2026-01", v: 5 }, { month: "2026-02", v: 7 }],
+      bars: [{ key: "v", name: "v" }],
+    };
+    const out = applyChartAdjustment(chart, { granularity: "year", chartType: "line" });
+    expect(out.type).toBe("line");
+    expect(out.data).toEqual([{ month: "2026", v: 12 }]);
   });
 });

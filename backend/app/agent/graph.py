@@ -960,7 +960,7 @@ def _chart_adjustment_message(spec: dict[str, Any]) -> str:
     bits: list[str] = []
     if granularity:
         label = _GRANULARITY_LABEL.get(str(granularity), str(granularity))
-        bits.append("去掉横轴重复年份（按月展示）" if str(granularity) == "year" else f"{axis}改为按{label}展示")
+        bits.append("将横轴收敛为单个年份并按年汇总" if str(granularity) == "year" else f"{axis}改为按{label}展示")
     if chart_type:
         label = _CHART_TYPE_LABEL.get(str(chart_type), str(chart_type))
         bits.append(f"切换为{label}")
@@ -971,20 +971,62 @@ def _chart_adjustment_message(spec: dict[str, Any]) -> str:
     return f"已自动调整当前图表（{'；'.join(bits)}），无需重新查询数据。"
 
 
+_CHART_ADJ_GRANULARITY_HINTS = (
+    ("年", "year"), ("按年", "year"), ("年份", "year"), ("整年", "year"),
+    ("月", "month"), ("按月", "month"),
+    ("周", "week"), ("按周", "week"),
+    ("季度", "quarter"), ("按季度", "quarter"),
+)
+
+
+def _infer_chart_adjustment_spec(instruction: str, current: dict[str, Any]) -> dict[str, Any]:
+    """LLM 已判为 chart_adjustment 时，从指令文本回填缺失的结构化 spec。
+
+    分类（chart_adjustment vs analysis）仍由路由模型负责；这里只补全展示参数，
+    避免模型漏给 granularity/chartType 时前端无法真正改图。
+    """
+    spec = dict(current or {})
+    text = str(instruction or "")
+    if "axis" not in spec or not spec.get("axis"):
+        if any(t in text for t in ("纵坐标", "纵轴", "y轴", "y 轴", "纵")):
+            spec["axis"] = "y"
+        else:
+            spec["axis"] = "x"
+    if not spec.get("granularity"):
+        for hint, value in _CHART_ADJ_GRANULARITY_HINTS:
+            if hint in text:
+                spec["granularity"] = value
+                break
+        if not spec.get("granularity") and re.search(r"(?:19|20)\d{2}", text):
+            spec["granularity"] = "year"
+    if not spec.get("chartType"):
+        lowered = text.lower()
+        if any(t in text for t in ("折线", "趋势", "曲线")):
+            spec["chartType"] = "line"
+        elif any(t in text for t in ("饼", "环形", "占比")):
+            spec["chartType"] = "donut"
+        elif any(t in text for t in ("热力", "矩阵")):
+            spec["chartType"] = "heatmap"
+        elif any(t in text for t in ("柱", "条")):
+            spec["chartType"] = "bar"
+        elif "combo" in lowered or any(t in text for t in ("柱线", "组合")):
+            spec["chartType"] = "combo"
+    if not spec.get("format") and any(t in text for t in ("百分比", "百分号", "%", "百分之")):
+        spec["format"] = "percent"
+    return spec
+
+
 def _build_chart_adjustment(
     route: dict[str, Any], responses: dict[int, str], specs: dict[int, dict[str, Any]]
 ) -> tuple[dict[str, Any], str]:
     segs = route.get("chartAdjustmentSegments") or []
     spec: dict[str, Any] = {}
-    message = ""
     for item in segs:
         idx = item["index"]
         if idx in specs:
             spec.update(specs[idx])
-        msg = (responses.get(idx) or "").strip()
-        if msg:
-            message = msg
     instruction = route.get("chartAdjustmentQuestion") or ""
+    spec = _infer_chart_adjustment_spec(instruction, spec)
     # 用户可见消息用确定性模板，避免 LLM 对“聚合到单个年份”等过度承诺；
     # 模型回复仅作为原始说明存进 note，供证据链参考。
     message = _chart_adjustment_message(spec)

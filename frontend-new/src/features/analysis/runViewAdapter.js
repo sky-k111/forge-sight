@@ -170,6 +170,80 @@ export function compressMonthAxis(chart) {
   return { ...chart, data };
 }
 
+function yearOf(value) {
+  const raw = String(value ?? "");
+  const dashed = raw.match(/^(\d{4})[-/]\d{1,2}/);
+  if (dashed) return dashed[1];
+  if (/^\d{6}$/.test(raw)) return raw.slice(0, 4);
+  if (/^\d{4}$/.test(raw)) return raw;
+  return null;
+}
+
+
+export function aggregateYearAxis(chart) {
+  if (!chart || !Array.isArray(chart.data) || !chart.xKey) return chart;
+  const xKey = chart.xKey;
+  const years = chart.data.map((row) => yearOf(row?.[xKey]));
+  if (!years.some(Boolean)) return chart;
+  // 只有当下钻到月/周/日等子粒度时才聚合；若已是年粒度则保持原样。
+  const valueKeys = new Set();
+  (chart.bars ?? []).forEach((b) => valueKeys.add(b.key));
+  (chart.series ?? []).forEach((s) => valueKeys.add(s.key));
+  if (valueKeys.size === 0) {
+    chart.data.forEach((row) => Object.keys(row).forEach((k) => {
+      if (k !== xKey && typeof row[k] === "number") valueKeys.add(k);
+    }));
+  }
+  const distinctYears = [...new Set(years.filter(Boolean))];
+  const data = distinctYears.map((y) => {
+    const row = { [xKey]: y };
+    valueKeys.forEach((k) => {
+      let sum = 0; let count = 0;
+      chart.data.forEach((r, i) => {
+        if (years[i] === y && typeof r?.[k] === "number") { sum += r[k]; count += 1; }
+      });
+      row[k] = count ? Number(sum.toFixed(2)) : undefined;
+    });
+    return row;
+  });
+  const values = data.flatMap((row) => [...valueKeys].map((k) => row[k]).filter((v) => typeof v === "number"));
+  const max = values.length ? Math.max(...values) : 0;
+  const next = { ...chart, data, note: chart.note };
+  if (max > 0) next.yDomain = [0, Math.ceil((max * 1.15) / 1000) * 1000];
+  if (max < 1) next.yPrecision = 2;
+  return next;
+}
+
+
+export function applyChartAdjustment(chart, adjustment = {}) {
+  if (!chart) return chart;
+  let next = chart;
+  if (adjustment.granularity === "year") next = aggregateYearAxis(next);
+  const target = adjustment.chartType;
+  if ((target === "line" || target === "bar" || target === "combo" || target === "donut") && next.type !== target) {
+    next = switchChartType(next, target);
+  }
+  if (adjustment.format === "percent") {
+    next = { ...next, unit: "%", yDomain: [0, 100], yPrecision: 1 };
+  }
+  return next;
+}
+
+
+function switchChartType(chart, target) {
+  const valueKey = chart.valueKey || (chart.bars ?? [])[0]?.key || Object.keys(chart.data?.[0] ?? {}).find((k) => k !== chart.xKey);
+  if (!valueKey) return chart;
+  const series = [{ key: valueKey, name: valueKey }];
+  if (target === "line") return { ...chart, type: "line", series, bars: [] };
+  if (target === "donut") {
+    const data = (chart.data ?? []).map((row) => ({ name: String(row?.[chart.xKey] ?? "未命名"), value: Number(row?.[valueKey] ?? 0) }));
+    return { ...chart, type: "donut", data, centerTitle: "合计", centerValue: data.reduce((a, b) => a + (b.value || 0), 0).toLocaleString("zh-CN"), bars: [], series: [] };
+  }
+  if (target === "combo") return { ...chart, type: "combo", bars: [series[0]], lines: [], series: [] };
+  return { ...chart, type: "bar", bars: series, series: [] };
+}
+
+
 function hydrateChart(chart) {
   if (!chart) return chart;
   const next = { ...chart };
