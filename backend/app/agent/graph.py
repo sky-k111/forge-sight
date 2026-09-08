@@ -17,7 +17,13 @@ from app.agent.capabilities import build_default_registry
 from app.agent.capability_executor import CapabilityExecutor, capability_idempotency_key
 from app.agent.capability_registry import CapabilityContext
 from app.agent.ids import new_id
-from app.agent.interpretation import build_interpretation
+from app.agent.interpretation import (
+    build_interpretation,
+    build_visual_contract_prompt,
+    chart_contract_is_ambiguous,
+    refine_chart_contract,
+    _build_kpis as rebuild_interpretation_kpis,
+)
 from app.agent.intent import build_intent_plan, build_request_route
 from app.agent.plan_schema import AgentPlan, CapabilityObservation, PlanBudget, dump_contract
 from app.agent.planner import build_plan, revise_plan, should_use_planner, validate_plan
@@ -37,6 +43,42 @@ WRITE_TERMS = (
 
 RETRIEVAL_QUERY_MAX_LENGTH = 1000
 RETRIEVAL_HISTORY_ITEMS = 2
+_VISUAL_CONTRACT_SYSTEM = (
+    "你是图表参数选择器。只负责根据用户问题与查询结果列选出图表配置，"
+    "绝不执行、改写或解释任何 SQL。"
+)
+
+
+def _maybe_refine_visual_contract(state, execution, interpretation, resolution, deps, question):
+    """规则拿不准时，用一次受限 LLM 调用来选定图表/维度契约，失败则回退规则结果。"""
+    if not settings.visual_contract_llm_enabled:
+        return interpretation
+    chart = interpretation.get("chart")
+    columns = list(execution.get("columns") or [])
+    rows = list(execution.get("rows") or [])
+    if not columns or not rows:
+        return interpretation
+    metric_name = str((resolution or {}).get("name") or "")
+    analysis_type = str((state.get("task") or {}).get("analysisType") or "")
+    if not chart_contract_is_ambiguous(chart, columns, rows, question, metric_name, analysis_type):
+        return interpretation
+    sample_rows = [list(r) for r in rows[:5]]
+    prompt = build_visual_contract_prompt(question, metric_name, resolution, columns, sample_rows)
+    try:
+        llm_text = deps.generate_text(state, "visual.contract", _VISUAL_CONTRACT_SYSTEM, prompt)
+    except Exception:
+        return interpretation
+    refined = refine_chart_contract(columns, rows, question, metric_name, llm_text)
+    if not refined:
+        return interpretation
+    interpretation = dict(interpretation)
+    interpretation["chart"] = refined
+    interpretation["kpis"] = rebuild_interpretation_kpis(columns, rows, resolution or {}, refined)
+    interpretation["chart_source"] = "llm"
+    return interpretation
+
+
+
 
 
 @dataclass(frozen=True)
@@ -1708,7 +1750,8 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                 "error": {
                     "code": "MODEL_SERVICE_UNAVAILABLE",
                     "message": str(exc),
-                    "userSafeMessage": "模型服务连接失败，请稍后重试或检查模型服务配置。",
+                    "retryable": True,
+                    "userSafeMessage": "模型服务连接失败，系统将自动重试。",
                 }
             }
         try:
@@ -1846,6 +1889,26 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             attempted.append(_sql_fingerprint(state["sql"]))
         return {"attempted_sqls": attempted, "retry_count": state.get("retry_count", 0) + 1}
 
+    def _fallback_conclusion(state: AnalysisState, execution: dict[str, Any]) -> str:
+        """LLM 不可用时，用已取回的行数据生成确定性结论，保证有结果可看。"""
+        columns = list(execution.get("columns") or [])
+        rows = list(execution.get("rows") or [])
+        row_count = int(execution.get("row_count") or len(rows) or 0)
+        question = state.get("task", {}).get("normalizedQuestion") or state.get("user_question", "")
+        if row_count == 0 or not rows:
+            return "查询已执行，未返回任何记录；请核对统计日期范围或数据源是否存在对应数据。"
+        lines = [f"{question}", ""]
+        if len(columns) <= 6 and len(rows) <= 30:
+            lines.append("| " + " | ".join(str(c) for c in columns) + " |")
+            lines.append("|" + "|".join(["---"] * len(columns)) + "|")
+            for row in rows[:30]:
+                lines.append("| " + " | ".join(str(v) for v in row) + " |")
+            if row_count > len(rows):
+                lines.append(f"共 {row_count} 条，仅展示前 {len(rows)} 条。")
+            lines.append("")
+        lines.append(f"本次共返回 {row_count} 条记录（展示方式由数据直接生成；结论撰写服务暂时限流，未补充额外解读）。")
+        return "\n".join(lines)
+
     def explain_result(state: AnalysisState) -> dict:
         execution = state["execution"]
         preview = {
@@ -1882,6 +1945,16 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                 resolution,
                 execution,
             )
+            interpretation = _maybe_refine_visual_contract(
+                state,
+                execution,
+                interpretation,
+                resolution,
+                deps,
+                state.get("task", {}).get("normalizedQuestion") or state["user_question"],
+            )
+            if not conclusion.strip():
+                conclusion = _fallback_conclusion(state, execution)
             return {
                 "conclusion": text,
                 "confidence": confidence,
@@ -1891,6 +1964,26 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             }
         except Exception as exc:  # noqa: BLE001
             code = "RUN_BUDGET_EXCEEDED" if isinstance(exc, BudgetExceeded) else "RESULT_EXPLANATION_FAILED"
+            # 结论撰写失败不应让整次分析殉葬：只要数据已取回，就回退到确定性列表，而不是终止。
+            if code == "RESULT_EXPLANATION_FAILED":
+                fallback = _fallback_conclusion(state, execution)
+                resolution = state.get("metric_resolution") or {}
+                try:
+                    interpretation = build_interpretation(
+                        state.get("task") or {},
+                        resolution,
+                        execution,
+                    )
+                except Exception:  # noqa: BLE001
+                    interpretation = {"kind": "interpretation", "version": 1, "chart": {"type": "bar", "data": [], "bars": [], "xKey": None, "valueKey": None}, "kpis": []}
+                return {
+                    "conclusion": fallback,
+                    "confidence": _confidence_assessment(state),
+                    "metric_resolution": resolution,
+                    "interpretation": interpretation,
+                    "error": None,
+                    "degraded": True,
+                }
             return {"error": {"code": code, "message": str(exc)}}
 
     def advance_task(state: AnalysisState) -> dict:
@@ -1939,6 +2032,8 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
 
     def after_context(state: AnalysisState) -> str:
         if state.get("error"):
+            if state["error"].get("retryable") and state.get("retry_count", 0) < 2:
+                return "prepare_retry"
             return "record_delegated_observation" if state.get("execution_path") == "planner" else END
         if (state.get("task") or {}).get("analysisType") == "modeling":
             return "propose_modeling"
@@ -1946,6 +2041,9 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
 
     def after_generate(state: AnalysisState) -> str:
         if state.get("error"):
+            # 瞬时 LLM 不可用也要重试，不能因一次空返回就直接终止整次运行（原本快速路径直接 END）。
+            if state["error"].get("retryable") and state.get("retry_count", 0) < 2:
+                return "prepare_retry"
             return "record_delegated_observation" if state.get("execution_path") == "planner" else END
         return "validate_query"
 

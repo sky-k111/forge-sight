@@ -293,6 +293,74 @@ def build_smalltalk_response(text: str) -> str:
     return "你好，我是 ForgeSight。你可以直接用业务语言提问，例如“找出最近一个月不良数量最高的产品”。"
 
 
+_CHART_VIEW_TERMS = {
+    "bar": ("柱状图", "条形图"),
+    "line": ("折线图", "趋势图", "曲线图"),
+    "donut": ("饼图", "环形图"),
+    "scatter": ("散点图",),
+    "heatmap": ("热力图", "热度图", "矩阵图"),
+}
+_CHART_VIEW_CANONICAL = {
+    "bar": "柱状图",
+    "line": "折线图",
+    "donut": "饼图",
+    "scatter": "散点图",
+    "heatmap": "热力图",
+}
+
+
+def _has_query_core(core: str) -> bool:
+    """判断切前的短语是否包含真正的查询主体（分析动作或业务指标词）。"""
+    return any(t in core for t in ANALYSIS_VERBS) or any(t in core for t in BUSINESS_TERMS)
+
+
+def _multi_chart_views(text: str) -> list[str] | None:
+    """当同一子问题同时点名两种图表（如“柱状图以及趋势 折线图”）时，
+    把它展开成两个各自携带完整查询主体与单一图表的子问题，让前端能同时给出
+    柱状图与折线图两种视图，而不是把后一个图表条件吞掉。
+
+    仅在未使用“组合图/双轴图/柱线图”这类一次成型复合类型、且非多指标对比时才展开，
+    避免把“柱状图+折线图对比产量与良率”这种需要双轴对照的请求错误拆散。
+    """
+    present = [
+        view for view, terms in _CHART_VIEW_TERMS.items()
+        if any(t in text for t in terms)
+    ]
+    if len(present) < 2:
+        return None
+    if any(t in text for t in ("组合图", "双轴图", "柱线图", "柱线组合图")):
+        return None
+    if any(term in text for term in ("对比", "比较", "差异")):
+        return None
+
+    positions = [
+        (text.find(term), view)
+        for view in present
+        for term in _CHART_VIEW_TERMS[view]
+        if term in text
+    ]
+    if not positions:
+        return None
+    first_pos = min(pos for pos, _ in positions)
+    core = text[:first_pos].strip(" ，,、和与")
+    if core and _has_query_core(core):
+        return [f"{core} {_CHART_VIEW_CANONICAL[view]}".strip() for view in present]
+
+    # 图表词在句首/中间：去掉其他图表词，保留目标图表词与查询主体（同时清理干掉的连接词）。
+    out = []
+    for keep in present:
+        q = text
+        for other in present:
+            if other == keep:
+                continue
+            for term in _CHART_VIEW_TERMS[other]:
+                q = q.replace(term, "")
+        q = re.sub(r"\s+", " ", q).strip().strip(" ，,、和与")
+        if q:
+            out.append(q)
+    return out if len(out) >= 2 else None
+
+
 def split_questions(question: str) -> list[str]:
     """拆分彼此可以独立执行的问题，保留同一指标内的比较条件。"""
     normalized = re.sub(r"\s+", " ", question.strip())
@@ -318,7 +386,11 @@ def split_questions(question: str) -> list[str]:
         # “分析良率并与标准比较”错误拆成两个缺少主语的任务。
         pieces = re.split(r"[，,]\s*(?=(?:然后|再|并且|同时|另外|此外)?[^，,]{0,12}(?:分析|统计|比较|对比|查找|找出|查看|计算|汇总|生成|识别|占比|构成|份额))", part)
         result.extend(piece.strip(" ，,") for piece in pieces if piece.strip(" ，,"))
-    return result or [normalized]
+    expanded: list[str] = []
+    for piece in result:
+        views = _multi_chart_views(piece)
+        expanded.extend(views if views else [piece])
+    return expanded or [normalized]
 
 
 def classify_analysis_type(text: str) -> str:
@@ -352,6 +424,9 @@ def _requested_chart(text: str) -> str | None:
         return "combo"
     if any(term in text for term in ("热力图", "热度图", "矩阵图")):
         return "heatmap"
+    # 用户同时点名柱状图与折线图（包括“柱状图以及趋势 折线图”）：应输出柱+线组合，而非只输出后一个图表类型。
+    if any(t in text for t in ("柱状图", "条形图")) and any(t in text for t in ("折线图", "趋势图", "曲线图")):
+        return "combo"
     if any(term in text for term in ("折线图", "趋势图", "曲线图")):
         return "line"
     if any(term in text for term in ("柱状图", "条形图")):
@@ -418,6 +493,19 @@ def _time_constraint(text: str) -> dict[str, Any] | None:
             "unit": recent.group(2),
             "timeGrain": "day" if recent.group(2) in {"天", "日", "周"} else "month",
         }
+    # 裸“6月份/6月”这类不带年份的指定月份，需要锚定到数据地平线来确定年份，
+    # 避免 SQL 生成阶段凭空猜测（例如把 2026 年 6 月猜成 2025 年 6 月导致空结果）。
+    month_ref = re.search(r"(?<![上本这每近下哪前])(\d{1,2})\s*月(?:份)?", text)
+    if month_ref:
+        month = int(month_ref.group(1))
+        if 1 <= month <= 12:
+            return {
+                "kind": "specific_month",
+                "month": month,
+                "label": f"{month}月",
+                "timeGrain": "day",
+                "reference": "data_horizon",
+            }
     return None
 
 

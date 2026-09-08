@@ -48,6 +48,7 @@ def resolve_time_constraint(constraint: dict[str, Any] | None, horizon: Any = No
     if constraint.get("reference") == "data_horizon" or kind in {
         "previous_month", "previous_week", "previous_quarter", "previous_year",
         "current_month", "current_week", "current_quarter", "current_year", "recent",
+        "specific_month",
     }:
         return _resolve_relative(constraint, reference_date(horizon))
     # 已有 periods（如 current_vs_previous_month 由两段组成）直接放行
@@ -131,6 +132,20 @@ def _resolve_relative(constraint: dict[str, Any], ref: date) -> dict[str, Any]:
             "label": str(today.year),
             "startInclusive": f"{today.year}-01-01",
             "endExclusive": f"{today.year + 1}-01-01",
+        }]
+    elif kind == "specific_month":
+        # 裸“6月份”锚定到参考日期（数据地平线优先）。规则：目标月份不晚于参考月用参考年，
+        # 否则用参考年 - 1（即最近一个出现过该月的数据年份），从而覆盖跨年边界。
+        month = int(constraint.get("month") or 1)
+        month = max(1, min(12, month))
+        year = today.year if month <= today.month else (today.year - 1)
+        start = date(year, month, 1)
+        end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+        out["periods"] = [{
+            "key": "specific",
+            "label": f"{year}-{month:02d}",
+            "startInclusive": start.isoformat(),
+            "endExclusive": end.isoformat(),
         }]
     elif kind == "recent":
         amount = int(constraint.get("amount") or 7)

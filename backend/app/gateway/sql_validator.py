@@ -43,6 +43,47 @@ _DIALECTS = {
 }
 
 
+def _normalize_expr(expression: exp.Expression) -> str:
+    """规范化表达式用于比较：去掉表名限定、多余空白并小写。"""
+    text = expression.sql().strip().rstrip(";")
+    text = re.sub(r"\b[a-zA-Z_][a-zA-Z0-9_]*\.", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.lower()
+
+
+def mysql_strict_group_by_violation(sql: str) -> str | None:
+    """检测 MySQL only_full_group_by 下会执行失败的 SELECT（sqlglot 静态分析）。
+
+    触发：查询有 GROUP BY，但某个非聚合的查询列引用了未被 GROUP BY 覆盖的列。
+    例如 SELECT CONCAT(YEAR(d),...) 而 GROUP BY YEAR(d), WEEK(d) —— MySQL 仍会拒绝，
+    虽然各子函数都在 GROUP BY 中。返回违规的查询表达式 SQL，否则返回 None。
+    """
+    try:
+        statement = sqlglot.parse_one(sql, read="mysql")
+    except Exception:
+        return None
+    group = statement.find(exp.Group)
+    if group is None:
+        return None
+    group_set = {_normalize_expr(e) for e in group.expressions}
+    for projection in statement.expressions:
+        # 聚合或含聚合的表达式本身可脱离 GROUP BY（如 ROUND(SUM(...))）。
+        if list(projection.find_all(exp.AggFunc)):
+            continue
+        # 去掉 SELECT 列别名，取核心表达式本身比较（避免 alias 导致误报）。
+        expr = projection.this if isinstance(projection, exp.Alias) else projection
+        normalized = _normalize_expr(expr)
+        if normalized in group_set:
+            continue
+        # 未引用任何列（常量/子查询等）也不属于只依赖 GROUP BY 列的情况。
+        if not list(expr.find_all(exp.Column)):
+            continue
+        return normalized
+    return None
+
+
+
+
 @dataclass
 class SqlCheckResult:
     ok: bool
@@ -62,6 +103,17 @@ def validate_dialect_compatibility(sql: str, dialect: str) -> SqlCheckResult:
             (r"\bDATE_TRUNC\s*\(", "MySQL 不支持 DATE_TRUNC，请使用 DATE_FORMAT 或日期函数"),
             (r"::\s*[A-Z][A-Z0-9_]*", "MySQL 不支持 PostgreSQL 的 :: 类型转换语法"),
         ]
+        group_by_bad = mysql_strict_group_by_violation(sql)
+        if group_by_bad:
+            return SqlCheckResult(
+                ok=False,
+                reason=(
+                    "SQL 违反 MySQL 严格分组（only_full_group_by）：查询列 "
+                    f"「{group_by_bad}」未完整出现在 GROUP BY 中。为保证执行稳定，"
+                    "请让 SELECT 中的派生表达式（如 CONCAT(YEAR(d),...) 或 YEARWEEK(d)）"
+                    "在 GROUP BY 中整体出现，或改回仅使用被分组的列与聚合函数。"
+                ),
+            )
     elif normalized_dialect in {"postgres", "postgresql"}:
         unsupported = [
             (r"`[^`]+`", "PostgreSQL 不支持 MySQL 反引号标识符"),

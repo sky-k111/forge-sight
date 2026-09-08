@@ -99,10 +99,11 @@ export function buildBusinessKpis(execution, chart) {
   ));
   const numeric = columns.filter((column) => rows.some((row) => row[column] !== "" && row[column] != null && Number.isFinite(Number(row[column]))));
   if (!numeric.length) return [];
+  const valueColumns = columns.filter((column) => numeric.includes(column) && !isDimensionColumn(column, numeric));
   const dimension = columns.find((column) => !numeric.includes(column));
 
   if (rows.length === 1) {
-    return numeric.slice(0, 3).map((key) => ({
+    return valueColumns.slice(0, 3).map((key) => ({
       label: key,
       value: formatKpiValue(rows[0][key], key),
       caption: dimension ? String(rows[0][dimension] ?? "当前查询结果") : "当前查询结果",
@@ -113,7 +114,7 @@ export function buildBusinessKpis(execution, chart) {
     ?? chart?.series?.[0]?.key
     ?? chart?.bars?.[0]?.key
     ?? chart?.lines?.[0]?.key
-    ?? numeric[0];
+    ?? (valueColumns[0] ?? numeric[0]);
   const points = rows
     .map((row) => ({ row, value: Number(row[primary]) }))
     .filter((item) => Number.isFinite(item.value));
@@ -150,6 +151,25 @@ export function buildBusinessKpis(execution, chart) {
   return result.slice(0, 3);
 }
 
+const TIME_DIM_RE = /^(?:\u7edf\u8ba1)?(?:\u5e74\u4efd|\u5e74\u5ea6|\u6708\u4efd|\u6708\u5ea6|\u6708|\u5468\u6570|\u5468\u6b21|\u5468|\u5b63\u5ea6|\u5b63|\u65e5\u671f|\u65f6\u95f4|\u5e74|\u6708)$|^(?:year|month|week|quarter|day|date)(?:_|$)|^(?:year|month|week|quarter)_?(?:of_year|num|number|no|label|start|end)$/i;
+const YEAR_ONLY_DIM_RE = /^(?:\u7edf\u8ba1)?\u5e74(?:\u4efd|\u5ea6)?$|^year$/i;
+const NAME_CODE_DIM_RE = /\u540d\u79f0|\u540d\u5b57|name|label|\u63cf\u8ff0|desc|\u4ee3\u7801|\u7f16\u7801|code|id|\u7f16\u53f7|\u5e8f\u53f7$/i;
+
+function isDimensionColumn(column, numericAll) {
+  const name = String(column ?? "");
+  if (!numericAll.includes(column)) return true;
+  return TIME_DIM_RE.test(name) || NAME_CODE_DIM_RE.test(name);
+}
+
+function pickDimensionAxis(columns, numericAll) {
+  const dimensions = columns.filter((column) => isDimensionColumn(column, numericAll));
+  const timeDimensions = dimensions.filter((column) => TIME_DIM_RE.test(String(column ?? "")));
+  const fineTimeDimensions = timeDimensions.filter((column) => !YEAR_ONLY_DIM_RE.test(String(column ?? "")));
+  const pool = fineTimeDimensions.length ? fineTimeDimensions
+    : (timeDimensions.length ? timeDimensions : dimensions);
+  return pool[0] ?? columns[0];
+}
+
 export function buildChart(snapshot, execution) {
   const columns = execution?.columns ?? [];
   const rawRows = execution?.rows ?? [];
@@ -160,8 +180,8 @@ export function buildChart(snapshot, execution) {
   });
   const numericAll = columns.filter((column) => rows.some((row) => row[column] !== "" && row[column] != null && Number.isFinite(Number(row[column]))));
   const categorical = columns.filter((column) => !numericAll.includes(column));
-  const xKey = columns.find((column) => !numericAll.includes(column)) ?? columns[0];
-  const numeric = numericAll.filter((column) => column !== xKey);
+  const xKey = pickDimensionAxis(columns, numericAll);
+  const numeric = numericAll.filter((column) => column !== xKey && !isDimensionColumn(column, numericAll));
   if (numeric.length === 0) return null;
   const analysisTypes = new Set((snapshot.tasks ?? []).map((task) => task.analysisType));
   const questionText = [snapshot.question, ...(snapshot.tasks ?? []).flatMap((task) => [task.title, task.normalizedQuestion])].filter(Boolean).join(" ");

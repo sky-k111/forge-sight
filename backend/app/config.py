@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     agent_max_duration_seconds: int = 300
     agent_planner_enabled: bool = True
     agent_planner_model_enabled: bool = True
+    # 图表/维度语义判定升级到 LLM（规则拿不准时）。默认开启，因为枚举式规则遇到未覆盖列名
+    # （stat_year/stat_week/order_no/line_no 等）会选错横纵轴；开启后由 LLM 在有歧义时纠正。
+    visual_contract_llm_enabled: bool = True
     # 按用户稳定分桶，便于同一账号在 Planner/基线间做可复现实验。
     agent_planner_rollout_percent: int = 100
     agent_planner_max_capability_calls: int = 8

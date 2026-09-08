@@ -20,8 +20,27 @@ PLANNING_TERMS = (
     "根因", "为什么", "原因", "下钻", "进一步", "继续调查", "形成报告", "整理成", "周报",
     "月报", "预测", "建模", "模型", "然后", "再根据", "如果", "并发送",
 )
-MODELING_TERMS = ("预测", "建模", "模型", "分类", "聚类", "异常检测", "风险")
 REPORT_TERMS = ("周报", "月报", "专题报告", "形成报告", "整理成报告", "整理成质量周报")
+_STRONG_MODELING_TERMS = ("预测", "建模", "模型", "训练", "模型治理", "分类器", "二分类", "多分类", "聚类", "异常检测", "机器学习", "回归", "智能建模")
+# “分类”在这些语境下是“按某维度分组”，不是机器学习分类：例如“分别按产线以及周数分类”。
+_GROUPING_CLASSIFY_RE = re.compile(r"(?:\u5206\u522b\s*)?(?:\u6309|\u6309\u7167|\u6839\u636e|\u4f9d\u636e|\u4f9d|\u4ee5|\u5206\u4e3a|\u5206\u6210)\s*.{0,24}(?:\u5206\u7c7b|\u5206\u7ec4)")
+
+
+def _looks_like_modeling(question: str) -> bool:
+    """判断问题是否属于真正的建模/预测请求，而非业务分组或风险描述。
+
+    原来用拼词分分拼的（“分类”“风险”）会把“分别按产线以及周数分类”误导到建模路径，实际上它只是查询分组。这里用语义判定避免误派。
+    """
+    if not question:
+        return False
+    if any(term in question for term in _STRONG_MODELING_TERMS):
+        return True
+    if "\u5206\u7c7b" not in question and "\u98ce\u9669" not in question:
+        return False
+    # 单独“分类/风险”但属于“按…分组”，不算建模。
+    if _GROUPING_CLASSIFY_RE.search(question):
+        return False
+    return any(term in question for term in ("\u6a21\u578b", "\u5efa\u6a21", "\u9884\u6d4b", "\u8bad\u7ec3", "\u5f02\u5e38", "\u805a\u7c7b", "\u5206\u7c7b\u5668", "\u673a\u5668\u5b66\u4e60"))
 
 
 def should_use_planner(
@@ -36,7 +55,7 @@ def should_use_planner(
     kinds = {str(item.get("kind")) for item in request_segments}
     analysis_count = sum(1 for item in request_segments if item.get("kind") == "analysis")
     cross_capability = "analysis" in kinds and bool(kinds & {"report", "utility"})
-    mentions_modeling = any(term in normalized for term in MODELING_TERMS)
+    mentions_modeling = _looks_like_modeling(normalized)
     mentions_report = any(term in normalized for term in REPORT_TERMS)
     dependent_goal = any(term in normalized for term in PLANNING_TERMS)
     if cross_capability or ("analysis" in kinds and (mentions_report or mentions_modeling)):
@@ -110,7 +129,7 @@ def build_fallback_plan(
             )
         )
         last_analysis = quality_id
-    if any(term in question for term in MODELING_TERMS):
+    if _looks_like_modeling(question):
         find_id = new_id("pst")
         steps.append(
             PlanStep(
