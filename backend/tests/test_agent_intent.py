@@ -14,7 +14,8 @@ def test_obvious_smalltalk_is_routed_away_from_analysis():
     assert classify_request_kind("你有什么能力，应该怎么使用？") == "conversation"
     assert classify_request_kind("明年下雨吗") == "conversation"
     assert classify_request_kind("分析最近 7 天的工序良率") == "analysis"
-    assert classify_request_kind("什么是工序良率") == "analysis"
+    # 术语定义解释不应查库：走对话由 LLM 解释
+    assert classify_request_kind("什么是工序良率") == "conversation"
 
 
 def test_system_utility_is_deterministic_and_does_not_enter_analysis():
@@ -75,7 +76,8 @@ def test_report_request_with_implicit_give_me_wording_stays_in_report_route():
 
 
 def test_report_explanation_is_not_mistaken_for_report_creation():
-    assert classify_request_kind("请解释报告里的指标") == "analysis"
+    # “解释指标”是术语说明，不属于报告创建；也不应触发独立查询
+    assert classify_request_kind("请解释报告里的指标") == "conversation"
 
 
 def test_emotional_conversation_is_not_misclassified_by_a_single_character():

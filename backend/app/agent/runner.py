@@ -24,7 +24,12 @@ from app.agent.graph import (
     build_analysis_graph,
 )
 from app.agent.ids import new_id
-from app.agent.intent import build_request_route
+from app.agent.intent import (
+    _has_analysis_verb,
+    _has_business_analysis_signal,
+    build_request_route,
+    should_downgrade_to_conversation,
+)
 from app.agent.llm_intent import resolve_intent
 from app.config import settings
 from app.db.models import (
@@ -1181,12 +1186,30 @@ def execute_inline_route(run_id: str) -> dict:
         labels,
         context,
     )
+    # 安全网：模型/规则把「明显非业务问句」判成分析时，直接按对话收尾，避免跑空 SQL。
+    # 例如“5月有多少天”“比较苹果安卓哪个好”“世界上有多少个国家”——无任何真实业务实体，
+    # 也不该进入数据检索。判定遵循「LLM 决定语义、确定性只守安全边界」。
+    previous_business = any(
+        _has_business_analysis_signal(str(item.get("content") or "")) or _has_analysis_verb(str(item.get("content") or ""))
+        for item in context
+        if item.get("role") == "user"
+    )
+    if routed["kind"] == "analysis" and should_downgrade_to_conversation(
+        state["user_question"], "analysis", previous_business=previous_business
+    ):
+        return execute_inline_conversation(run_id, None, intent_kind="conversation", step_node="route_request")
     # The router may recognize a report request from its meaning rather than
     # from fixed report keywords (for example, “把最近一周的经营情况整理成
     # 一份总结”).  Keep this on the same clarification path as explicit report
     # requests and do not send it through SQL retrieval first.
     if routed.get("reportSegments") and not routed.get("analysisQuestion"):
         return execute_inline_report_clarification(run_id)
+    # 模型路由失败（labels 为空）或把整个问句判为 mixed/analysis 时，若它其实不含任何
+    # 业务实体（如纯闲聊/常识），也按对话收尾，避免入队后跑空 SQL 失败。
+    if (not labels or routed["kind"] in {"analysis", "mixed"}) and should_downgrade_to_conversation(
+        state["user_question"], "analysis", previous_business=previous_business
+    ):
+        return execute_inline_conversation(run_id, None, intent_kind="conversation", step_node="route_request")
     if not labels or routed["kind"] in {"analysis", "mixed"}:
         with PlatformSession() as session:
             run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()

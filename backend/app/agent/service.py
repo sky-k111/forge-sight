@@ -11,6 +11,7 @@ from app.agent.ids import new_id
 from app.agent.dialogue import has_previous_result, inline_conversation_reply, should_treat_as_conversation
 from app.agent.intent import (
     classify_request_kind,
+    has_write_intent,
     is_report_request,
 )
 from app.agent.system_utility import build_system_utility_response
@@ -214,6 +215,10 @@ def create_run(
             conversation_context,
             intent_enabled=settings.agent_intent_enabled,
         )
+        # 写/删意图必须进入分析工作流，由 intent_guard 统一阻断为只读安全提示，
+        # 避免“删除异常记录…”这类话术被未知路由吞成普通对话而绕过保护。
+        if has_write_intent(normalized_question):
+            request_kind = "analysis"
         # 对话意图前置层：把「引用上一轮结果的确认/口径澄清」与闲聊导向对话，
         # 避免「你这个是所有产线的吗」被当成新查询重跑整条分析流水线；回复由
         # execute_inline_conversation 的 LLM 对话器生成，不再用 canned 模板。

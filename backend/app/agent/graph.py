@@ -32,6 +32,7 @@ from app.agent.intent import (
     _is_turn_switch,
     build_intent_plan,
     build_request_route,
+    has_write_intent,
 )
 from app.agent.intent_adapter import intent_to_tasks, task_from_planner_arguments
 from app.agent.intent_contract import AgentIntent
@@ -159,7 +160,7 @@ def _result_facts_for_explain(execution: dict[str, Any]) -> list[str]:
 
 WRITE_TERMS = (
     "删除", "删掉", "删去", "删了", "清除", "清空", "清零", "重置", "覆盖", "抹掉", "作废",
-    "修改", "改成", "改为", "改写", "调整", "设置成", "更新", "写入", "插入", "新增记录", "新增一条", "建表", "删表",
+    "修改", "改成", "改为", "改写", "调整", "设置成", "更新数据", "更新指标", "更新表", "更新库", "更新字段", "写入", "插入", "新增记录", "新增一条", "建表", "删表",
     "delete ", "update ", "insert ", "drop ", "alter ", "truncate ", "create table",
 )
 
@@ -1079,6 +1080,19 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             for index, response in (state.get("preclassified_route_responses") or {}).items()
         }
         conversation_context = state.get("conversation_context") or []
+        # 写/删意图必须先短路，交给 intent_guard 统一阻断为只读保护；否则会被未知路由/模型路由
+        # 调一次 LLM 后误当成普通分析吞掉而绕过安全边界。
+        if has_write_intent(state["user_question"]):
+            seg = [{"kind": "analysis", "text": state["user_question"], "index": 0}]
+            return {
+                "intent_kind": "analysis",
+                "analysis_question": state["user_question"],
+                "direct_response": "",
+                "utility_question": "",
+                "request_segments": seg,
+                "blocked": False,
+                "error": None,
+            }
         route = build_request_route(
             state["user_question"],
             preclassified_labels,

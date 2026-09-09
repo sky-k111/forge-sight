@@ -61,6 +61,19 @@ _REPORT_ANALYSIS_ACTIONS = (
 OUT_OF_SCOPE_PATTERNS = (
     re.compile(r"(?:天气|下雨|下雪|气温|空气质量|穿什么衣服|带伞)"),
     re.compile(r"(?:新闻|股票|彩票|星座|电影|音乐|旅游攻略)"),
+    # 日历/日期常识
+    re.compile(r"(?:几|\d+)\s*月(?:有)?多少天|今天(?:是)?(?:几号|什么日期)|(?:今年|明年).*(?:多少天|几号)"),
+    # 世界/地理常识
+    re.compile(r"(?:世界上|地球上|全中国|全世).*(?:多少|几个).*(?:国家|洲|城市)|多少个国家"),
+    # 消费/观点类
+    re.compile(r"(?:哪个|谁|什么)\s*(?:更好|更好用|好用|划算|值得买|好吃)|苹果和安卓|选哪个"),
+    # 教育/考试
+    re.compile(r"(?:高考|中考|考研|大学|分数线|录取率|录取|考试|作业|学费)"),
+    # 运势/玄学
+    re.compile(r"(?:运气|运势|命运|缘分|算命|占卜)"),
+    # 家常/生活
+    re.compile(r"(?:今天吃什么|吃什么好|吃什么|找工作|上班|房贷|房租|做饭|菜谱)"),
+    re.compile(r"(?:工资|薪水)(?:什么时候|几号|发了|还没发|发了吗|怎么发|多久发)"),
 )
 
 # 弱量化词不单独触发数据分析：“多少/平均/最大/最小”常出现在通用句中，
@@ -68,19 +81,57 @@ OUT_OF_SCOPE_PATTERNS = (
 _WEAK_BUSINESS_TERMS = ("多少", "平均", "最大", "最小")
 _STRONG_BUSINESS_TERMS = tuple(t for t in BUSINESS_TERMS if t not in _WEAK_BUSINESS_TERMS)
 
-# 数据信号：只要命中其一，说明该问句携带业务/时间/维度/图表指代，不允许被闲聊路径吞掉。
-# 这是「数据实体/指代/时间词一律交给 LLM 意图」的确定性兜底，而非语义来源。
+# 真实业务实体/指标词：只有命中这些才说明用户在查询制造数据（而非常识/闲聊/概念解释）。
+# 优先级最高；OEE 等英文词用 lower() 比较。
+_STRONG_ENTITY_TERMS = (
+    "良率", "产量", "不良", "缺陷", "库存", "设备", "停机", "报警", "工序", "产线",
+    "产品", "工单", "订单", "物料", "合格", "产能", "产值", "交付", "排产", "班次",
+    "车间", "报废", "返工", "合格率", "不良率", "缺陷率", "停机时长", "产能利用率", "oee",
+    "生产", "制造", "维修", "故障", "品质", "销售", "卖出", "出货", "出库", "发货",
+    "营收", "退货", "签收", "报废率",
+)
+# 这些词几乎只出现在数据分析语境里，单独出现即可判定为分析请求。
+_STRONG_SIGNAL_TERMS = ("趋势", "走势", "同比", "环比", "分布", "占比", "构成", "排名", "排行", "波动", "变化")
+# 数据指代词：较弱，需搭配 时间/维度/图表/查询动作 才说明是查询。
+_GENERIC_DATA_WORDS = ("数据", "指标", "报表", "图表", "表格", "字段", "数据库", "数量", "占比", "构成")
+# 真正的“取数/出图”动作，而非泛泛而谈。
+_QUERY_VERBS = (
+    "分析", "统计", "查询", "查看", "计算", "汇总", "查找", "找出",
+    "对比", "比较", "展示", "看看", "看下", "出图", "画",
+)
 _DATA_SIGNAL_DIMS = ("工序", "产线", "设备", "产品", "工单", "订单", "物料", "库存", "缺陷", "不良", "报警", "车间", "班次")
 _DATA_SIGNAL_CHARTS = ("柱状图", "折线图", "热力图", "饼图", "散点图", "组合图", "双轴图", "趋势图", "占比图", "图表")
-def _has_data_signal(text: str) -> bool:
-    """弱信号兜底：数据问句不在正则词表时也要送往 LLM 意图，而不是误判为闲谈。"""
-    if not str(text or "").strip():
+
+def _has_business_analysis_signal(text: str) -> bool:
+    """是否为「真正的业务数据查询」，而不是常识/概念/闲聊。
+
+    一个问句要进入分析工作流，必须命中真实业务实体（产量/良率/产线/设备/库存…），
+    或是「数据/指标 + 时间/维度/图表/取数动作」的组合。泛泛的 分析/统计/比较/多少
+    单独出现不构成分析（否则“5月有多少天”“比较苹果安卓哪个好”会被误判成查库）。
+    """
+    low = str(text or "").strip().lower()
+    if not low:
         return False
-    if _has_analysis_verb(text) or any(term in text for term in _STRONG_BUSINESS_TERMS):
+    has_entity = any(term in low for term in _STRONG_ENTITY_TERMS)
+    has_dim = any(term in low for term in _DATA_SIGNAL_DIMS)
+    has_chart = any(term in low for term in _DATA_SIGNAL_CHARTS)
+    has_data_word = any(term in low for term in _GENERIC_DATA_WORDS)
+    has_query = any(term in low for term in _QUERY_VERBS)
+    has_time = bool(_EXPLICIT_TIME_RE.search(low))
+    if has_entity or has_dim:
         return True
-    if any(term in text for term in _DATA_SIGNAL_DIMS) or any(term in text for term in _DATA_SIGNAL_CHARTS):
+    if any(term in low for term in _STRONG_SIGNAL_TERMS):
+        return True
+    if has_data_word and (has_time or has_chart or has_dim or has_query):
+        return True
+    if has_chart and (has_entity or has_data_word or has_dim or has_query or has_time):
         return True
     return False
+
+
+def _has_data_signal(text: str) -> bool:
+    """兼容旧名：弱信号兜底等价于业务分析信号。"""
+    return _has_business_analysis_signal(text)
 
 GENERAL_KNOWLEDGE_PATTERNS = (
     re.compile(r"\d+\s*[+\-*/\u00d7\u00f7^]\s*\d+"),
@@ -136,7 +187,7 @@ def is_report_request(text: str) -> bool:
 
 
 def _is_known_conversation(text: str) -> bool:
-    if _has_analysis_verb(text) or any(term in text for term in _STRONG_BUSINESS_TERMS):
+    if _has_business_analysis_signal(text):
         return False
     return _is_report_request(text) or any(
         pattern.search(text)
@@ -150,9 +201,7 @@ def is_deterministic_conversation(text: str, *, intent_enabled: bool = False) ->
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
     if not normalized:
         return True
-    if _has_analysis_verb(normalized) or any(term in normalized for term in _STRONG_BUSINESS_TERMS):
-        return False
-    if intent_enabled and _has_data_signal(normalized):
+    if _has_business_analysis_signal(normalized):
         return False
     return _is_known_conversation(normalized) or _is_pure_system_utility(normalized)
 
@@ -160,18 +209,48 @@ def is_deterministic_conversation(text: str, *, intent_enabled: bool = False) ->
 def _is_pure_system_utility(text: str) -> bool:
     """Keep utility lookup deterministic without swallowing a real analysis ask."""
 
-    if not is_system_utility_request(text) or _has_analysis_verb(text):
+    if not is_system_utility_request(text) or _has_business_analysis_signal(text):
         return False
-    utility_safe_terms = {"数据", "数据库", "数据表", "字段"}
-    return not any(term in text for term in BUSINESS_TERMS if term not in utility_safe_terms)
+    return True
 
 
+
+
+_DEFINITION_LEAD_RE = re.compile(r"(?:什么是|是什么|什么叫|是什么意思|怎么理解|介绍一下|解释(?:一下)?(?:什么|什么是|这)?)")
+_DEFINITION_NEGATIVE_RE = re.compile(
+    r"(?:为什么|原因|根因|下钻|对比|比较|差异|波动|趋势|分布|排名|占多少|是多少|多少|变化|影响|情况|"
+    r"最近|今年|这个月|本月|本周|今天|昨天|上周|去年|上月|近\s*\d+)"
+)
+
+
+def _is_concept_explanation(text: str) -> bool:
+    """概念/定义解释（什么是OEE、什么是工序良率、解释一下良率）→ 交 LLM 解释，不查库。
+
+    但若带因果/对比/趋势/取数/时间聚合语境（“解释一下为什么产量低”“今年产量多少”），
+    则不是纯定义，放行到分析工作流。
+    """
+    t = str(text or "").strip()
+    if not _DEFINITION_LEAD_RE.search(t):
+        return False
+    if _DEFINITION_NEGATIVE_RE.search(t):
+        return False
+    return True
+
+
+def _references_previous_turn(text: str) -> bool:
+    """是否引用/追问上一轮结果（代词/时间/继续/呢）。"""
+    t = str(text or "").strip()
+    if bool(_OBJECT_REFERENCE_RE.search(t)):
+        return True
+    if any(marker in t for marker in (*VAGUE_TIME_TERMS, "继续", "接着", "上一个", "刚才", "前面", "昨天")):
+        return True
+    return bool(t.rstrip("？?!！").endswith("呢"))
 
 
 def _is_general_knowledge(text: str) -> bool:
     """常识/数学/范围外问题：无业务实体与分析动作，应走对话而非数据查询。
     但若含真实业务实体（产量/良率/产线等），即使句式象“你知道…吗”，也不得被当成对话吞掉。"""
-    if _has_analysis_verb(text) or any(t in text for t in _STRONG_BUSINESS_TERMS):
+    if _has_business_analysis_signal(text):
         return False
     return any(pattern.search(text) for pattern in (*GENERAL_KNOWLEDGE_PATTERNS, *OUT_OF_SCOPE_PATTERNS, *SMALLTALK_PATTERNS))
 
@@ -188,6 +267,9 @@ def classify_request_kind(
         return "conversation"
     if _is_pure_system_utility(normalized):
         return "utility"
+    # 概念/定义解释：不查库，交给 LLM 对话解释。
+    if _is_concept_explanation(normalized):
+        return "conversation"
     # A bare report request does not contain a metric, period, or data scope.
     # Keep it in the conversation path so it can ask for the missing report
     # parameters instead of falling through to semantic retrieval and returning
@@ -195,8 +277,6 @@ def classify_request_kind(
     if _is_report_request(normalized):
         return "conversation"
     if _is_general_knowledge(normalized):
-        if intent_enabled and _has_data_signal(normalized):
-            return "analysis"
         return "conversation"
     history = conversation_context or []
     previous_user_text = next(
@@ -209,9 +289,10 @@ def classify_request_kind(
     )
     previous_business_turn = bool(previous_user_text) and (
         _has_analysis_verb(previous_user_text)
-        or any(term in previous_user_text for term in BUSINESS_TERMS)
+        or _has_business_analysis_signal(previous_user_text)
     )
-    if _has_analysis_verb(normalized) or any(term in normalized for term in BUSINESS_TERMS):
+    # 真正业务数据查询：命中业务实体或「数据指代 + 时间/维度/图表/取数动作」。
+    if _has_business_analysis_signal(normalized):
         return "analysis"
     # 仅“换一种图”的追问：上一轮是业务问题、本轮只点名图表类型（柱状图/折线图/热力图…），
     # 视为对上一轮结果的展示重述，进入分析工作流并继承上一轮的维度/时间/指标。
@@ -222,19 +303,48 @@ def classify_request_kind(
     ):
         return "analysis"
     if _is_known_conversation(normalized):
-        if intent_enabled and _has_data_signal(normalized):
-            return "analysis"
         return "conversation"
-    references_previous_turn = bool(_OBJECT_REFERENCE_RE.search(normalized)) or any(
-        marker in normalized
-        for marker in (*VAGUE_TIME_TERMS, "继续", "接着", "上一个", "刚才", "前面", "昨天")
-    )
-    references_previous_turn = references_previous_turn or normalized.rstrip("？?!！").endswith("呢")
-    if previous_business_turn and references_previous_turn:
+    if previous_business_turn and _references_previous_turn(normalized):
         return "analysis"
     # Ambiguous natural language is decided by one small routing call. This keeps
     # ordinary conversation fast without silently downgrading short business asks.
     return "unknown"
+
+
+def should_downgrade_to_conversation(
+    question: str,
+    kind: str,
+    *,
+    previous_business: bool = False,
+) -> bool:
+    """安全网：LLM/正则把明显非业务问句判成分析时，降级为对话，避免跑空 SQL。
+
+    只在存在「明确非业务信号」时降级：概念/定义、常识、闲聊、范围外、数学。若一个问句
+    只是模糊（例如“上周每条线做了几件”），没有业务实体但也没有明确非业务信号，仍交给
+    LLM 路由/分析工作流去判定，而不是武断降级吞掉潜在业务问题。
+    """
+    if kind not in {"analysis", "modeling", "investigation", "report"}:
+        return False
+    if _has_business_analysis_signal(question):
+        return False
+    if previous_business and _references_previous_turn(question):
+        return False
+    return _is_concept_explanation(question) or _is_general_knowledge(question) or _is_known_conversation(question)
+
+
+# 写意图词：命中即说明想改动/删除数据。分析工作流里的 intent_guard 会据此阻断，变成只读安全提示。
+_WRITE_TERMS = (
+    "删除", "删掉", "删去", "删了", "清除", "清空", "清零", "重置", "覆盖", "抹掉", "作废",
+    "修改", "改成", "改为", "改写", "调整", "设置成", "写入", "插入", "新增记录", "新增一条", "建表", "删表",
+    "更新数据", "更新指标", "更新表", "更新库", "更新字段",
+    "delete ", "update ", "insert ", "drop ", "alter ", "truncate ", "create table",
+)
+
+
+def has_write_intent(text: str) -> bool:
+    """是否包含明确的写/删意图（如“删除某记录”“更新指标”）。"""
+    low = str(text or "").lower()
+    return any(term in low for term in _WRITE_TERMS)
 
 
 def split_request_segments(question: str) -> list[str]:
