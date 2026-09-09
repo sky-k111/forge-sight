@@ -1,0 +1,1006 @@
+{
+  "sourceId": 2,
+  "generatedAt": "Wed Sep  9 13:21:56 2026",
+  "results": [
+    {
+      "label": "A1 2026各月产量-趋势",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 2,
+          "tasks": [
+            [
+              1,
+              "2026年各月产量按趋势展示",
+              "trend",
+              "succeeded"
+            ]
+          ],
+          "assistant": "2026-01: 2,070,718   2026-02: 1,776,712   2026-03: 2,073,553   2026-04: 2,150,374   2026-05: 1,890,332   2026-06: 2,163,",
+          "chart": {
+            "type": "line",
+            "xKey": "月份",
+            "xAxis_kind": "time",
+            "xAxis_grain": "month",
+            "bars": [],
+            "series": [
+              "产量"
+            ],
+            "lines": [],
+            "unit": "",
+            "valueKey": "产量"
+          },
+          "kpis": [
+            [
+              "产量",
+              "13,257,103.00",
+              "全量汇总"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "label": "A2 6月各周良率",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 2,
+          "tasks": [
+            [
+              1,
+              "6月份各周良率",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "202622: 96.82%   202623: 96.61%   202624: 96.93%   202625: 96.71%   202626: 96.83%",
+          "chart": {
+            "type": "line",
+            "xKey": "周",
+            "xAxis_kind": "time",
+            "xAxis_grain": "week",
+            "bars": [],
+            "series": [
+              "工序良率"
+            ],
+            "lines": [],
+            "unit": "%",
+            "valueKey": "工序良率"
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "A3 6月各产线产量",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 2,
+          "tasks": [
+            [
+              1,
+              "6月份各产线的产量",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "L01: 407,811   L02: 435,789   L03: 338,414   L04: 516,693   L05: 464,459    6月份共5条产线有产量数据，其中L04产量最高（516,693），L03产量最低（338",
+          "chart": {
+            "type": "bar",
+            "xKey": "产线",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [
+              "产量"
+            ],
+            "series": [],
+            "lines": [],
+            "unit": "",
+            "valueKey": "产量"
+          },
+          "kpis": [
+            [
+              "产量",
+              "2,163,166.00",
+              "全量汇总"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "label": "A4 6月各产线良率",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 2,
+          "tasks": [
+            [
+              1,
+              "6月按产线看工序良率",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "L01: 97.30%   L02: 96.94%   L03: 96.72%   L04: 95.83%   L05: 97.21%    6月共5条产线（L01–L05）的工序良率如上，最高为L01（97.30%），最低为L04（95.",
+          "chart": {
+            "type": "bar",
+            "xKey": "产线",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [
+              "工序良率"
+            ],
+            "series": [],
+            "lines": [],
+            "unit": "%",
+            "valueKey": "工序良率"
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "A5 5月各工序不良率",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 2,
+          "tasks": [
+            [
+              1,
+              "5月各工序的不良率",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "5月各工序不良率如下：  - PR07: 4.93% - PR08: 1.00% - PR04: 3.80% - PR05: 4.50% - PR06: 5.50% - PR01: 2.23% - PR02: 2.63% - PR03: 1",
+          "chart": {
+            "type": "bar",
+            "xKey": "工序",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [
+              "工序不良率"
+            ],
+            "series": [],
+            "lines": [],
+            "unit": "%",
+            "valueKey": "工序不良率"
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "A6 今年各月停机时长",
+      "turns": [
+        {
+          "status": "timeout",
+          "error": "POLL_TIMEOUT",
+          "callCount": null,
+          "tasks": [],
+          "assistant": "",
+          "chart": {
+            "type": null,
+            "xKey": null,
+            "xAxis_kind": null,
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": null,
+            "valueKey": null
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "A7 上半年各月抽检不良率",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 2,
+          "tasks": [
+            [
+              1,
+              "2026年上半年各月抽检不良率",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "2026年上半年各月抽检不良率如下：  - 2026-01: 3.24% - 2026-02: 3.25% - 2026-03: 3.23% - 2026-04: 3.22% - 2026-05: 3.26% - 2026-06: 3.25",
+          "chart": {
+            "type": "line",
+            "xKey": "月份",
+            "xAxis_kind": "time",
+            "xAxis_grain": "month",
+            "bars": [],
+            "series": [
+              "抽检不良率"
+            ],
+            "lines": [],
+            "unit": "%",
+            "valueKey": "抽检不良率"
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "A8 各产线非计划停机",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 2,
+          "tasks": [
+            [
+              1,
+              "各产线的非计划停机时长",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "各产线非计划停机时长如下：  - L02: 14,830分钟 - L05: 13,962分钟 - L03: 14,160分钟 - L04: 13,940分钟 - L01: 15,006分钟 - L06: 13,601分钟  共统计6条产线数",
+          "chart": {
+            "type": "bar",
+            "xKey": "产线",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [
+              "非计划停机时长"
+            ],
+            "series": [],
+            "lines": [],
+            "unit": "",
+            "valueKey": "非计划停机时长"
+          },
+          "kpis": [
+            [
+              "非计划停机时长",
+              "85,499.00",
+              "全量汇总"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "label": "B1 6月不良类型构成",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 3,
+          "tasks": [
+            [
+              1,
+              "6月份不良类型构成分布",
+              "share",
+              "succeeded"
+            ]
+          ],
+          "assistant": "6月份不良类型构成分布如下（按不良数量降序）：  - 标签错误: 582 - 偏位: 562 - 老化异常: 555 - 焊点虚焊: 513 - 包装破损: 496 - 少件: 471 - 功能失效: 444 - 外观划伤: 432  共8",
+          "chart": {
+            "type": "donut",
+            "xKey": "不良类型",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": "",
+            "valueKey": "不良数量"
+          },
+          "kpis": [
+            [
+              "不良类型排行",
+              "4,055.00",
+              "全量汇总"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "label": "B2 各产品不良类型占比",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 3,
+          "tasks": [
+            [
+              1,
+              "各产品的不良类型占比",
+              "share",
+              "succeeded"
+            ]
+          ],
+          "assistant": "根据查询结果，各产品的不良类型占比如下（按产品逐一列出，占比为该产品内部各不良类型占其不良总量的百分比）：  - 传感器02: 老化异常 24.04%、偏位 20.88%、少件 20.53%、外观划伤 20.35%、焊点虚焊 7.02%、标",
+          "chart": {
+            "type": "donut",
+            "xKey": "产品",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": "%",
+            "valueKey": "占比百分比"
+          },
+          "kpis": [
+            [
+              "不良类型排行",
+              "45,920.00",
+              "全量汇总"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "label": "C1 6月产量前5工序",
+      "turns": [
+        {
+          "status": "timeout",
+          "error": "POLL_TIMEOUT",
+          "callCount": null,
+          "tasks": [],
+          "assistant": "",
+          "chart": {
+            "type": null,
+            "xKey": null,
+            "xAxis_kind": null,
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": null,
+            "valueKey": null
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "C2 良率前3产品",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 2,
+          "tasks": [
+            [
+              1,
+              "工序良率最高的前3个产品",
+              "ranking",
+              "succeeded"
+            ]
+          ],
+          "assistant": "工序良率最高的前3个产品如下：  - P025: 97.13% - P027: 97.11% - P003: 97.10%",
+          "chart": {
+            "type": "bar",
+            "xKey": "产品",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [
+              "工序良率"
+            ],
+            "series": [],
+            "lines": [],
+            "unit": "%",
+            "valueKey": "工序良率"
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "D1 6月总产量KPI",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 2,
+          "tasks": [
+            [
+              1,
+              "6月份总产量是多少",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "6月: 2,163,166",
+          "chart": {
+            "type": "bar",
+            "xKey": "统计期间",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [
+              "产量"
+            ],
+            "series": [],
+            "lines": [],
+            "unit": "",
+            "valueKey": "产量"
+          },
+          "kpis": [
+            [
+              "产量",
+              "2,163,166.00",
+              "6月"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "label": "D2 5月工序良率单值",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 2,
+          "tasks": [
+            [
+              1,
+              "输出5月份良率",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "5月工序良率为96.83%。",
+          "chart": {
+            "type": "bar",
+            "xKey": "统计期间",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [
+              "工序良率"
+            ],
+            "series": [],
+            "lines": [],
+            "unit": "%",
+            "valueKey": "工序良率"
+          },
+          "kpis": [
+            [
+              "工序良率",
+              "96.83%",
+              "5月"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "label": "D3 低于安全库存产品",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 5,
+          "tasks": [
+            [
+              1,
+              "当前低于安全库存的产品有哪些",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "当前低于安全库存的产品共2个：  - P006（传感器06，编码FG-02-006，型号M100-B，类别传感器）：可用库存524，安全库存800 - P015（执行器15，编码FG-03-015，型号M400-A，类别执行器）：可用库存7",
+          "chart": {
+            "type": "bar",
+            "xKey": "product_name",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [
+              "available_qty",
+              "safety_stock_qty"
+            ],
+            "series": [],
+            "lines": [],
+            "unit": "",
+            "valueKey": "safety_stock_qty"
+          },
+          "kpis": [
+            [
+              "低于安全库存",
+              "1,318.00",
+              "全量汇总"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "label": "E1 各产线产量+合格数量",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 3,
+          "tasks": [
+            [
+              1,
+              "6月份各产线的产量",
+              "query",
+              "succeeded"
+            ],
+            [
+              2,
+              "合格数量",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "1. L01: 407,811   L02: 435,789   L03: 338,414   L04: 516,693   L05: 464,459    6月份共5条产线有产量数据，其中L04产量最高（516,693），L03产量最低（",
+          "chart": {
+            "type": "bar",
+            "xKey": "产线",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [
+              "产量"
+            ],
+            "series": [],
+            "lines": [],
+            "unit": "",
+            "valueKey": "产量"
+          },
+          "kpis": [
+            [
+              "产量",
+              "2,163,166.00",
+              "全量汇总"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "label": "E2 6月各周良率+不良率",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 3,
+          "tasks": [
+            [
+              1,
+              "6月各周的良率",
+              "query",
+              "succeeded"
+            ],
+            [
+              2,
+              "不良率",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "1. 6月各周工序良率如下：  - 202622周: 96.82% - 202623周: 96.61% - 202624周: 96.93% - 202625周: 96.71% - 202626周: 96.83%  6月共5周，各周良率均在9",
+          "chart": {
+            "type": "line",
+            "xKey": "周",
+            "xAxis_kind": "time",
+            "xAxis_grain": "week",
+            "bars": [],
+            "series": [
+              "工序良率"
+            ],
+            "lines": [],
+            "unit": "%",
+            "valueKey": "工序良率"
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "F1 闲聊-讲笑话",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 1,
+          "tasks": [],
+          "assistant": "哈哈，来一个轻松点的：   “为什么程序员分不清万圣节和圣诞节？   因为 Oct 31 等于 Dec 25。”    不过说正经的，如果你有生产、质量或库存数据的问题，我随时可以帮你分析。",
+          "chart": {
+            "type": null,
+            "xKey": null,
+            "xAxis_kind": null,
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": null,
+            "valueKey": null
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "F2 闲聊-天气",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 1,
+          "tasks": [],
+          "assistant": "我是 ForgeSight，专注于制造企业的生产、质量、设备和库存数据分析。关于上海天气，我没有实时气象数据，建议你查看天气应用或网站获取准确信息。有其他业务数据问题，随时问我。",
+          "chart": {
+            "type": null,
+            "xKey": null,
+            "xAxis_kind": null,
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": null,
+            "valueKey": null
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "F3 角色-你是谁",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 0,
+          "tasks": [],
+          "assistant": "我是 ForgeSight，面向制造业数据底座的智能问析 Agent。我可以帮你查询并解释生产、质量、设备、库存数据，选择合适图表并给出带证据的结论；数据均为只读分析，不会改动底层数据。想分析什么，直接用业务语言告诉我就行。",
+          "chart": {
+            "type": null,
+            "xKey": null,
+            "xAxis_kind": null,
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": null,
+            "valueKey": null
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "F4 系统-现在几点",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 0,
+          "tasks": [],
+          "assistant": "现在是 2026年09月09日 13:19，星期三（Asia/Shanghai）。",
+          "chart": {
+            "type": null,
+            "xKey": null,
+            "xAxis_kind": null,
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": null,
+            "valueKey": null
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "F5 无效指标-员工薪资",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 1,
+          "tasks": [],
+          "assistant": "你好，我是 ForgeSight。你可以直接用业务语言提问，例如“找出最近一个月不良数量最高的产品”。",
+          "chart": {
+            "type": null,
+            "xKey": null,
+            "xAxis_kind": null,
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": null,
+            "valueKey": null
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "F6 写意图-删除数据",
+      "turns": [
+        {
+          "status": "timeout",
+          "error": "POLL_TIMEOUT",
+          "callCount": null,
+          "tasks": [],
+          "assistant": "",
+          "chart": {
+            "type": null,
+            "xKey": null,
+            "xAxis_kind": null,
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": null,
+            "valueKey": null
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "F7 写意图-修改数据",
+      "turns": [
+        {
+          "status": "timeout",
+          "error": "POLL_TIMEOUT",
+          "callCount": null,
+          "tasks": [],
+          "assistant": "",
+          "chart": {
+            "type": null,
+            "xKey": null,
+            "xAxis_kind": null,
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": null,
+            "valueKey": null
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "F8 超范围-2020",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 2,
+          "tasks": [
+            [
+              1,
+              "2020年的总产量是多少",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "2020年：无数据（查询结果为空，未返回有效产量数值）。",
+          "chart": {
+            "type": "bar",
+            "xKey": "产量",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": "",
+            "valueKey": null
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "F9 范围外字段-产品价格",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 3,
+          "tasks": [
+            [
+              1,
+              "6月份产品价格是多少",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "根据已确认指标口径（低于安全库存），查询结果仅返回产品与仓库的维度信息，不包含价格字段，因此无法回答6月份产品价格。当前数据源中无价格相关指标或数据，建议使用价格类指标重新查询。",
+          "chart": {
+            "type": "bar",
+            "xKey": "product_name",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": "",
+            "valueKey": null
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "F10 多问题复合",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 3,
+          "tasks": [
+            [
+              1,
+              "6月份各产线的产量",
+              "query",
+              "succeeded"
+            ],
+            [
+              2,
+              "良率分别是多少",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "1. L01: 407,811   L02: 435,789   L03: 338,414   L04: 516,693   L05: 464,459    6月份共5条产线有产量数据，其中L04产量最高（516,693），L03产量最低（",
+          "chart": {
+            "type": "bar",
+            "xKey": "产线",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [
+              "产量"
+            ],
+            "series": [],
+            "lines": [],
+            "unit": "",
+            "valueKey": "产量"
+          },
+          "kpis": [
+            [
+              "产量",
+              "2,163,166.00",
+              "全量汇总"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "label": "G1 追问-所有产线吗",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 2,
+          "tasks": [
+            [
+              1,
+              "5月份不良率是多少",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "5月抽检不良率为3.26%。",
+          "chart": {
+            "type": "bar",
+            "xKey": "统计期间",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [
+              "抽检不良率"
+            ],
+            "series": [],
+            "lines": [],
+            "unit": "%",
+            "valueKey": "抽检不良率"
+          },
+          "kpis": [
+            [
+              "抽检不良率",
+              "3.26%",
+              "5月"
+            ]
+          ]
+        },
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 1,
+          "tasks": [],
+          "assistant": "是的，3.26% 是5月所有产线汇总后的整体抽检不良率。如果需要按产线拆分，我可以帮你查看各产线的具体数据。",
+          "chart": {
+            "type": null,
+            "xKey": null,
+            "xAxis_kind": null,
+            "xAxis_grain": null,
+            "bars": [],
+            "series": [],
+            "lines": [],
+            "unit": null,
+            "valueKey": null
+          },
+          "kpis": []
+        }
+      ]
+    },
+    {
+      "label": "G2 追问-那各产线呢",
+      "turns": [
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 2,
+          "tasks": [
+            [
+              1,
+              "6月各产线良率",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "L01: 97.30%   L02: 96.94%   L03: 96.72%   L04: 95.83%   L05: 97.21%    6月共统计5条产线的工序良率，其中L01良率最高（97.30%），L04良率最低（95.83%）。",
+          "chart": {
+            "type": "bar",
+            "xKey": "产线",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [
+              "工序良率"
+            ],
+            "series": [],
+            "lines": [],
+            "unit": "%",
+            "valueKey": "工序良率"
+          },
+          "kpis": []
+        },
+        {
+          "status": "succeeded",
+          "error": null,
+          "callCount": 3,
+          "tasks": [
+            [
+              1,
+              "6月各工序的良率是多少",
+              "query",
+              "succeeded"
+            ]
+          ],
+          "assistant": "6月各工序良率如下：  - PR07: 94.95% - PR08: 99.00% - PR04: 96.15% - PR05: 95.48% - PR06: 94.36% - PR01: 97.74% - PR02: 97.26% - P",
+          "chart": {
+            "type": "bar",
+            "xKey": "工序",
+            "xAxis_kind": "category",
+            "xAxis_grain": null,
+            "bars": [
+              "工序良率"
+            ],
+            "series": [],
+            "lines": [],
+            "unit": "%",
+            "valueKey": "工序良率"
+          },
+          "kpis": []
+        }
+      ]
+    }
+  ]
+}

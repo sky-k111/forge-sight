@@ -2,14 +2,11 @@
 
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.agent.ids import new_id
 from app.db.models import AnalysisEvent, AnalysisRun
-
-
-class RunNotFound(KeyError):
-    pass
 
 
 def append_event(
@@ -24,15 +21,29 @@ def append_event(
     visibility: str = "user",
     replayable: bool = True,
 ) -> AnalysisEvent:
-    """在调用方事务内递增 seq 并追加事件。"""
-    # SQLAlchemy 的 Python default 在 INSERT 时生效；新建 Run 尚未 flush 时字段仍可能为 None。
-    run.last_event_seq = (run.last_event_seq or 0) + 1
+    """在调用方事务内追加事件，并以数据库 MAX(seq)+1 作为权威 seq。
+
+    usage.start_call / finish_call 会用独立 Session 追加 llm.* 事件；若本函数依赖传入
+    run 对象内存中的 last_event_seq，跨会话时会拿到陈旧值并触发 uq_analysis_event_seq
+    冲突（或与 execute_run 的 FOR UPDATE 相互死锁）。这里统一锁定 run 行并从库读取最新
+    seq，保证跨会话顺序唯一、可重放。
+    """
+    # 锁定 run 行以序列化并发追加（同一事务内重复加锁是 re-entrant，安全）。
+    # flush so a newly created (not yet persisted) run can be locked.
+    session.flush()
+    session.query(AnalysisRun).filter_by(id=run.id).with_for_update().one()
+    seq = (
+        session.query(func.coalesce(func.max(AnalysisEvent.seq), 0))
+        .filter(AnalysisEvent.run_id == run.id)
+        .scalar()
+        + 1
+    )
     event = AnalysisEvent(
         id=new_id("evt"),
         session_id=run.session_id,
         run_id=run.id,
         task_id=task_id,
-        seq=run.last_event_seq,
+        seq=seq,
         event_type=event_type,
         step_key=step_key,
         attempt=attempt,
@@ -41,6 +52,7 @@ def append_event(
         payload_json=payload or {},
     )
     session.add(event)
+    run.last_event_seq = seq
     return event
 
 

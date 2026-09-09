@@ -7,19 +7,44 @@ function chartTitleFor(snapshot, xKey, numeric) {
   return numeric.length ? `按${xKey}查看${numeric[0]}分布` : "查询结果";
 }
 
-function isDateDimension(key, rows) {
-  if (/(?:date|time|day|month|year|日期|时间|月份|年度)/i.test(String(key))) return true;
-  const values = rows.slice(0, 8).map((row) => String(row[key] ?? "")).filter(Boolean);
-  return values.length > 0 && values.every((value) => /^\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?(?:[ T].*)?$/.test(value));
+// 轴语义的格式化器：只按“已知粒度”把值转成人读文本。粒度来自 task.axis（由后端
+// intent/query_compiler 决定），前端不再靠猜列名/猜值来反推周还是月。
+const GRAIN_LABEL_FORMATS = {
+  week: (raw) => {
+    const text = String(raw ?? "").replace(/\.0$/, "");
+    const match = text.match(/^(\d{4})(\d{2})$/);
+    return match ? `第${Number(match[2])}周` : text;
+  },
+  month: (raw) => {
+    const text = String(raw ?? "").replace(/\.0$/, "");
+    const match = text.match(/^(\d{4})[-/]?(\d{1,2})$/);
+    return match ? `${Number(match[2])}月` : text;
+  },
+  year: (raw) => String(raw ?? "").replace(/\.0$/, "").slice(0, 4),
+  day: (raw) => {
+    const text = String(raw ?? "").replace(/\.0$/, "");
+    const match = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    return match ? `${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}` : text;
+  },
+  quarter: (raw) => {
+    const text = String(raw ?? "").replace(/\.0$/, "");
+    const match = text.match(/^(\d{4})-?(?:[Qq])?([1-4])$/);
+    return match ? `${match[2]}季度` : text;
+  },
+};
+
+// 轴语义来自任务（task.axis），缺省为 category；绝不从结果列名/值去猜。
+function axisFromTask(task) {
+  const axis = task?.axis;
+  if (axis?.key) {
+    return { key: String(axis.key), kind: axis.kind === "time" ? "time" : "category", grain: axis.grain ?? null };
+  }
+  return { key: null, kind: "category", grain: null };
 }
 
-function formatAxisLabel(value, dateAxis = false) {
-  const text = String(value ?? "");
-  if (dateAxis) {
-    const match = text.match(/^(\d{4})[-/](\d{1,2})(?:[-/](\d{1,2}))?/);
-    if (match) return match[3] ? `${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}` : `${match[1]}-${match[2].padStart(2, "0")}`;
-  }
-  return text.length > 10 ? `${text.slice(0, 9)}…` : text;
+function valueLabel(value, grain) {
+  const formatter = GRAIN_LABEL_FORMATS[grain];
+  return formatter ? formatter(value) : String(value ?? "");
 }
 
 function isRateMetric(key) {
@@ -180,7 +205,9 @@ export function buildChart(snapshot, execution) {
   });
   const numericAll = columns.filter((column) => rows.some((row) => row[column] !== "" && row[column] != null && Number.isFinite(Number(row[column]))));
   const categorical = columns.filter((column) => !numericAll.includes(column));
-  const xKey = pickDimensionAxis(columns, numericAll);
+  const axisTask = snapshot.tasks?.at(-1);
+  const axisMeta = axisFromTask(axisTask);
+  const xKey = (axisMeta.key && columns.includes(axisMeta.key)) ? axisMeta.key : pickDimensionAxis(columns, numericAll);
   const numeric = numericAll.filter((column) => column !== xKey && !isDimensionColumn(column, numericAll));
   if (numeric.length === 0) return null;
   const analysisTypes = new Set((snapshot.tasks ?? []).map((task) => task.analysisType));
@@ -196,7 +223,7 @@ export function buildChart(snapshot, execution) {
         : /饼图|环形图/.test(questionText) ? "donut"
           : /散点图/.test(questionText) ? "scatter"
             : /表格展示|用表格|以表格/.test(questionText) ? "table" : null);
-  const dateAxis = isDateDimension(xKey, rows);
+  const dateAxis = axisMeta.kind === "time";
   if (requestedChart === "table") return null;
   const correlation = (requestedChart === "scatter" || (!requestedChart && analysisTypes.has("correlation"))) && numericAll.length >= 2;
   const heatmap = requestedChart === "heatmap"
@@ -222,7 +249,9 @@ export function buildChart(snapshot, execution) {
     ...row,
     ...Object.fromEntries(numericAll.map((column) => [column, Number(row[column])])),
   }));
-  const axisFormatter = (value) => formatAxisLabel(value, dateAxis);
+  const labels = {};
+  for (const row of chartRows) labels[String(row[xKey])] = valueLabel(row[xKey], axisMeta.grain);
+  const axisFormatter = (value) => labels[String(value)] ?? String(value);
   const note = rows.length > displayLimit
     ? `图表展示前 ${displayLimit} 项，共返回 ${rows.length} 条记录；完整结果可导出。`
     : `图表展示全部 ${rows.length} 条返回记录。`;

@@ -17,6 +17,11 @@ const STEP_ARTIFACT = {
   "query.execute": "result",
   "result.explain": "conclusion",
   "modeling.propose": "modeling-proposal",
+  "planner.build": "agent-plan",
+  "planner.revise": "agent-plan-revision",
+  "planner.validate": "plan-validation",
+  "capability.invoke": "capability-result",
+  "observation.record": "capability-observation",
 };
 
 function latestSteps(steps = [], tasks = []) {
@@ -95,13 +100,40 @@ function detailFor(step, artifact) {
         content.metricResolution?.source === "agent_inferred" ? "Agent 临时推导口径" : "企业已发布口径",
       ];
     }
-  } else if (artifact?.type === "chart-adjustment") {
-    const bit = [];
-    if (content?.granularity) bit.push(`横轴聚合到${content.granularity}`);
-    if (content?.chartType) bit.push(`切换为${content.chartType}`);
-    if (content?.format === "percent") bit.push("纵轴改为百分比");
-    detail.body = bit.length ? `Agent 选择“调整当前图表”（${bit.join("；")}），未执行新的数据查询。` : "Agent 选择“调整当前图表”，未执行新的数据查询。";
-    detail.tags = ["不触发 SQL", "仅调整展示", `指令：${content?.instruction ?? "图表调整"}`].slice(0, 3);
+  } else if (artifact?.type === "agent-plan") {
+    const steps = content?.plan?.steps ?? [];
+    detail.body = content?.degraded
+      ? `已生成受限业务计划（降级为确定性兜底）：${content.reason ?? "模型未参与规划"}`
+      : `已生成 ${steps.length} 步受限业务计划；LLM 只在白名单能力范围内选择，安全边界由确定性代码保证。`;
+    detail.tags = [
+      content?.degraded ? "降级：deterministic" : "bounded-planner",
+      ...steps.slice(0, 5).map((item) => `${item.capability ?? item.purpose ?? ""}`),
+    ];
+  } else if (artifact?.type === "agent-plan-revision") {
+    detail.body = `在预算内对计划做了有限修订，当前为第 ${content?.revision ?? 1} 版${content?.replanCount ? `，累计重规划 ${content.replanCount} 次` : ""}。`;
+    detail.tags = [
+      `修订：v${content?.revision ?? 1}`,
+      ...(content?.plan?.steps ?? []).slice(0, 5).map((item) => item.capability ?? item.purpose ?? ""),
+    ];
+  } else if (artifact?.type === "plan-validation") {
+    detail.body = content?.valid
+      ? "计划已通过能力、依赖与预算校验，可进入执行。"
+      : (content?.errors?.length ? content.errors.join("；") : (content?.reasonCode || "计划校验未通过。"));
+    detail.tags = content?.checks ?? content?.errors ?? [];
+  } else if (artifact?.type === "capability-result") {
+    detail.body = content?.summary || (content?.status === "failed" ? "该能力调用失败。" : "该业务能力已执行。");
+    detail.tags = [
+      content?.status ? `状态：${content.status}` : null,
+      content?.reasonCode ? `原因：${content.reasonCode}` : null,
+      content?.capability ? `能力：${content.capability}` : null,
+    ].filter(Boolean);
+  } else if (artifact?.type === "capability-observation") {
+    detail.body = content?.summary || "该步骤已返回结构化观察。";
+    detail.tags = [
+      content?.capability ? `能力：${content.capability}` : null,
+      content?.reasonCode ? `原因：${content.reasonCode}` : null,
+      ...(content?.artifactRefs ?? []).slice(0, 4).map((ref) => `产物：${String(ref).slice(0, 12)}…`),
+    ].filter(Boolean);
   }
   if (step.status === "failed" || step.status === "blocked") {
     const costGateReason = artifact?.type === "validation" ? content?.costGate?.reason : "";
@@ -146,121 +178,16 @@ function clampPrecision(digits) {
   return Math.max(0, Math.min(6, Math.round(digits)));
 }
 
-const MONTH_AXIS_RE = /^(\d{4})[-/](\d{1,2})$/;
-const YYYYMM_RE = /^(\d{6})$/;
-
-export function compressMonthAxis(chart) {
-  if (!chart || !Array.isArray(chart.data) || !chart.xKey) return chart;
-  const xKey = chart.xKey;
-  const parsed = chart.data.map((row) => {
-    const raw = String(row?.[xKey] ?? "");
-    const dashed = raw.match(MONTH_AXIS_RE);
-    if (dashed) return { year: Number(dashed[1]), month: Number(dashed[2]) };
-    if (YYYYMM_RE.test(raw)) return { year: Number(raw.slice(0, 4)), month: Number(raw.slice(4, 6)) };
-    return null;
-  });
-  if (!parsed.some(Boolean)) return chart;
-  const years = new Set(parsed.filter(Boolean).map((p) => p.year));
-  if (years.size !== 1) return chart;
-  const data = chart.data.map((row, index) => {
-    const p = parsed[index];
-    if (!p) return row;
-    return { ...row, [xKey]: `${p.month}月` };
-  });
-  return { ...chart, data };
-}
-
-function yearOf(value) {
-  const raw = String(value ?? "");
-  const dashed = raw.match(/^(\d{4})[-/]\d{1,2}/);
-  if (dashed) return dashed[1];
-  if (/^\d{6}$/.test(raw)) return raw.slice(0, 4);
-  if (/^\d{4}$/.test(raw)) return raw;
-  return null;
-}
-
-
-export function aggregateYearAxis(chart, fallbackYear = null) {
-  if (!chart || !Array.isArray(chart.data) || !chart.xKey) return chart;
-  const xKey = chart.xKey;
-  const years = chart.data.map((row) => yearOf(row?.[xKey]));
-  const valueKeys = new Set();
-  (chart.bars ?? []).forEach((b) => valueKeys.add(b.key));
-  (chart.series ?? []).forEach((s) => valueKeys.add(s.key));
-  if (valueKeys.size === 0) {
-    chart.data.forEach((row) => Object.keys(row).forEach((k) => {
-      if (k !== xKey && typeof row[k] === "number") valueKeys.add(k);
-    }));
-  }
-  const sumRows = (rows) => {
-    const row = {};
-    valueKeys.forEach((k) => {
-      let sum = 0; let count = 0;
-      rows.forEach((r) => { if (typeof r?.[k] === "number") { sum += r[k]; count += 1; } });
-      row[k] = count ? Number(sum.toFixed(2)) : undefined;
-    });
-    return row;
-  };
-  let data;
-  if (years.some(Boolean)) {
-    // 横轴仍含年份（如 2026-01 / 2025-12）：按年分组汇总。
-    const distinctYears = [...new Set(years.filter(Boolean))];
-    data = distinctYears.map((y) => {
-      const rows = chart.data.filter((_, i) => years[i] === y);
-      return { [xKey]: y, ...sumRows(rows) };
-    });
-  } else if (fallbackYear) {
-    // 数据已被压缩成“月度无年份”标签（如 1月..7月），但指令给出目标年份：
-    // 把所有月份求和成一根该年份柱，满足“横坐标就一个 2026”的诉求。
-    data = [{ [xKey]: String(fallbackYear), ...sumRows(chart.data) }];
-  } else {
-    return chart;
-  }
-  const values = data.flatMap((row) => [...valueKeys].map((k) => row[k]).filter((v) => typeof v === "number"));
-  const max = values.length ? Math.max(...values) : 0;
-  const next = { ...chart, data, note: chart.note };
-  if (max > 0) next.yDomain = [0, Math.ceil((max * 1.15) / 1000) * 1000];
-  if (max < 1) next.yPrecision = 2;
-  return next;
-}
-
-
-export function applyChartAdjustment(chart, adjustment = {}) {
-  if (!chart) return chart;
-  let next = chart;
-  if (adjustment.granularity === "year") {
-    const fallbackYear = String(adjustment.instruction ?? "").match(/(?:19|20)\d{2}/)?.[0] ?? null;
-    next = aggregateYearAxis(next, fallbackYear);
-  }
-  const target = adjustment.chartType;
-  if ((target === "line" || target === "bar" || target === "combo" || target === "donut") && next.type !== target) {
-    next = switchChartType(next, target);
-  }
-  if (adjustment.format === "percent") {
-    next = { ...next, unit: "%", yDomain: [0, 100], yPrecision: 1 };
-  }
-  return next;
-}
-
-
-function switchChartType(chart, target) {
-  const valueKey = chart.valueKey || (chart.bars ?? [])[0]?.key || Object.keys(chart.data?.[0] ?? {}).find((k) => k !== chart.xKey);
-  if (!valueKey) return chart;
-  const series = [{ key: valueKey, name: valueKey }];
-  if (target === "line") return { ...chart, type: "line", series, bars: [] };
-  if (target === "donut") {
-    const data = (chart.data ?? []).map((row) => ({ name: String(row?.[chart.xKey] ?? "未命名"), value: Number(row?.[valueKey] ?? 0) }));
-    return { ...chart, type: "donut", data, centerTitle: "合计", centerValue: data.reduce((a, b) => a + (b.value || 0), 0).toLocaleString("zh-CN"), bars: [], series: [] };
-  }
-  if (target === "combo") return { ...chart, type: "combo", bars: [series[0]], lines: [], series: [] };
-  return { ...chart, type: "bar", bars: series, series: [] };
-}
-
-
 function hydrateChart(chart) {
   if (!chart) return chart;
   const next = { ...chart };
-  if (isDateKey(next.xKey)) next.xTickFormatter = (value) => dateAxisValue(value);
+  const axis = next.xAxis;
+  if (axis?.labels) {
+    const labels = axis.labels;
+    next.xTickFormatter = (value) => labels[String(value)] ?? String(value);
+  } else if (isDateKey(next.xKey)) {
+    next.xTickFormatter = (value) => dateAxisValue(value);
+  }
   if (next.yPrecision != null || next.unit) {
     const digits = clampPrecision(Number(next.yPrecision ?? 2));
     next.yTickFormatter = (value) => Number(value).toLocaleString("zh-CN", {
@@ -365,12 +292,18 @@ export function adaptAnalysisRun(snapshot) {
     };
   });
   const multi = (snapshot.tasks?.length ?? 0) > 1;
+  const stepOrdinalByTask = new Map();
   const plan = steps.map((step) => {
     const task = snapshot.tasks?.find((item) => item.id === step.taskId);
     const checkpoint = [...checkpoints].reverse().find((item) => item.stepKey === step.stepKey && item.summary?.taskId === step.taskId);
+    let stepOrdinal = 0;
+    if (task && multi) {
+      stepOrdinal = (stepOrdinalByTask.get(task.id) ?? 0) + 1;
+      stepOrdinalByTask.set(task.id, stepOrdinal);
+    }
     return {
       id: step.id,
-      label: multi && task ? `${task.order}. ${step.label}` : step.label,
+      label: multi && task ? `${stepOrdinal}. ${step.label}` : step.label,
       caption: step.error?.userSafeMessage
         || step.detail
         || (step.status === "succeeded" ? "已完成并记录产物" : "处理中"),
@@ -497,7 +430,6 @@ export function adaptAnalysisRun(snapshot) {
       allowCustom: interactionPrompt.allowCustom,
     } : null,
     error: businessError,
-    chartAdjustment: artifacts.find((item) => item.type === "chart-adjustment")?.content ?? null,
     plan,
     planDetails,
     planner: {

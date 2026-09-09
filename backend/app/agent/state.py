@@ -13,12 +13,14 @@ class AnalysisState(TypedDict, total=False):
     user_id: str
     user_question: str
     analysis_question: str
+    agent_intent: dict[str, Any] | None
+    intent_validation: dict[str, Any] | None
+    intent_degraded: bool
     conversation_context: list[dict[str, str]]
     memory_enabled: bool
     memory_context: dict[str, Any]
     intent_kind: str
     direct_response: str
-    chart_adjustment: dict[str, Any] | None
     utility_question: str
     request_segments: list[dict[str, Any]]
     preclassified_route_labels: dict[int, str]
@@ -31,6 +33,7 @@ class AnalysisState(TypedDict, total=False):
     task_index: int
     task: dict[str, Any]
     task_results: list[dict[str, Any]]
+    previous_task: dict[str, Any] | None
     clarification_response: dict[str, Any] | None
     semantic_context: dict[str, Any]
     skill_enhancement_enabled: bool

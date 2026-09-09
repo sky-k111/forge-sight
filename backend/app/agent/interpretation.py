@@ -16,8 +16,16 @@ import json
 import re
 from typing import Any
 
+# 轴语义（kind/grain/key）的唯一事实源：query_compiler 在编译时已解析出粒度（它知道“按周分组”
+# 就用 YEARWEEK）。这里复用同一套判定，避免在前端/后端各自用“6 位数字猜周还是月”。
+from app.agent.query_compiler import _dim_time_grain, _is_time_dim
+
 INTERPRETATION_KIND = "interpretation"
 INTERPRETATION_VERSION = 1
+
+# 图表数据行的统一上限：不再按折线/柱状给 36/24/12 这种会悄悄丢点的任意值。
+# 结果在限制内时全量渲染，超出才按 NOTE 截断；避免“5 条产线 × 5 周 = 25 行”被截成 24 行丢最后一个点。
+_CHART_ROW_LIMIT = 200
 
 _RATE_KEY_RE = re.compile(r"(?:率|占比|比例|份额|构成|百分比|percent|rate|ratio|share)|\b%", re.IGNORECASE)
 _DIMENSION_NAME_RE = re.compile(r"(?:名称|名字|name|label|描述|desc)", re.IGNORECASE)
@@ -39,6 +47,8 @@ _RANK_QUESTION_RE = re.compile(r"(?:最高|最低|排名|排行|Top|top|前[0-9�
 _COMPARE_QUESTION_RE = re.compile(r"(?:对比|比较|与.*相比|同时|差异|和.*的?关系)")
 _HEATMAP_INDEXED = ("heatmap", "matrix", "热力图", "矩阵图")
 _MULTI_GROUP_RE = re.compile(r"(?:分别|各自|分别按照|同时按|同时看|两个维度|多个维度|并且按|都想|都要)")
+# 单值标量聚合（无维度列）时合成的横轴列名，避免横轴退化为指标值本身。
+_SCALAR_PERIOD_AXIS = "统计期间"
 
 
 def _finite_number(value: Any) -> bool:
@@ -211,6 +221,22 @@ def _auto_y_domain(data: list[dict], value_key: str, unit: str) -> dict[str, Any
     }
 
 
+_PHYS_DISPLAY = {
+    "product_name": "产品", "product_id": "产品ID", "product_code": "产品编码",
+    "available_qty": "可用库存", "safety_stock_qty": "安全库存", "stock_qty": "库存", "stockout_qty": "缺货数量",
+    "defect_type": "不良类型", "defect_qty": "不良数量", "good_qty": "合格数量", "input_qty": "投入数量",
+    "sample_qty": "抽检数量", "output_qty": "产量", "production_qty": "产量", "rework_qty": "返工数量",
+    "line_name": "产线", "line_id": "产线", "process_name": "工序", "process_code": "工序",
+    "downtime_minutes": "停机时长", "is_planned": "是否计划停机", "snapshot_date": "库存快照日期",
+}
+def _display_label(col: str) -> str:
+    """把物理列名映射成中文展示名，用于图表图例；仅影响展示，不改变数据键。"""
+    c = str(col or "")
+    if c in _PHYS_DISPLAY:
+        return _PHYS_DISPLAY[c]
+    return c
+
+
 def decide_chart(
     *,
     analysis_type: str,
@@ -223,6 +249,7 @@ def decide_chart(
     row_count: int,
     truncated: bool,
     metric_key: str | None = None,
+    axis_hint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """基于已解析意图 + 指标口径 + 结果列，决定图表类型与轴。"""
     numeric = _numeric_columns(columns, rows)
@@ -245,6 +272,7 @@ def decide_chart(
     )
 
     x_key = _pick_dimension_column(columns, numeric, group_by, rows)
+    axis = _axis_meta(group_by, x_key, axis_hint)
     # 时间维度（周/月/日/季/年）天然是趋势序列：除非用户点名占比/排名/对比，否则用折线，
     # 避免把“6月份各周良率”“各月产量”画成柱状而丢失时间趋势，也不再依赖 LLM 纠正类型。
     if (
@@ -260,8 +288,8 @@ def decide_chart(
         trend = True
     value_key = metric_key or _pick_value_column(values, metric_name, question, share)
     unit = "%" if value_key and _is_rate_key(value_key) else ""
-    display_limit = 36 if trend else 12
-    numeric_set = set(numeric)
+    display_limit = _CHART_ROW_LIMIT
+    numeric_set = set(numeric) - set(_dimension_columns(columns, rows))
 
     def _to_row(entry: list[Any]) -> dict[str, Any]:
         d = dict(zip(columns, entry))
@@ -273,7 +301,16 @@ def decide_chart(
         return d
 
     chart_rows = [_to_row(row) for row in rows[:display_limit]]
-    chart_rows = _compress_month_labels(chart_rows, x_key)
+
+    # 仅在 month 粒度才把轴值压缩为“N月”；周/年/日等其他粒度绝不套用，
+    # 否则会把 202622（2026 第 22 周）误判成“2026-22 月”而被压缩成“22月”。
+    if axis.get("kind") == "time" and axis.get("grain") == "month":
+        chart_rows = _compress_month_labels(chart_rows, x_key)
+
+    x_labels = _axis_labels(chart_rows, x_key, axis)
+
+    def _finish(chart: dict[str, Any]) -> dict[str, Any]:
+        return {**chart, "xAxis": {**axis, "labels": x_labels}}
 
     if corr:
         first, second = values[0], values[1] if len(values) > 1 else None
@@ -297,12 +334,18 @@ def decide_chart(
 
     if share:
         vkey = value_key or (values[0] if values else None)
-        donut_data = [{"name": str(row.get(x_key, "未命名")), "value": float(row[vkey])} for row in chart_rows if vkey]
+        donut_data = [
+            {"name": x_labels.get(str(row.get(x_key, "未命名")), str(row.get(x_key, "未命名"))), "value": float(row[vkey])}
+            for row in chart_rows if vkey
+        ]
         total = sum(item["value"] for item in donut_data)
         return {
             "type": "donut",
             "kicker": "结构占比 · 实时生成",
             "data": donut_data,
+            "xKey": x_key,
+            "valueKey": vkey,
+            "xAxis": {"key": x_key, "kind": "category", "grain": None, "labels": {}},
             "centerTitle": "合计",
             "centerValue": _fmt_total(total),
             "legend": [{"label": item["name"]} for item in donut_data],
@@ -316,9 +359,9 @@ def decide_chart(
         # 用户同时点名柱状图与折线图时（requested_chart="combo"），即使只有一个指标也要同时呈现柱和线，而非只输出柱或只输出线。
         rate_cols = [c for c in values if _is_rate_key(c)]
         abs_cols = [c for c in values if not _is_rate_key(c)]
-        bars = [{"key": c, "name": c} for c in (abs_cols or values[:1])[:2]]
-        lines = [{"key": c, "name": c} for c in (rate_cols or values[:1])[:2]]
-        return {
+        bars = [{"key": c, "name": _display_label(c)} for c in (abs_cols or values[:1])[:2]]
+        lines = [{"key": c, "name": _display_label(c)} for c in (rate_cols or values[:1])[:2]]
+        return _finish({
             "type": "combo",
             "kicker": "多指标对照 · 实时生成",
             "data": chart_rows,
@@ -329,26 +372,26 @@ def decide_chart(
             "rightUnit": "%" if lines and all(_is_rate_key(item["key"]) for item in lines) else "",
             "valueKey": (bars[0]["key"] if bars else value_key),
             "note": _note(rows, display_limit),
-        }
+        })
 
     if trend:
         series_keys = values[:4]
         y = _auto_y_domain(chart_rows, value_key, unit) if value_key else {}
-        return {
+        return _finish({
             "type": "line",
             "kicker": "趋势分析 · 实时生成",
             "data": chart_rows,
             "xKey": x_key,
-            "series": [{"key": c, "name": c} for c in series_keys],
+            "series": [{"key": c, "name": _display_label(c)} for c in series_keys],
             "valueKey": value_key,
             **y,
             "note": _note(rows, display_limit),
-        }
+        })
 
     # 默认柱状
-    bars = [{"key": c, "name": c} for c in values[:3]]
+    bars = [{"key": c, "name": _display_label(c)} for c in values[:3]]
     y = _auto_y_domain(chart_rows, value_key, unit) if value_key else {}
-    return {
+    return _finish({
         "type": "bar",
         "kicker": "查询结果 · 实时生成",
         "data": chart_rows,
@@ -357,7 +400,7 @@ def decide_chart(
         "valueKey": value_key,
         "unit": unit,
         "note": _note(rows, display_limit),
-    }
+    })
 
 
 def _dimension_columns(columns: list[str], rows: list[list[Any]]) -> list[str]:
@@ -366,18 +409,52 @@ def _dimension_columns(columns: list[str], rows: list[list[Any]]) -> list[str]:
     return [c for c in columns if c not in values]
 
 
-def _label_for_dim_value(key: str, raw: Any) -> str:
+def _axis_meta(group_by: list[str] | None, x_key: str | None, axis_hint: dict[str, Any] | None = None) -> dict[str, Any]:
+    """轴语义：优先使用 query_compiler 编译时给出的 axis_hint（它知道真实粒度），
+    否则从 group_by 的时间维度名推导；绝不根据数值位数去猜周/月。"""
+    # 轴 key 必须与实际横轴字段 x_key 对齐：axis_hint 只是 query_compiler 给首维度的提示，
+    # 当“产线 × 周”这类多维拆分时，横轴往往取时间维度，而不是首维度，故不能用 axis_hint.key 覆盖 x_key。
+    hint_grain = (axis_hint or {}).get("grain")
+    key = str(x_key or (axis_hint or {}).get("key") or "")
+    if key and _is_time_dim(key):
+        return {"key": key, "kind": "time", "grain": hint_grain or _dim_time_grain(key) or "day"}
+    if axis_hint and axis_hint.get("key"):
+        return {"key": key, "kind": str(axis_hint.get("kind") or "category"), "grain": axis_hint.get("grain")}
+    group_by = list(group_by or [])
+    matched = x_key if x_key in group_by else None
+    if matched is None:
+        matched = next((d for d in group_by if _is_time_dim(d)), None)
+    if matched and _is_time_dim(matched):
+        return {"key": str(x_key or matched), "kind": "time", "grain": _dim_time_grain(matched) or "day"}
+    return {"key": str(x_key or matched or ""), "kind": "category", "grain": None}
+
+
+def _label_for_dim_value(key: str, raw: Any, grain: str | None = None) -> str:
+    """按已知粒度格式化轴值，而不是靠 6 位数字猜周/月。返回适合横轴/图例展示的文本。"""
     s = str(raw)
     if s.endswith(".0"):
         s = s[:-2]
-    if not _TIME_DIM_RE.match(str(key)):
-        return s
-    # YEARWEEK(202623) -> 23周；年月(202606) -> 2026-06；纯年(2026) -> 2026
-    if re.fullmatch(r"\d{6}", s):
-        return f"{s[4:]}周"
-    if re.fullmatch(r"\d{6,8}", s):
-        return f"{s[0:4]}-{s[4:6]}"
+    if grain == "week":
+        m = re.fullmatch(r"(\d{4})(\d{2})", s)
+        return f"第{int(m.group(2))}周" if m else s
+    if grain == "year":
+        return s[:4] if re.fullmatch(r"\d{4}", s) else s
+    if grain == "quarter":
+        m = re.match(r"^(\d{4})-?[Qq]([1-4])", s)
+        return f"{m.group(2)}季度" if m else s
+    if grain == "day":
+        m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
+        return f"{m.group(2)}-{m.group(3)}" if m else s
+    # month：保留原生（YYYY-MM / YYYYMM / N月），由 _compress_month_labels 决定是否压缩为 N月
     return s
+
+
+def _axis_labels(data: list[dict[str, Any]], x_key: str | None, axis: dict[str, Any]) -> dict[str, str]:
+    """为时间轴每个原始值生成显示标签（raw -> label），渲染层直接查表即可，不再猜列名/位数。"""
+    if not x_key or axis.get("kind") != "time":
+        return {}
+    grain = axis.get("grain")
+    return {str(row.get(x_key)): _label_for_dim_value(x_key, row.get(x_key), grain) for row in data if row.get(x_key) is not None}
 
 
 _MONTH_AXIS_RE = re.compile(r"^(?:((?:\d{4})[-/](?:\d{1,2}))|(\d{6}))$")
@@ -393,7 +470,8 @@ def _month_label_parts(raw: Any) -> tuple[int, int] | None:
         return int(year), int(month)
     digits = m.group(2)
     if len(digits) == 6 and digits.isdigit():
-        return int(digits[0:4]), int(digits[4:6])
+        year, month = int(digits[0:4]), int(digits[4:6])
+        return (year, month) if 1 <= month <= 12 else None
     return None
 
 
@@ -422,7 +500,7 @@ def _compress_month_labels(data: list[dict[str, Any]], x_key: str | None) -> lis
 
 
 def _group_label(series_dims: list[str], row: dict[str, Any]) -> str:
-    return " · ".join(_label_for_dim_value(k, row.get(k, "")) for k in series_dims)
+    return " · ".join(_label_for_dim_value(k, row.get(k, ""), _dim_time_grain(k)) for k in series_dims)
 
 
 def _auto_y_domain_multi(data: list[dict[str, Any]], value_keys: list[str], unit: str) -> dict[str, Any]:
@@ -456,11 +534,11 @@ def _auto_y_domain_multi(data: list[dict[str, Any]], value_keys: list[str], unit
 
 
 def _build_heatmap(row_dim: str, col_dim: str, vkey: str | None, columns: list[str], rows: list[list[Any]], row_count: int, truncated: bool) -> dict[str, Any]:
-    numeric = _numeric_columns(columns, rows)
+    numeric = set(_numeric_columns(columns, rows)) - set(_dimension_columns(columns, rows))
     chart_rows: list[dict[str, Any]] = []
     for entry in rows:
         d = dict(zip(columns, entry))
-        for k in set(numeric):
+        for k in numeric:
             try:
                 d[k] = float(d[k])
             except (TypeError, ValueError):
@@ -482,12 +560,12 @@ def _build_heatmap(row_dim: str, col_dim: str, vkey: str | None, columns: list[s
 
 
 def _pivot_chart(x_key: str, series_dims: list[str], value_key: str, columns: list[str], rows: list[list[Any]], row_count: int, truncated: bool, chart_type: str) -> dict[str, Any]:
-    display_limit = 36 if chart_type == "line" else 24
-    numeric = _numeric_columns(columns, rows)
+    display_limit = _CHART_ROW_LIMIT
+    numeric = set(_numeric_columns(columns, rows)) - set(_dimension_columns(columns, rows))
     chart_rows: list[dict[str, Any]] = []
     for entry in rows[:display_limit]:
         d = dict(zip(columns, entry))
-        for k in set(numeric):
+        for k in numeric:
             try:
                 d[k] = float(d[k])
             except (TypeError, ValueError):
@@ -500,7 +578,7 @@ def _pivot_chart(x_key: str, series_dims: list[str], value_key: str, columns: li
         cell[(str(row.get(x_key, "")), _group_label(series_dims, row))] = row.get(value_key)
     data: list[dict[str, Any]] = []
     for xv in x_order:
-        entry: dict[str, Any] = {x_key: _label_for_dim_value(x_key, xv)}
+        entry: dict[str, Any] = {x_key: _label_for_dim_value(x_key, xv, _dim_time_grain(x_key))}
         for label in series_order:
             v = cell.get((xv, label))
             entry[label] = float(v) if _finite_number(v) else None
@@ -540,6 +618,7 @@ def decide_charts(
     row_count: int,
     truncated: bool,
     metric_key: str | None = None,
+    axis_hint: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """图表契约：多维/热力图场景可产出多张图；否则回退到单图 decide_chart。"""
     values = _value_columns(columns, rows) or _numeric_columns(columns, rows)
@@ -556,12 +635,16 @@ def decide_charts(
             for d in dims:
                 others = [x for x in dims if x != d]
                 base_type = requested_chart if requested_chart in ("line", "bar") else ("line" if _TIME_DIM_RE.match(str(d)) else "bar")
-                charts.append(_pivot_chart(d, others, vkey, columns, rows, row_count, truncated, base_type))
+                chart = _pivot_chart(d, others, vkey, columns, rows, row_count, truncated, base_type)
+                chart["xAxis"] = {**_axis_meta(group_by, d, axis_hint), "labels": {}}
+                charts.append(chart)
             return charts
         x = time_dims[0] if time_dims else dims[0]
         others = [c for c in dims if c != x]
         base_type = requested_chart if requested_chart in ("line", "bar") else ("line" if _TIME_DIM_RE.match(str(x)) else "bar")
-        return [_pivot_chart(x, others, vkey, columns, rows, row_count, truncated, base_type)]
+        chart = _pivot_chart(x, others, vkey, columns, rows, row_count, truncated, base_type)
+        chart["xAxis"] = {**_axis_meta(group_by, x, axis_hint), "labels": {}}
+        return [chart]
     return [decide_chart(
         analysis_type=analysis_type,
         requested_chart=requested_chart,
@@ -573,11 +656,8 @@ def decide_charts(
         row_count=row_count,
         truncated=truncated,
         metric_key=metric_key,
+        axis_hint=axis_hint,
     )]
-
-
-def categorical_cols(columns: list[str], numeric: list[str]) -> list[str]:
-    return [c for c in columns if c not in numeric]
 
 
 def _distinct(rows: list[dict], key: str) -> list[str]:
@@ -632,6 +712,15 @@ def build_interpretation(
     truncated = bool(execution.get("truncated") or False)
     metric = metric_resolution or {}
     task = task or {}
+    axis_hint = metric.get("axis") or None
+    # 单值标量聚合（结果没有任何维度列）会让 decide_chart 把指标列回退成横轴，导致横轴显示数值本身。
+    # 这里合成一个「统计期间」维度列，把横轴指向周期/指标名标签（如 5月 / 2026-05），而不是指标值。
+    if rows and not _dimension_columns(columns, rows):
+        period_label = _scalar_period_label(task, metric) or str(metric.get("name") or "") or "当前"
+        if period_label:
+            columns = list(columns) + [_SCALAR_PERIOD_AXIS]
+            rows = [list(row) + [period_label] for row in rows]
+            axis_hint = {"key": _SCALAR_PERIOD_AXIS, "kind": "category", "grain": None}
     charts = decide_charts(
         analysis_type=str(task.get("analysisType") or "query"),
         requested_chart=task.get("requestedChart") or None,
@@ -643,6 +732,7 @@ def build_interpretation(
         row_count=row_count,
         truncated=truncated,
         metric_key=(metric.get("chartValueKey") or None),
+        axis_hint=axis_hint,
     )
     chart = charts[0] if charts else None
     return {
@@ -660,6 +750,7 @@ def _build_kpis(columns: list[str], rows: list[list[Any]], metric: dict[str, Any
     numeric = _value_columns(columns, rows)
     if not numeric:
         return []
+    metric_name = str(metric.get("name") or "")
     # 单行：KPI 卡片展示前 3 个数值列；多行：只展示总合/首列聚合
     def row_dict(row: list[Any]) -> dict[str, Any]:
         return dict(zip(columns, row))
@@ -669,7 +760,7 @@ def _build_kpis(columns: list[str], rows: list[list[Any]], metric: dict[str, Any
         dim = cat[0] if cat else None
         caption = str(d.get(dim, "当前查询结果")) if dim else "当前查询结果"
         return [
-            {"label": c, "value": _fmt_kpi(d.get(c), c), "caption": caption}
+            {"label": metric_name or c, "value": _fmt_kpi(d.get(c), c), "caption": caption}
             for c in numeric[:3]
         ]
     # 多行：对非率数值列求和展示总合
@@ -678,7 +769,7 @@ def _build_kpis(columns: list[str], rows: list[list[Any]], metric: dict[str, Any
     if agg_cols:
         total = sum(float(row[columns.index(agg_cols[0])]) for row in rows if _finite_number(row[columns.index(agg_cols[0])]))
         caption = "全量汇总"
-        return [{"label": agg_cols[0], "value": _fmt_kpi(total, agg_cols[0]), "caption": caption}]
+        return [{"label": metric_name or agg_cols[0], "value": _fmt_kpi(total, agg_cols[0]), "caption": caption}]
     return []
 
 
@@ -689,6 +780,18 @@ def _fmt_kpi(value: Any, key: str) -> str:
         return str(value or "—")
     formatted = f"{num:,.2f}"
     return f"{formatted}%" if _is_rate_key(key) else formatted
+
+def _scalar_period_label(task: dict[str, Any], metric: dict[str, Any]) -> str | None:
+    """单值标量聚合的横轴语义标签：优先任务的时间约束标签，其次解析出的周期标签。"""
+    tc = (task.get("timeConstraint") or (task.get("intent") or {}).get("timeConstraint") or {})
+    label = tc.get("label")
+    if label:
+        return str(label)
+    periods = metric.get("periods") or []
+    if periods:
+        return str(periods[0].get("label") or "") or None
+    return None
+
 
 _LLM_CHART_TYPES = {"bar", "line", "donut", "heatmap"}
 
@@ -821,8 +924,8 @@ def refine_chart_contract(
     if unit not in ("", "%"):
         unit = ""
     computed_unit = "%" if _is_rate_key(value_key) else (unit or "")
-    display_limit = 36 if chart_type == "line" else 12
-    numeric_set = set(numeric)
+    display_limit = _CHART_ROW_LIMIT
+    numeric_set = set(numeric) - set(_dimension_columns(columns, rows))
     chart_rows: list[dict[str, Any]] = []
     for entry in rows[:display_limit]:
         d = dict(zip(columns, entry))

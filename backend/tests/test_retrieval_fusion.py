@@ -55,7 +55,10 @@ def test_semantic_metric_hit_still_requires_trusted_source_binding(knowledge_ses
     assert package["retrieval"]["strategy"] == "hybrid-rrf"
     assert package["metrics"][0]["id"] == "M-004"
     assert "semantic" in package["metrics"][0]["retrievalChannels"]
-    assert package["executionPolicy"]["allowedTables"] == ["mes_process_output"]
+    allowed = set(package["executionPolicy"]["allowedTables"])
+    # 指标声明了维度，就要把可达的维度表一并纳入允许表，这样 SQL 才能 JOIN 维度。
+    assert "mes_process_output" in allowed
+    assert any(t.startswith("dim_") for t in allowed)
 
 
 def test_unknown_semantic_ids_cannot_enter_sql_allowlist(knowledge_session, monkeypatch):

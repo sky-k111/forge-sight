@@ -8,10 +8,9 @@ from sqlalchemy import func
 from app.agent.budgets import default_budget
 from app.agent.event_store import append_event, serialize_event
 from app.agent.ids import new_id
+from app.agent.dialogue import has_previous_result, inline_conversation_reply, should_treat_as_conversation
 from app.agent.intent import (
-    build_smalltalk_response,
     classify_request_kind,
-    is_deterministic_conversation,
     is_report_request,
 )
 from app.agent.system_utility import build_system_utility_response
@@ -62,8 +61,10 @@ def _planner_assignment(user_id: str, setting: dict | None = None) -> dict:
 
 BUSINESS_CAPABILITY_SCOPES = [
     "analysis:read", "scope:read", "task:read",
-    "modeling:read", "modeling:draft", "modeling:predict",
-    "report:read", "report:draft", "investigation:read",
+    "modeling:read", "modeling:draft", "modeling:predict", "modeling:train",
+    "report:read", "report:draft", "report:publish", "report:send",
+    "investigation:read", "investigation:write",
+    "delivery:send", "monitoring:read", "monitoring:scan",
 ]
 
 
@@ -208,12 +209,22 @@ def create_run(
             {"role": item.role, "content": item.content}
             for item in reversed(history_rows)
         ]
-        request_kind = classify_request_kind(normalized_question, conversation_context)
+        request_kind = classify_request_kind(
+            normalized_question,
+            conversation_context,
+            intent_enabled=settings.agent_intent_enabled,
+        )
+        # 对话意图前置层：把「引用上一轮结果的确认/口径澄清」与闲聊导向对话，
+        # 避免「你这个是所有产线的吗」被当成新查询重跑整条分析流水线；回复由
+        # execute_inline_conversation 的 LLM 对话器生成，不再用 canned 模板。
+        if should_treat_as_conversation(
+            normalized_question,
+            has_previous_result(conversation_context),
+            request_kind,
+        ):
+            request_kind = "conversation"
         report_request = is_report_request(normalized_question)
         inline_conversation = request_kind in {"conversation", "utility", "unknown"}
-        deterministic_conversation = (
-            inline_conversation and is_deterministic_conversation(normalized_question)
-        )
         sequence_no = (
             session.query(func.coalesce(func.max(AnalysisMessage.sequence_no), 0))
             .filter_by(session_id=session_id)
@@ -306,9 +317,7 @@ def create_run(
         else:
             execute_inline_conversation(
                 run_id,
-                build_smalltalk_response(normalized_question)
-                if deterministic_conversation
-                else None,
+                inline_conversation_reply(normalized_question),
             )
         with PlatformSession() as session:
             completed = session.query(AnalysisRun).filter_by(id=run_id).one()

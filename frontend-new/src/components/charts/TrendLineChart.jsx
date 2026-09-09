@@ -13,7 +13,7 @@ export function TrendLineChart({ data, xKey, series, height = 240, unit = "", ar
             <CartesianGrid {...gridDefaults} />
             <XAxis dataKey={xKey} {...axisDefaults} interval="preserveStartEnd" minTickGap={18} tickFormatter={xTickFormatter} />
             <YAxis {...axisDefaults} domain={yDomain} tickFormatter={yTickFormatter} width={yAxisWidth} />
-            <Tooltip content={<ChartTooltip unit={unit} />} cursor={{ stroke: "var(--color-line-strong)", strokeDasharray: "4 4" }} />
+            <Tooltip content={<ChartTooltip unit={unit} labelFormatter={xTickFormatter} />} cursor={{ stroke: "var(--color-line-strong)", strokeDasharray: "4 4" }} />
             {series.map((item, index) => {
               const color = item.color ?? seriesColors[index % seriesColors.length];
               return area ? (

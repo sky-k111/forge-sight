@@ -18,12 +18,14 @@ from app.agent.contracts import RunStatus
 from app.agent.event_store import append_event
 from app.agent.graph import (
     GraphDependencies,
+    WRITE_TERMS,
     _model_route_decision,
     _route_model_prompt,
     build_analysis_graph,
 )
 from app.agent.ids import new_id
 from app.agent.intent import build_request_route
+from app.agent.llm_intent import resolve_intent
 from app.config import settings
 from app.db.models import (
     AnalysisArtifact,
@@ -61,7 +63,6 @@ TERMINAL_STATUSES = {"succeeded", "failed", "blocked", "cancelled"}
 NODE_META = {
     "route_request": ("intent.route", 0, "判断问题类型"),
     "system_utility": ("system.utility", 1, "读取系统与数据范围"),
-    "apply_chart_adjustment": ("chart.adjust", 2, "自动调整图表展示"),
     "intent_guard": ("intent.guard", 1, "检查只读分析边界"),
     "decide_planning_path": ("planner.route", 2, "选择快速路径或规划路径"),
     "build_business_plan": ("planner.build", 3, "生成受限业务计划"),
@@ -95,6 +96,55 @@ PLANNER_LOOP_NODES = {
     "select_business_step", "authorize_capability", "invoke_business_capability",
     "record_business_observation", "record_delegated_observation", "evaluate_business_progress",
 }
+
+
+def _extract_previous_task(session: Any, run: Any) -> dict[str, Any] | None:
+    """从同一会话里最近一个已结束的 run 提取任务意图结构（groupBy/time/chart），
+    用作本轮多轮追问的继承槽位。多轮继承只在同 session 范围内生效，避免跨租户/跨会话串味。"""
+    try:
+        prev_run = (
+            session.query(AnalysisRun)
+            .filter(
+                AnalysisRun.session_id == run.session_id,
+                AnalysisRun.id != run.id,
+                AnalysisRun.status.in_(["succeeded", "completed"]),
+            )
+            .order_by(AnalysisRun.created_at.desc(), AnalysisRun.id.desc())
+            .first()
+        )
+        if not prev_run:
+            return None
+        tasks = (
+            session.query(AnalysisTask)
+            .filter_by(run_id=prev_run.id)
+            .order_by(AnalysisTask.task_order.asc())
+            .all()
+        )
+        if not tasks:
+            return None
+        for row in tasks:
+            intent = row.intent_json or {}
+            if intent.get("groupBy") or intent.get("timeConstraint") or intent.get("requestedChart") or intent.get("metricHint"):
+                return {
+                    "groupBy": list(intent.get("groupBy") or []),
+                    "timeConstraint": intent.get("timeConstraint"),
+                    "requestedChart": intent.get("requestedChart"),
+                    "metricHint": intent.get("metricHint") or intent.get("metric"),
+                    "title": row.title or "",
+                    "normalizedQuestion": row.normalized_question or "",
+                }
+        row = tasks[0]
+        intent = row.intent_json or {}
+        return {
+            "groupBy": list(intent.get("groupBy") or []),
+            "timeConstraint": intent.get("timeConstraint"),
+            "requestedChart": intent.get("requestedChart"),
+            "metricHint": intent.get("metricHint"),
+            "title": row.title or "",
+            "normalizedQuestion": row.normalized_question or "",
+        }
+    except Exception:
+        return None
 
 
 def _latest_call_id(run_id: str, task_id: str | None, step_key: str) -> str | None:
@@ -543,7 +593,6 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
             ),
             "validate_query": ("validation", update.get("validation")),
             "execute_query": ("result", update.get("execution")),
-            "apply_chart_adjustment": ("chart-adjustment", update.get("chart_adjustment")),
             "explain_result": (
                 "conclusion",
                 {
@@ -1138,7 +1187,7 @@ def execute_inline_route(run_id: str) -> dict:
     # requests and do not send it through SQL retrieval first.
     if routed.get("reportSegments") and not routed.get("analysisQuestion"):
         return execute_inline_report_clarification(run_id)
-    if not labels or routed["kind"] in {"analysis", "mixed", "chart_adjustment"}:
+    if not labels or routed["kind"] in {"analysis", "mixed"}:
         with PlatformSession() as session:
             run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
             if run.status in TERMINAL_STATUSES or run.lease_owner != "inline-conversation":
@@ -1187,6 +1236,11 @@ def execute_inline_route(run_id: str) -> dict:
 
 def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies | None = None) -> dict:
     """执行一个已入队 Run。Worker 和测试均通过此入口，避免两套执行逻辑。"""
+    graph = build_analysis_graph(dependencies or default_dependencies(), checkpointer=checkpointer)
+    # 先探查是否已有 checkpoint（恢复场景），避免恢复时重新调用 LLM 意图解析。
+    config = {"configurable": {"thread_id": run_id}}
+    snapshot = graph.get_state(config)
+    has_checkpoint = bool(snapshot.values)
     with PlatformSession() as session:
         run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().first()
         if run is None:
@@ -1258,6 +1312,7 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
             {"status": "running", "interactionId": resolved_interaction.id if resolved_interaction else None},
         )
         frozen_access = (run.budget_snapshot_json or {}).get("access") or {}
+        previous_task = _extract_previous_task(session, run)
         initial = {
             "session_id": run.session_id,
             "run_id": run.id,
@@ -1287,6 +1342,7 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
             "tasks": [],
             "task_index": 0,
             "task_results": [],
+            "previous_task": previous_task,
             "planner_enabled": bool(
                 ((run.budget_snapshot_json or {}).get("planner") or {}).get(
                     "enabled", settings.agent_planner_enabled
@@ -1317,14 +1373,39 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
             "waiting_user": False,
             "error": None,
         }
+        # 在进入可能较慢的 LLM 意图解析之前先提交：释放对 analysis_run 行的 FOR UPDATE 锁，
+        # 避免 worker 在 `idle in transaction` 中阻塞后续认领，即使进程中途被杀也不会留下
+        # 僵死事务挡住新 worker（配合 Postgres idle_in_transaction_session_timeout 兜底）。
+        session.commit()
+        # 写意图在意图解析之前拦截：删除/更新等写入问法不进 LLM，由 intent_guard 一键阻断。
+        has_write_terms = any(term in str(message.content or "").lower() for term in WRITE_TERMS)
+        if settings.agent_intent_enabled and not is_resume and not has_checkpoint and not has_write_terms:
+            # AgentIntent 驱动：旁路产出 AgentIntent 注入 state，route/planner/编译层消费它。
+            # 仅在有开关且非恢复时执行；任何失败都不影响主执行路径。
+            try:
+                deps = dependencies or default_dependencies()
+                intent, producer, intent_error = resolve_intent(
+                    message.content,
+                    conversation_context,
+                    deps.generate_text,
+                    run_id=run.id,
+                )
+                initial["agent_intent"] = intent.model_dump(mode="json", by_alias=True)
+                append_event(
+                    session,
+                    run,
+                    "intent.agent_resolved",
+                    {
+                        "driven": True,
+                        "producer": producer,
+                        "error": intent_error,
+                        "intent": initial["agent_intent"],
+                    },
+                )
+            except Exception:  # noqa: BLE001 - shadow 失败不阻断主流程
+                pass
         session.commit()
 
-    graph = build_analysis_graph(dependencies or default_dependencies(), checkpointer=checkpointer)
-    # 一个 Run 对应一个顶层 LangGraph thread。checkpoint_ns 只用于子图命名空间，
-    # 不能拿业务 Run ID 充当 namespace，否则 get_state/time-travel 会被识别成不存在的子图。
-    config = {"configurable": {"thread_id": run_id}}
-    snapshot = graph.get_state(config)
-    has_checkpoint = bool(snapshot.values)
     if is_resume:
         state = dict(snapshot.values or initial)
         stream_input = Command(resume=resolved_interaction.response_json or {})

@@ -50,7 +50,7 @@ export function ComboMetricChart({
             <XAxis dataKey={xKey} {...axisDefaults} interval={xInterval} minTickGap={12} tickFormatter={xTickFormatter} />
             <YAxis yAxisId="left" {...axisDefaults} tickFormatter={(value) => `${value}${leftUnit}`} width={leftAxisWidth} />
             <YAxis yAxisId="right" orientation="right" {...axisDefaults} tickFormatter={(value) => `${value}${rightUnit}`} width={rightAxisWidth} />
-            <Tooltip content={<ChartTooltip formatter={formatTooltip} />} cursor={{ fill: "rgb(17 24 39 / 5%)" }} />
+            <Tooltip content={<ChartTooltip formatter={formatTooltip} labelFormatter={xTickFormatter} />} cursor={{ fill: "rgb(17 24 39 / 5%)" }} />
             {barSeries.map((item) => (
               <Bar
                 key={item.key}

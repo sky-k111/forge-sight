@@ -1,8 +1,9 @@
-export function ChartTooltip({ active, payload, label, unit = "", formatter }) {
+export function ChartTooltip({ active, payload, label, unit = "", formatter, labelFormatter }) {
   if (!active || !payload?.length) return null;
+  const displayLabel = labelFormatter && label != null ? labelFormatter(label) : label;
   return (
     <div className="min-w-36 rounded-card border border-line-strong/70 bg-white/95 px-3 py-2.5 shadow-[0_14px_32px_rgb(24_34_45_/8%)] backdrop-blur-sm">
-      {label != null && label !== "" && <div className="mb-1.5 text-[11px] font-semibold text-ink-2">{label}</div>}
+      {displayLabel != null && displayLabel !== "" && <div className="mb-1.5 text-[11px] font-semibold text-ink-2">{displayLabel}</div>}
       <div className="grid gap-1">
         {payload.map((entry) => (
           <div key={`${entry.dataKey}-${entry.name}`} className="flex items-center gap-2 text-xs">

@@ -491,6 +491,7 @@ def _shortest_path(graph: dict[str, list[tuple[str, TableRelation]]], start: str
 def _select_tables(
     metric_items: list[dict], direct_items: list[dict], relations: list[TableRelation],
     registered: set[str], aliases: dict[str, str], max_tables: int,
+    declared_dimension_tables: list[str] | None = None,
 ) -> tuple[list[str], list[TableRelation], dict[str, list[str]]]:
     selected: list[str] = []
     reasons: dict[str, list[str]] = {}
@@ -523,6 +524,13 @@ def _select_tables(
         add(table_name, "问题直接命中：" + "、".join(item["matched"][:3]))
         if len(direct_targets) >= 3:
             break
+
+    # 指标声明了哪些维度，就主动把对应的维度表带进上下文，不依赖问题词面是否命中。
+    # 这根治了“用户说产线，但检索未带出 dim_production_line”的问题。
+    for table_name in (declared_dimension_tables or []):
+        if table_name not in selected and table_name not in direct_targets and table_name in registered:
+            direct_targets.append(table_name)
+            add(table_name, "指标声明维度")
 
     graph = _relation_graph(relations, registered)
     path_relations: list[TableRelation] = []
@@ -716,8 +724,24 @@ def build_context_package(
         }
         registered = set(table_by_name)
         relation_rows = session.query(TableRelation).filter_by(source_id=source.id).all()
+        declared_dims: set[str] = set()
+        for item in metric_items:
+            declared_dims.update(item.get("dimensions") or [])
+        declared_dimension_tables: list[str] = []
+        if declared_dims:
+            for row in table_rows:
+                if row.topic != "主数据" and not row.name.lower().startswith("dim_"):
+                    continue
+                for dim in declared_dims:
+                    dim_score, _matched = _score_terms(
+                        str(dim), [(row.cn_name, 9), (row.comment, 7), (row.name, 7)]
+                    )
+                    if dim_score > 0:
+                        declared_dimension_tables.append(_table_key(row.schema_name, row.name))
+                        break
         table_names, selected_relations, reasons = _select_tables(
-            metric_items, direct_items, relation_rows, registered, aliases, max_tables
+            metric_items, direct_items, relation_rows, registered, aliases, max_tables,
+            declared_dimension_tables,
         )
 
         tables = []

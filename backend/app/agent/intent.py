@@ -62,6 +62,30 @@ OUT_OF_SCOPE_PATTERNS = (
     re.compile(r"(?:天气|下雨|下雪|气温|空气质量|穿什么衣服|带伞)"),
     re.compile(r"(?:新闻|股票|彩票|星座|电影|音乐|旅游攻略)"),
 )
+
+# 弱量化词不单独触发数据分析：“多少/平均/最大/最小”常出现在通用句中，
+# 必须配合真实业务实体（产量/良率/产线等）才说明是数据查询。否则“1+1等于多少”会被误判为分析。
+_WEAK_BUSINESS_TERMS = ("多少", "平均", "最大", "最小")
+_STRONG_BUSINESS_TERMS = tuple(t for t in BUSINESS_TERMS if t not in _WEAK_BUSINESS_TERMS)
+
+# 数据信号：只要命中其一，说明该问句携带业务/时间/维度/图表指代，不允许被闲聊路径吞掉。
+# 这是「数据实体/指代/时间词一律交给 LLM 意图」的确定性兜底，而非语义来源。
+_DATA_SIGNAL_DIMS = ("工序", "产线", "设备", "产品", "工单", "订单", "物料", "库存", "缺陷", "不良", "报警", "车间", "班次")
+_DATA_SIGNAL_CHARTS = ("柱状图", "折线图", "热力图", "饼图", "散点图", "组合图", "双轴图", "趋势图", "占比图", "图表")
+def _has_data_signal(text: str) -> bool:
+    """弱信号兜底：数据问句不在正则词表时也要送往 LLM 意图，而不是误判为闲谈。"""
+    if not str(text or "").strip():
+        return False
+    if _has_analysis_verb(text) or any(term in text for term in _STRONG_BUSINESS_TERMS):
+        return True
+    if any(term in text for term in _DATA_SIGNAL_DIMS) or any(term in text for term in _DATA_SIGNAL_CHARTS):
+        return True
+    return False
+
+GENERAL_KNOWLEDGE_PATTERNS = (
+    re.compile(r"\d+\s*[+\-*/\u00d7\u00f7^]\s*\d+"),
+    re.compile(r"(?:你知道(?:吗)?|请问|问一下|我想知道|告诉(?:我)?)\s*.{0,40}$"),
+)
 DEPENDENCY_PREFIXES = ("然后", "再", "并进一步", "基于此", "根据上述", "对其中", "并分析其")
 OBJECT_TERMS = ("工序", "产线", "设备", "产品", "工单", "订单", "物料", "库存", "缺陷", "报警")
 REFERENCE_TERMS = ("它", "其", "这个", "该对象", "上述对象", "其中对象")
@@ -112,16 +136,25 @@ def is_report_request(text: str) -> bool:
 
 
 def _is_known_conversation(text: str) -> bool:
+    if _has_analysis_verb(text) or any(term in text for term in _STRONG_BUSINESS_TERMS):
+        return False
     return _is_report_request(text) or any(
-        pattern.search(text) for pattern in (*SMALLTALK_PATTERNS, *OUT_OF_SCOPE_PATTERNS)
+        pattern.search(text)
+        for pattern in (*SMALLTALK_PATTERNS, *OUT_OF_SCOPE_PATTERNS, *GENERAL_KNOWLEDGE_PATTERNS)
     )
 
 
-def is_deterministic_conversation(text: str) -> bool:
+def is_deterministic_conversation(text: str, *, intent_enabled: bool = False) -> bool:
     """Whether a fast, model-free ForgeSight response fully covers this turn."""
 
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
-    return not normalized or _is_known_conversation(normalized) or _is_pure_system_utility(normalized)
+    if not normalized:
+        return True
+    if _has_analysis_verb(normalized) or any(term in normalized for term in _STRONG_BUSINESS_TERMS):
+        return False
+    if intent_enabled and _has_data_signal(normalized):
+        return False
+    return _is_known_conversation(normalized) or _is_pure_system_utility(normalized)
 
 
 def _is_pure_system_utility(text: str) -> bool:
@@ -133,9 +166,21 @@ def _is_pure_system_utility(text: str) -> bool:
     return not any(term in text for term in BUSINESS_TERMS if term not in utility_safe_terms)
 
 
+
+
+def _is_general_knowledge(text: str) -> bool:
+    """常识/数学/范围外问题：无业务实体与分析动作，应走对话而非数据查询。
+    但若含真实业务实体（产量/良率/产线等），即使句式象“你知道…吗”，也不得被当成对话吞掉。"""
+    if _has_analysis_verb(text) or any(t in text for t in _STRONG_BUSINESS_TERMS):
+        return False
+    return any(pattern.search(text) for pattern in (*GENERAL_KNOWLEDGE_PATTERNS, *OUT_OF_SCOPE_PATTERNS, *SMALLTALK_PATTERNS))
+
+
 def classify_request_kind(
     text: str,
     conversation_context: list[dict[str, str]] | None = None,
+    *,
+    intent_enabled: bool = False,
 ) -> str:
     """Classify locally; reserve the analysis worker for data-bearing turns."""
     normalized = re.sub(r"\s+", " ", str(text or "")).strip()
@@ -149,9 +194,9 @@ def classify_request_kind(
     # a misleading no-data error.
     if _is_report_request(normalized):
         return "conversation"
-    if _has_analysis_verb(normalized) or any(term in normalized for term in BUSINESS_TERMS):
-        return "analysis"
-    if _is_known_conversation(normalized):
+    if _is_general_knowledge(normalized):
+        if intent_enabled and _has_data_signal(normalized):
+            return "analysis"
         return "conversation"
     history = conversation_context or []
     previous_user_text = next(
@@ -166,6 +211,20 @@ def classify_request_kind(
         _has_analysis_verb(previous_user_text)
         or any(term in previous_user_text for term in BUSINESS_TERMS)
     )
+    if _has_analysis_verb(normalized) or any(term in normalized for term in BUSINESS_TERMS):
+        return "analysis"
+    # 仅“换一种图”的追问：上一轮是业务问题、本轮只点名图表类型（柱状图/折线图/热力图…），
+    # 视为对上一轮结果的展示重述，进入分析工作流并继承上一轮的维度/时间/指标。
+    if (
+        _requested_chart(normalized) is not None
+        and _is_chart_only_directive(normalized)
+        and previous_business_turn
+    ):
+        return "analysis"
+    if _is_known_conversation(normalized):
+        if intent_enabled and _has_data_signal(normalized):
+            return "analysis"
+        return "conversation"
     references_previous_turn = bool(_OBJECT_REFERENCE_RE.search(normalized)) or any(
         marker in normalized
         for marker in (*VAGUE_TIME_TERMS, "继续", "接着", "上一个", "刚才", "前面", "昨天")
@@ -216,7 +275,7 @@ def build_request_route(
     for index, segment in enumerate(segments):
         local_kind = classify_request_kind(segment, conversation_context)
         kind = labels.get(index, local_kind)
-        if kind not in {"analysis", "conversation", "report", "utility", "chart_adjustment"}:
+        if kind not in {"analysis", "conversation", "report", "utility"}:
             kind = "unknown"
         classified.append({"index": index, "text": segment, "kind": kind})
 
@@ -224,15 +283,12 @@ def build_request_route(
     conversation_parts = [item["text"] for item in classified if item["kind"] == "conversation"]
     report_parts = [item["text"] for item in classified if item["kind"] == "report"]
     utility_parts = [item["text"] for item in classified if item["kind"] == "utility"]
-    adjust_parts = [item["text"] for item in classified if item["kind"] == "chart_adjustment"]
     unknown_parts = [item for item in classified if item["kind"] == "unknown"]
     route_kind = (
         "mixed"
-        if analysis_parts and (conversation_parts or report_parts or utility_parts or adjust_parts)
+        if analysis_parts and (conversation_parts or report_parts or utility_parts)
         else "analysis"
         if analysis_parts
-        else "chart_adjustment"
-        if adjust_parts
         else "report"
         if report_parts
         else "utility"
@@ -246,8 +302,6 @@ def build_request_route(
         "reportSegments": [item for item in classified if item["kind"] == "report"],
         "utilitySegments": [item for item in classified if item["kind"] == "utility"],
         "utilityQuestion": "；".join(utility_parts),
-        "chartAdjustmentQuestion": "；".join(adjust_parts),
-        "chartAdjustmentSegments": [item for item in classified if item["kind"] == "chart_adjustment"],
         "analysisQuestion": "；".join(analysis_parts),
         "conversationResponse": build_conversation_response(conversation_parts, mixed=bool(analysis_parts)),
     }
@@ -273,6 +327,23 @@ def build_smalltalk_response(text: str) -> str:
             "可以生成，但还需要报告类型、统计周期和数据范围。"
             "例如可以说“生成最近 7 天的质量周报”；也可以打开“周报中心”选择模板后创建。"
         )
+
+    math_match = re.search(r"(\d+(?:\.\d+)?)\s*([+\-*/\u00d7\u00f7^])\s*(\d+(?:\.\d+)?)", normalized)
+    if math_match and not any(t in normalized for t in _STRONG_BUSINESS_TERMS):
+        a = float(math_match.group(1)); op = math_match.group(2); b = float(math_match.group(3))
+        val = None
+        if op in ("+",):
+            val = a + b
+        elif op in ("-",):
+            val = a - b
+        elif op in ("*", "\u00d7"):
+            val = a * b
+        elif op in ("/", "\u00f7"):
+            val = a / b if b else None
+        elif op == "^":
+            val = a ** b
+        if val is not None:
+            return f"该算式的结果是 {val:g}。" if float(val).is_integer() else f"该算式的结果约是 {val:.4f}。"
     if re.search(r"(?:谢谢|感谢|辛苦了)", normalized, re.IGNORECASE):
         return "不客气。你可以继续告诉我想查看的生产、质量、设备或库存问题。"
     if re.search(r"(?:你是谁|你叫什么|介绍一下你自己|怎么称呼你|你的角色|你的职责)", normalized, re.IGNORECASE):
@@ -295,6 +366,8 @@ def build_smalltalk_response(text: str) -> str:
             "我在，你可以慢慢说说发生了什么。如果这件事和生产、质量、设备或库存工作有关，"
             "我也能帮你把情况整理成清晰、可验证的业务问题。"
         )
+    if any(pattern.search(normalized) for pattern in GENERAL_KNOWLEDGE_PATTERNS):
+        return "这属于通用常识类问题，不属于当前企业数据底座的分析范围。我主要负责生产、质量、设备和库存数据的只读问析；如果你有这些业务数据问题，可以直接问我。"
     return "你好，我是 ForgeSight。你可以直接用业务语言提问，例如“找出最近一个月不良数量最高的产品”。"
 
 
@@ -366,6 +439,54 @@ def _multi_chart_views(text: str) -> list[str] | None:
     return out if len(out) >= 2 else None
 
 
+_METRIC_JOIN_RE = re.compile(r"以及|和|与|及")
+# 指标计量词：只有片段以这些词结尾，且右侧紧跟另一个指标词，才判定为「并列两个指标」。
+_METRIC_SUFFIX_RE = re.compile(r"(?:率|量|数|金额|时长|成本|库存|产值|价格|薪资|占比|额度|次数|总额)$")
+_METRIC_LEAD_RE = re.compile(
+    r"^(?:不良率|良率|返工率|合格率|抽检不良率|停机时长|产量|合格数量|不良数量|"
+    r"合格数|不良数|库存|产值|成本|价格|薪资|占比|数量|总额|时长|金额)"
+)
+_METRIC_LEAD_VERB_RE = re.compile(r"^(?:比较|对比|分析|计算|统计|生成|识别|查找|查看|排序|排名|汇总|下钻|拆|趋势)")
+_METRIC_KEYWORD_RE = re.compile(r"不良率|良率|返工率|合格率|抽检不良率|产量|合格数量|不良数量|库存|产值|成本|价格|薪资|占比|停机时长|金额|时长|数量|总额")
+
+
+def split_metric_compound(text: str) -> list[str]:
+    """把「A指标和B指标 / A以及B」这类并列多个计量指标的问题拆成可独立执行的子问题。
+
+    仅在连词两侧都确实是「指标计量短语」时才拆分，避免把「良率并与标准比较」这类
+    「同一指标的补充条件」误拆成两个任务。也避免把「按产线和工序」这类并列维度拆开。
+    """
+    text = str(text or "").strip()
+    if not text:
+        return [""]
+    cuts: list[tuple[int, int]] = []
+    for m in _METRIC_JOIN_RE.finditer(text):
+        left = text[: m.start()].strip()
+        right = text[m.end():].strip()
+        if not left or not right:
+            continue
+        # 左侧结尾必须落在某个指标计量词上，且左侧确实含指标词（避免「按产线和工序」被拆）。
+        if not _METRIC_SUFFIX_RE.search(left):
+            continue
+        if not _METRIC_KEYWORD_RE.search(left):
+            continue
+        # 右侧必须紧跟一个指标词，而不是「比较/下钻」这类对同指标的补充动词。
+        if _METRIC_LEAD_VERB_RE.match(right):
+            continue
+        if not _METRIC_LEAD_RE.match(right):
+            continue
+        cuts.append((m.start(), m.end()))
+    if not cuts:
+        return [text]
+    pieces: list[str] = []
+    prev = 0
+    for start, end in cuts:
+        pieces.append(text[prev:start].strip())
+        prev = end
+    pieces.append(text[prev:].strip())
+    return [p for p in pieces if p]
+
+
 def split_questions(question: str) -> list[str]:
     """拆分彼此可以独立执行的问题，保留同一指标内的比较条件。"""
     normalized = re.sub(r"\s+", " ", question.strip())
@@ -391,8 +512,11 @@ def split_questions(question: str) -> list[str]:
         # “分析良率并与标准比较”错误拆成两个缺少主语的任务。
         pieces = re.split(r"[，,]\s*(?=(?:然后|再|并且|同时|另外|此外)?[^，,]{0,12}(?:分析|统计|比较|对比|查找|找出|查看|计算|汇总|生成|识别|占比|构成|份额))", part)
         result.extend(piece.strip(" ，,") for piece in pieces if piece.strip(" ，,"))
-    expanded: list[str] = []
+    metric_split: list[str] = []
     for piece in result:
+        metric_split.extend(split_metric_compound(piece))
+    expanded: list[str] = []
+    for piece in metric_split:
         views = _multi_chart_views(piece)
         expanded.extend(views if views else [piece])
     return expanded or [normalized]
@@ -409,6 +533,8 @@ def classify_analysis_type(text: str) -> str:
         return "correlation"
     if any(term in text for term in ("对比", "比较", "差异")):
         return "comparison"
+    if any(term in text for term in ("占比", "构成", "份额", "比例", "占多少", "占比图")):
+        return "share"
     if any(term in text for term in ("异常", "离群")):
         return "anomaly"
     # 建模意图：训练/预测类问题与普通问析分流，走确定性建模提案（含聚类分群）
@@ -443,6 +569,18 @@ def _requested_chart(text: str) -> str | None:
     if any(term in text for term in ("表格展示", "用表格", "以表格")):
         return "table"
     return None
+
+
+def _is_chart_only_directive(text: str) -> bool:
+    """当前句是否只是“换一种图”这类纯图表指令，而不带独立的分析动作/业务实体。
+
+    例如“用柱状图展示”“换成折线图”“改成热力图”都属此类；而“分析6月产线良率用柱状图”
+    带完整分析主体，应走完整查询而不是简单继承上一轮。
+    """
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if _has_analysis_verb(normalized):
+        return False
+    return not any(term in normalized for term in _STRONG_BUSINESS_TERMS)
 
 
 def _time_constraint(text: str) -> dict[str, Any] | None:
@@ -511,7 +649,36 @@ def _time_constraint(text: str) -> dict[str, Any] | None:
                 "timeGrain": "day",
                 "reference": "data_horizon",
             }
+    # 裸年份（如“2020年总产量”“2026年各月”）：锚定数据地平线，超范围时由查询层返回无数据。
+    if re.search(r"(?<!\d)(?:20\d{2}|19\d{2})\s*年", text):
+        y = int(re.search(r"(?<!\d)(\d{4})\s*年", text).group(1))
+        if 1900 <= y <= 2100:
+            return {
+                "kind": "specific_year",
+                "year": y,
+                "label": f"{y}年",
+                "timeGrain": "year",
+                "reference": "data_horizon",
+            }
     return None
+
+
+# 显式“时间拆分”描述：各月份/按月/每个月/逐月/每周/季度/每天 等。
+# 与时间范围(本月/去年)不同，这里表示“把横轴按时间粒度拆开”。仅当明确要求拆开时才命中，
+# 避免把“今年总产量/本月合计”这类单一聚合误判为按月分组。
+_TIME_BREAKDOWN_PATTERNS = {
+    "月份": re.compile(
+        r"(?:各月份|各个月|各月|按月|按月份|每个月|逐月|每月|月度|按月展示|按月份展示)"
+    ),
+    "周": re.compile(r"(?:各周|每周|逐周|按周|各星期|每个星期|按星期)"),
+    "季度": re.compile(r"(?:各季度|每季度|逐季度|按季度|各季|逐季|按季|每个季度)"),
+    "日": re.compile(r"(?:每天|每日|逐日|按天|按日|每天|每日)"),
+}
+
+
+def _time_breakdown_dimensions(text: str) -> list[str]:
+    """返回问题里显式要求的时间拆分维度（月份/周/季度/日）。"""
+    return [name for name, pattern in _TIME_BREAKDOWN_PATTERNS.items() if pattern.search(text)]
 
 
 def _group_dimensions(text: str) -> list[str]:
@@ -582,10 +749,68 @@ def _clarification_fields(
     return fields
 
 
+
+# ---------------------------------------------------------------------------
+# 跨轮次上下文继承：当本轮是一个“追问/视角切换/继续下钻”指令且缺少维度、时间
+# 或图表类型时，从上一轮任务复用这些槽位，避免退化成裸查询（例如“改成排名”
+# 丢掉了上文的“产线/本周/产量”）。
+# ---------------------------------------------------------------------------
+_TURN_SWITCH_TERMS = (
+    "改成", "换成", "转为", "改为", "换种", "换个", "看下排名", "排名那种",
+    "占比", "构成", "份额", "比例", "再下钻", "进一步看", "接着看", "继续看",
+    "那差在哪", "哪个工序", "哪条产线", "哪个设备", "哪台", "哪个批次",
+    "下钻", "拆开", "按什么维度", "再看", "还有呢", "那具体", "那到底",
+)
+
+
+def _is_turn_switch(question: str) -> bool:
+    """当前句是否是对上一轮结果的追问/补动作（而非全新独立问题）。"""
+    text = re.sub(r"\s+", " ", str(question or "")).strip()
+    if not text:
+        return False
+    if any(term in text for term in _TURN_SWITCH_TERMS):
+        return True
+    # 仅点名图表类型的指令（“用柱状图展示”“换成折线图”）是对上一轮结果的展示重述，
+    # 新视角 = 换一种图，维度/时间/指标都沿用上一轮。
+    if _requested_chart(text) is not None and _is_chart_only_directive(text):
+        return True
+    # 指代词 / 承前省略
+    if _OBJECT_REFERENCE_RE.search(text):
+        return True
+    if text.rstrip("？?。！!").endswith("呢"):
+        return True
+    return False
+
+
+def _inherit_previous_task(
+    task: dict[str, Any],
+    previous: dict[str, Any] | None,
+    question: str,
+) -> dict[str, Any]:
+    """把上一轮任务的 groupBy / timeConstraint / requestedChart 继承到当前任务。"""
+    if not previous:
+        return task
+    inherited = dict(task)
+    prev_group = list(previous.get("groupBy") or [])
+    prev_time = previous.get("timeConstraint")
+    prev_chart = previous.get("requestedChart")
+
+    # 1) 维度继承：本轮没显式指定产线/工序/产品… 且是追问时继承上轮。
+    if not inherited.get("groupBy") and prev_group and _is_turn_switch(question):
+        inherited["groupBy"] = list(dict.fromkeys(prev_group))
+    # 2) 时间继承：本轮没有时间约束且是追问时继承上轮（如“那这个月总的”）。
+    if not inherited.get("timeConstraint") and prev_time and _is_turn_switch(question):
+        inherited["timeConstraint"] = prev_time
+    # 3) 图表视角继承：本轮没点名图表类型时沿用上轮；若切换指令点名了则用本轮的。
+    if not inherited.get("requestedChart") and prev_chart and _is_turn_switch(question):
+        inherited["requestedChart"] = prev_chart
+    return inherited
+
 def build_intent_plan(
     question: str,
     conversation_context: list[dict[str, str]] | None = None,
     clarification: dict[str, str] | None = None,
+    previous_task: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build tasks plus a merged clarification request for unresolved references."""
     history = conversation_context or []
@@ -630,21 +855,22 @@ def build_intent_plan(
                 normalized = _replace_reference(text, "上一步结果中的对象")
             elif len(history_candidates) == 1:
                 normalized = _replace_reference(text, history_candidates[0])
-        tasks.append(
-            {
-                "id": new_id("task"),
-                "order": index + 1,
-                "title": text[:80],
-                "normalizedQuestion": normalized,
-                "originalQuestion": text,
-                "mode": "dependent" if dependent else ("parallel" if multi else "single"),
-                "analysisType": classify_analysis_type(normalized),
-                "requestedChart": _requested_chart(normalized),
-                "timeConstraint": _time_constraint(normalized),
-                "groupBy": _group_dimensions(normalized),
-                "dependsOn": [tasks[index - 1]["id"]] if dependent else [],
-            }
-        )
+        # 跨轮继承：追问/视角切换时复用上一任务槽位，避免退化成裸查询。
+        built_task = {
+            "id": new_id("task"),
+            "order": index + 1,
+            "title": text[:80],
+            "normalizedQuestion": normalized,
+            "originalQuestion": text,
+            "mode": "dependent" if dependent else ("parallel" if multi else "single"),
+            "analysisType": classify_analysis_type(normalized),
+            "requestedChart": _requested_chart(normalized),
+            "timeConstraint": _time_constraint(normalized),
+            "groupBy": list(dict.fromkeys(_group_dimensions(normalized) + _time_breakdown_dimensions(normalized))),
+            "dependsOn": [tasks[index - 1]["id"]] if dependent else [],
+        }
+        built_task = _inherit_previous_task(built_task, previous_task, text)
+        tasks.append(built_task)
 
     # Inherit shared context (dimensions / time / chart) from the primary
     # sub-question into any downstream comparative sub-question, so compound
@@ -652,19 +878,17 @@ def build_intent_plan(
     # keep the same dimension & time basis instead of degrading to a bare query.
     if multi and len(tasks) > 1:
         primary = tasks[0]
+        # 复合问题（如「6月各周良率和不良率」「产量以及良率」）拆出的后续子问题通常是
+        # 并行任务，自身可能只剩裸指标词（如「不良率」）而缺失时间/维度。这里把它们补齐为
+        # 主干的时间与维度，避免退化成整段聚合标量。对比型任务自行管理周期，不继承。
         for task in tasks[1:]:
-            if task.get("mode") != "dependent" and task.get("analysisType") != "comparison":
+            if task.get("analysisType") == "comparison" or task.get("mode") != "parallel":
                 continue
             if not task.get("groupBy") and primary.get("groupBy"):
-                task["groupBy"] = list(primary["groupBy"])
+                task["groupBy"] = list(dict.fromkeys(list(task.get("groupBy") or []) + list(primary["groupBy"])))
             if not task.get("timeConstraint") and primary.get("timeConstraint"):
                 task["timeConstraint"] = primary["timeConstraint"]
             if not task.get("requestedChart") and primary.get("requestedChart"):
                 task["requestedChart"] = primary["requestedChart"]
 
     return {"tasks": tasks, "clarification": None}
-
-
-def plan_questions(question: str) -> list[dict]:
-    """Backward-compatible task-only helper used by lightweight callers/tests."""
-    return build_intent_plan(question)["tasks"]

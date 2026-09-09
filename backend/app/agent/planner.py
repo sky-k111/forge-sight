@@ -8,6 +8,8 @@ from typing import Any, Callable
 
 from app.agent.ids import new_id
 from app.agent.intent import build_intent_plan
+from app.agent.intent_adapter import intent_to_tasks
+from app.agent.intent_contract import AgentIntent
 from app.agent.plan_schema import (
     AgentPlan,
     PlanBudget,
@@ -24,6 +26,44 @@ REPORT_TERMS = ("周报", "月报", "专题报告", "形成报告", "整理成�
 _STRONG_MODELING_TERMS = ("预测", "建模", "模型", "训练", "模型治理", "分类器", "二分类", "多分类", "聚类", "异常检测", "机器学习", "回归", "智能建模")
 # “分类”在这些语境下是“按某维度分组”，不是机器学习分类：例如“分别按产线以及周数分类”。
 _GROUPING_CLASSIFY_RE = re.compile(r"(?:\u5206\u522b\s*)?(?:\u6309|\u6309\u7167|\u6839\u636e|\u4f9d\u636e|\u4f9d|\u4ee5|\u5206\u4e3a|\u5206\u6210)\s*.{0,24}(?:\u5206\u7c7b|\u5206\u7ec4)")
+
+
+def _intent_kind(intent: AgentIntent | dict[str, Any]) -> str:
+    if isinstance(intent, AgentIntent):
+        return intent.kind.value
+    return str((intent or {}).get("kind") or "")
+
+
+def _intent_get(intent: AgentIntent | dict[str, Any], key: str) -> Any:
+    if isinstance(intent, AgentIntent):
+        return getattr(intent, key, None)
+    return (intent or {}).get(key)
+
+
+def _as_intent(data: AgentIntent | dict[str, Any]) -> AgentIntent:
+    if isinstance(data, AgentIntent):
+        return data
+    return AgentIntent.model_validate(data)
+
+
+def _is_llm_intent(intent: AgentIntent | dict[str, Any]) -> bool:
+    """仅当意图由 LLM 实际产出时才信任其语义；确定性兜底仍走 build_intent_plan。"""
+    if isinstance(intent, AgentIntent):
+        return intent.producer == "llm"
+    return str((intent or {}).get("producer") or "") == "llm"
+
+
+def _capability_schemas(desc: list[dict[str, Any]] | None) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for d in desc or []:
+        name = d.get("name")
+        if name:
+            out[name] = {
+                "inputSchema": d.get("inputSchema") or {},
+                "outputSchema": d.get("outputSchema") or {},
+                "effectLevel": d.get("effectLevel"),
+            }
+    return out
 
 
 def _looks_like_modeling(question: str) -> bool:
@@ -48,9 +88,26 @@ def should_use_planner(
     request_segments: list[dict[str, Any]],
     *,
     enabled: bool,
+    agent_intent: AgentIntent | dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
     if not enabled:
         return False, "FEATURE_DISABLED"
+    if agent_intent is not None and _is_llm_intent(agent_intent):
+        kind = str(_intent_kind(agent_intent))
+        if kind in {"modeling", "report", "investigation"}:
+            return True, "INTENT_CROSS_CAPABILITY"
+        if kind == "analysis":
+            comp = _intent_get(agent_intent, "comparison")
+            steps = _intent_get(agent_intent, "stepsHint") or []
+            dims = _intent_get(agent_intent, "dimensions") or []
+            metrics = _intent_get(agent_intent, "metrics") or []
+            # 简单单步查询（少量维度/指标、无对比、无多步）走快速路径。
+            if comp or (steps and len(steps) > 1):
+                return True, "INTENT_MULTI_TASK"
+            if len(dims) <= 2 and len(metrics) <= 2:
+                return False, "INTENT_SIMPLE_FAST_PATH"
+            return True, "INTENT_COMPLEX_ANALYSIS"
+        return False, "INTENT_NON_ANALYSIS"
     normalized = str(question or "")
     kinds = {str(item.get("kind")) for item in request_segments}
     analysis_count = sum(1 for item in request_segments if item.get("kind") == "analysis")
@@ -67,11 +124,18 @@ def should_use_planner(
     return False, "SIMPLE_FAST_PATH"
 
 
-def _analysis_steps(question: str, history: list[dict[str, str]]) -> list[PlanStep]:
-    intent = build_intent_plan(question, history)
+def _analysis_steps(
+    question: str,
+    history: list[dict[str, str]],
+    agent_intent: AgentIntent | dict[str, Any] | None = None,
+) -> list[PlanStep]:
+    if agent_intent is not None and _is_llm_intent(agent_intent):
+        tasks = intent_to_tasks(_as_intent(agent_intent), question=question)
+    else:
+        tasks = (build_intent_plan(question, history).get("tasks") or [])
     steps: list[PlanStep] = []
     previous: str | None = None
-    for task in intent.get("tasks") or []:
+    for task in tasks:
         step_id = new_id("pst")
         dependencies = [previous] if task.get("dependsOn") and previous else []
         steps.append(
@@ -95,13 +159,14 @@ def build_fallback_plan(
     history: list[dict[str, str]] | None = None,
     *,
     budget: PlanBudget | None = None,
+    agent_intent: AgentIntent | dict[str, Any] | None = None,
 ) -> AgentPlan:
     analysis_question = "；".join(
         str(item.get("text") or "")
         for item in request_segments
         if item.get("kind") == "analysis"
     ).strip("；") or question
-    steps = _analysis_steps(analysis_question, history or [])
+    steps = _analysis_steps(analysis_question, history or [], agent_intent=agent_intent)
     if not steps:
         steps.append(
             PlanStep(
@@ -227,12 +292,14 @@ def build_plan(
     *,
     model_enabled: bool = True,
     budget: PlanBudget | None = None,
+    capability_descriptors: list[dict[str, Any]] | None = None,
 ) -> tuple[AgentPlan, str, str | None]:
     fallback = build_fallback_plan(
         state.get("analysis_question") or state.get("user_question", ""),
         state.get("request_segments") or [],
         state.get("conversation_context") or [],
         budget=budget,
+        agent_intent=state.get("agent_intent"),
     )
     if not model_enabled or generate_text is None:
         return normalize_delegated_tasks(fallback, state.get("run_id", "run")), "deterministic", None
@@ -249,6 +316,8 @@ def build_plan(
             "analysisQuestion": state.get("analysis_question"),
             "segments": state.get("request_segments") or [],
             "allowedCapabilities": sorted(allowed_capabilities),
+            "agentIntent": state.get("agent_intent"),
+            "capabilitySchemas": _capability_schemas(capability_descriptors),
             "budget": (budget or fallback.budget).model_dump(by_alias=True),
             "schema": schema,
             "safeFallbackPlan": fallback.model_dump(by_alias=True),

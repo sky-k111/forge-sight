@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 
-import { adaptAnalysisRun, parseAnalysisNarrative, aggregateYearAxis, applyChartAdjustment } from "./runViewAdapter";
+import { adaptAnalysisRun, parseAnalysisNarrative } from "./runViewAdapter";
 
-function snapshotWithResult({ question, analysisType = "query", requestedChart = null, columns, rows }) {
+function snapshotWithResult({ question, analysisType = "query", requestedChart = null, columns, rows, axis = null }) {
   return {
     id: "run-chart",
     status: "succeeded",
@@ -14,6 +14,7 @@ function snapshotWithResult({ question, analysisType = "query", requestedChart =
       normalizedQuestion: question,
       analysisType,
       intent: { requestedChart },
+      axis,
     }],
     steps: [],
     checkpoints: [],
@@ -164,11 +165,38 @@ AOI检测 | 99.21%`);
     const run = adaptAnalysisRun(snapshotWithResult({
       question: "按统计日期查看不良数量分布",
       columns: ["stat_date", "defect_qty"],
+      axis: { key: "stat_date", kind: "time", grain: "day" },
       rows: [["2026-06-22", 120], ["2026-06-23", 150], ["2026-06-24", 132]],
     }));
 
     expect(run.chart.type).toBe("line");
     expect(run.chart.xTickFormatter("2026-06-22")).toBe("06-22");
+  });
+
+  test("renders ISO week keys as 第N周 on week axes", () => {
+    const run = adaptAnalysisRun(snapshotWithResult({
+      question: "查看6月份各产线的良率，按周展示",
+      analysisType: "trend",
+      columns: ["周", "良率"],
+      axis: { key: "周", kind: "time", grain: "week" },
+      rows: [["202622", 97.95], ["202623", 97.89], ["202624", 98.03]],
+    }));
+
+    expect(run.chart.type).toBe("line");
+    expect(run.chart.xTickFormatter("202622")).toBe("第22周");
+  });
+
+  test("does not treat year-month keys (e.g. 202606) as ISO weeks", () => {
+    const run = adaptAnalysisRun(snapshotWithResult({
+      question: "查看6月份产量",
+      analysisType: "trend",
+      columns: ["月份", "产量"],
+      axis: { key: "月份", kind: "time", grain: "month" },
+      rows: [["202606", 120], ["202607", 150]],
+    }));
+
+    expect(run.chart.xTickFormatter("202606")).not.toBe("第6周");
+    expect(run.chart.xTickFormatter("202606")).toBe("6月");
   });
 
   test("honors an explicitly requested line chart instead of falling back to bars", () => {
@@ -218,6 +246,7 @@ AOI检测 | 99.21%`);
       question: "这个月和上个月的良率比较",
       analysisType: "comparison",
       columns: ["month", "yield_rate"],
+      axis: { key: "month", kind: "time", grain: "month" },
       rows: [["2026-06", 97.57], ["2026-07", 97.54]],
     }));
 
@@ -382,64 +411,5 @@ AOI检测 | 99.21%`);
     expect(run.chart).toBeNull();
     expect(run.execution.rows).toHaveLength(2);
     expect(run.result.kpis).toHaveLength(3);
-  });
-});
-
-
-describe("chart axis adjustments", () => {
-  test("aggregateYearAxis collapses same-year months into one year bar", () => {
-    const chart = {
-      type: "bar", xKey: "month", valueKey: "total_output",
-      data: [
-        { month: "2026-01", total_output: 100 },
-        { month: "2026-02", total_output: 200 },
-        { month: "2026-07", total_output: 50 },
-      ],
-      bars: [{ key: "total_output", name: "total_output" }],
-    };
-    const out = aggregateYearAxis(chart);
-    expect(out.data).toEqual([{ month: "2026", total_output: 350 }]);
-    expect(out.xKey).toBe("month");
-  });
-
-  test("aggregateYearAxis keeps cross-year months distinct", () => {
-    const chart = {
-      type: "bar", xKey: "month", valueKey: "v",
-      data: [{ month: "2025-12", v: 10 }, { month: "2026-01", v: 20 }],
-      bars: [{ key: "v", name: "v" }],
-    };
-    const out = aggregateYearAxis(chart);
-    expect(out.data).toEqual([{ month: "2025", v: 10 }, { month: "2026", v: 20 }]);
-  });
-
-  test("applyChartAdjustment switches granularity and chart type", () => {
-    const chart = {
-      type: "bar", xKey: "month", valueKey: "v",
-      data: [{ month: "2026-01", v: 5 }, { month: "2026-02", v: 7 }],
-      bars: [{ key: "v", name: "v" }],
-    };
-    const out = applyChartAdjustment(chart, { granularity: "year", chartType: "line" });
-    expect(out.type).toBe("line");
-    expect(out.data).toEqual([{ month: "2026", v: 12 }]);
-  });
-
-  test("aggregateYearAxis uses fallback year when x values are month-only labels", () => {
-    const chart = {
-      type: "bar", xKey: "month", valueKey: "total_output",
-      data: [{ month: "1月", total_output: 100 }, { month: "2月", total_output: 200 }, { month: "7月", total_output: 50 }],
-      bars: [{ key: "total_output", name: "total_output" }],
-    };
-    const out = aggregateYearAxis(chart, "2026");
-    expect(out.data).toEqual([{ month: "2026", total_output: 350 }]);
-  });
-
-  test("applyChartAdjustment aggregates month-only chart to year from instruction", () => {
-    const chart = {
-      type: "bar", xKey: "month", valueKey: "v",
-      data: [{ month: "1月", v: 5 }, { month: "2月", v: 7 }],
-      bars: [{ key: "v", name: "v" }],
-    };
-    const out = applyChartAdjustment(chart, { granularity: "year", instruction: "横坐标能不能就一个 2026" });
-    expect(out.data).toEqual([{ month: "2026", v: 12 }]);
   });
 });

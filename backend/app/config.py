@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     agent_max_duration_seconds: int = 300
     agent_planner_enabled: bool = True
     agent_planner_model_enabled: bool = True
+    # AgentIntent 驱动开关：开启后旁路产出 AgentIntent 并注入 state，route/planner/编译层
+    # 消费它（LLM 解析失败安全回退到确定性兜底）。默认关闭，避免影响现有路径；同时记录
+    # intent.agent_resolved 事件供与 intent.py 决策对拍。
+    agent_intent_enabled: bool = False
     # 图表/维度语义判定升级到 LLM（规则拿不准时）。默认开启，因为枚举式规则遇到未覆盖列名
     # （stat_year/stat_week/order_no/line_no 等）会选错横纵轴；开启后由 LLM 在有歧义时纠正。
     visual_contract_llm_enabled: bool = True

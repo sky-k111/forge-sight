@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+import re
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -162,6 +163,37 @@ def _resolve_relative(constraint: dict[str, Any], ref: date) -> dict[str, Any]:
             "startInclusive": start.isoformat(),
             "endExclusive": end.isoformat(),
         }]
+    elif kind == "comparison":
+        # 「5月 vs 6月」等对比：把各周期 label 的月份锚定到数据地平线（不采用
+        # LLM 猜测的绝对年份），并合成一个连续区间，避免 compile_query 把两个
+        # 周期做 AND 而互相矛盾；月度拆分由 group_by 的时间粒度维度负责。
+        members = constraint.get("periods") or []
+        if not members and constraint.get("label"):
+            members = [{"label": constraint.get("label")}]
+        resolved: list[dict[str, Any]] = []
+        for p in members:
+            label = str(p.get("label") or "") if isinstance(p, dict) else str(p)
+            month = None
+            m = re.search(r"(\d{1,2})\s*月", label)
+            if m:
+                month = int(m.group(1))
+            if month is None:
+                m = re.search(r"\d{4}[-/](\d{1,2})", label)
+                if m:
+                    month = int(m.group(1))
+            if month is None:
+                continue
+            if not (1 <= month <= 12):
+                continue
+            year = today.year if month <= today.month else today.year - 1
+            start = date(year, month, 1)
+            end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+            resolved.append({"label": label, "startInclusive": start.isoformat(), "endExclusive": end.isoformat()})
+        if resolved:
+            mstart = min(d["startInclusive"] for d in resolved)
+            mend = max(d["endExclusive"] for d in resolved)
+            out["periods"] = [{"label": "对比区间", "startInclusive": mstart, "endExclusive": mend}]
+            out["periodBreakdown"] = resolved
     elif kind == "recent":
         amount = _amount(constraint.get("amount"))
         unit = constraint.get("unit") or "天"
@@ -172,4 +204,37 @@ def _resolve_relative(constraint: dict[str, Any], ref: date) -> dict[str, Any]:
             "startInclusive": (today - timedelta(days=days)).isoformat(),
             "endExclusive": (today + timedelta(days=1)).isoformat(),
         }]
+    elif kind == "absolute" or kind == "specific_year":
+        # 显式的绝对年份/月份（如「2020年总产量」「2026年各月」）。解析 label 里的四位年份，
+        # 生成连续区间，避免「2020年」被当作无时间过滤导致整段数据总和冒充该年。
+        label = str(constraint.get("label") or "")
+        grain = str(constraint.get("timeGrain") or "year")
+        year = None
+        m = re.search(r"(?<!\d)(20\d{2}|19\d{2})(?:年|[-/])", label)
+        if m:
+            year = int(m.group(1))
+        if year is None:
+            # 兜底：从任意四位数提取
+            m = re.search(r"(?<!\d)(\d{4})", label)
+            if m:
+                year = int(m.group(1))
+        if year:
+            if grain == "year":
+                out["periods"] = [{
+                    "key": "year",
+                    "label": str(year),
+                    "startInclusive": f"{year}-01-01",
+                    "endExclusive": f"{year + 1}-01-01",
+                }]
+            elif grain == "month":
+                mm = re.search(r"(\d{1,2})\s*月", label)
+                month = int(mm.group(1)) if mm else 1
+                start = date(year, month, 1)
+                end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+                out["periods"] = [{
+                    "key": "month",
+                    "label": f"{start:%Y-%m}",
+                    "startInclusive": start.isoformat(),
+                    "endExclusive": end.isoformat(),
+                }]
     return out

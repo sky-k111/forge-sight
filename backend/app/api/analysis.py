@@ -108,7 +108,7 @@ def list_sessions(
     if user is None:
         scope_user = userId
     elif userId != scope_user:
-        scope_user = "\u0000out-of-scope"
+        return []
     return service.list_sessions(scope_user, context.tenant_id)
 
 

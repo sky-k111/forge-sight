@@ -18,7 +18,7 @@ import {
   submitAnalysisRun,
   subscribeAnalysisRun,
 } from "../../features/analysis/api";
-import { adaptAnalysisRun, compressMonthAxis, applyChartAdjustment } from "../../features/analysis/runViewAdapter";
+import { adaptAnalysisRun } from "../../features/analysis/runViewAdapter";
 import AnalysisAdjustmentPanel from "../../features/analysis/AnalysisAdjustmentPanel";
 import { buildTracePath, getTraceFitTransform } from "./traceGraphLayout";
 import { waitForAgentThinking } from "./analysisThinking";
@@ -52,22 +52,6 @@ function chartLegendItems(chart) {
   return chart?.legend
     ?? (chart?.series ?? [...(chart?.bars ?? []), ...(chart?.lines ?? [])])
       .map((item) => ({ label: item.name, color: item.color }));
-}
-
-function applyAdjustmentToMessageList(messages, adjustment, adjustmentRunId) {
-  let index = -1;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const item = messages[i];
-    if (item.role === "assistant" && item.run?.id !== adjustmentRunId && item.run?.charts?.length) {
-      index = i; break;
-    }
-  }
-  if (index < 0) return messages;
-  const target = messages[index];
-  const charts = (target.run.charts ?? []).map((chart) => applyChartAdjustment(chart, adjustment));
-  const next = [...messages];
-  next[index] = { ...target, run: { ...target.run, charts, chart: charts.at(-1) ?? null } };
-  return next;
 }
 
 
@@ -151,10 +135,6 @@ export default function AnalysisPage() {
     setMessages((current) => {
       if (current == null) return current;
       let base = current;
-      // 图调整运行到达终态：把调整应用到上一张带图表的运行，实现“不弹面板、不重查库”的自动处理。
-      if (run.chartAdjustment && TERMINAL_STATUSES.has(run.status)) {
-        base = applyAdjustmentToMessageList(base, run.chartAdjustment, run.id);
-      }
       const existingIndex = base.findIndex((item) => item.role === "assistant" && item.run?.id === run.id);
       if (existingIndex < 0) return [...base, { id: run.id, role: "assistant", run, animate: false }];
       const next = [...base];
@@ -260,11 +240,7 @@ export default function AnalysisPage() {
       });
       // 刷新会话时同样应用“图表调整”：把调整运行作用到它前面最近一张带图表的运行。
       items = items.reduce((acc, it) => {
-        const withIt = [...acc, it];
-        if (it.role === "assistant" && it.run?.chartAdjustment) {
-          return applyAdjustmentToMessageList(withIt, it.run.chartAdjustment, it.run.id);
-        }
-        return withIt;
+        return [...acc, it];
       }, []);
       if (!sessionView.branchContext && snapshots.length === 0 && (sessionView.messages ?? []).length > 0) {
         items = sessionView.messages.map((message) => {
@@ -1367,7 +1343,7 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
   const [feedback, setFeedback] = useState("");
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const chart = run.chart;
-  const charts = (run.charts?.length ? run.charts : (chart ? [chart] : [])).map(compressMonthAxis);
+  const charts = run.charts?.length ? run.charts : (chart ? [chart] : []);
   const tableRequested = run.tasks?.some((task) => (task.requestedChart ?? task.intent?.requestedChart) === "table");
   const [showTable, setShowTable] = useState(tableRequested || !chart);
   const sqlCode = run.planDetails?.query?.code;
@@ -1646,12 +1622,14 @@ function buildEvidenceGroups(plan) {
   const groups = [];
   const byKey = new Map();
   plan.forEach((step) => {
-    const key = step.taskId ?? "run";
+    const taskLike = Boolean(step.taskId);
+    const plannerStep = !taskLike && /^(planner|capability|observation)\./.test(String(step.stepKey ?? ""));
+    const key = taskLike ? step.taskId : (plannerStep ? "planner-exec" : "run");
     if (!byKey.has(key)) {
       const group = {
         id: key,
         taskOrder: step.taskOrder ?? 0,
-        title: step.taskId ? `任务 ${step.taskOrder} · ${step.taskTitle}` : "运行准备",
+        title: taskLike ? `任务 ${step.taskOrder} · ${step.taskTitle}` : (plannerStep ? "Agent 规划执行" : "运行准备"),
         steps: [],
       };
       byKey.set(key, group);
@@ -2150,11 +2128,19 @@ function TraceArtifacts({ artifacts }) {
   };
   const labels = {
     "memory-context": { icon: "memory", name: "相关记忆", type: "偏好、经验与召回依据", tone: "blue" },
+    "analysis-skill": { icon: "knowledge", name: "分析技能", type: "已匹配的审核技能", tone: "blue" },
     context: { icon: "knowledge", name: "语义上下文", type: "指标、表与关联", tone: "blue" },
     sql: { icon: "code", name: "分析 SQL", type: "只读查询", tone: "violet" },
     validation: { icon: "shield", name: "校验报告", type: "安全与语义检查", tone: "teal" },
     result: { icon: "database", name: "查询结果", type: "结构化结果集", tone: "teal" },
+    interpretation: { icon: "chart", name: "图表契约", type: "轴语义与图表配置", tone: "blue" },
     conclusion: { icon: "insight", name: "分析结论", type: "可追溯解释", tone: "blue" },
+    "modeling-proposal": { icon: "model", name: "建模方案", type: "待确认的建模提案", tone: "violet" },
+    "agent-plan": { icon: "analysis", name: "受限业务计划", type: "Agent 规划产物", tone: "blue" },
+    "agent-plan-revision": { icon: "refresh", name: "计划修订", type: "有限重规划", tone: "violet" },
+    "plan-validation": { icon: "shield", name: "计划校验", type: "能力、依赖与预算", tone: "teal" },
+    "capability-result": { icon: "check", name: "能力调用结果", type: "结构化输出", tone: "violet" },
+    "capability-observation": { icon: "insight", name: "结构化观察", type: "能力结论与引用", tone: "blue" },
   };
   const items = artifacts.map((artifact) => ({
     ...(labels[artifact.type] ?? { icon: "file", name: artifact.type, type: "分析产物", tone: "blue" }),

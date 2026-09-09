@@ -38,7 +38,7 @@ export function RankBarChart({ data, xKey, bars, lines = [], height = 240, unit 
             <CartesianGrid {...gridDefaults} />
             <XAxis dataKey={xKey} {...axisDefaults} interval={xInterval} tickFormatter={xTickFormatter} minTickGap={12} />
             <YAxis {...axisDefaults} domain={yDomain} tickFormatter={yTickFormatter} width={yAxisWidth} />
-            <Tooltip content={<ChartTooltip unit={unit} />} cursor={{ fill: "rgb(17 24 39 / 6%)", opacity: 1 }} />
+            <Tooltip content={<ChartTooltip unit={unit} labelFormatter={xTickFormatter} />} cursor={{ fill: "rgb(17 24 39 / 6%)", opacity: 1 }} />
             {barSeries.map((item) => (
               <Bar
                 key={item.key}
