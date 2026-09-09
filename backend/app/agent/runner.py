@@ -1238,6 +1238,10 @@ def execute_inline_route(run_id: str) -> dict:
             session.commit()
         return {"runId": run_id, "status": "queued"}
 
+    # 模型路由若只判了 kind 没给自然回复，就用一次对话 LLM 生成真实回应，
+    # 避免落到模板兜底（“你好，我是 ForgeSight…”），让闲聊更像人话。
+    if routed["kind"] == "conversation" and not responses:
+        return execute_inline_conversation(run_id, None, intent_kind="conversation", step_node="route_request")
     direct_response = "\n\n".join(
         responses[item["index"]]
         for item in routed["segments"]

@@ -14,7 +14,7 @@ from enum import Enum
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Grain = Literal["day", "week", "month", "quarter", "year"]
 
@@ -89,6 +89,17 @@ class TimeRange(BaseModel):
     comparisons: list["TimeRange"] = []  # 对比周期，如 [5月, 6月]
     label: str = ""                      # 人类可读 label，供结论/证据披露
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_null_to_default(cls, v: Any) -> Any:
+        """LLM 常输出 reference/label:null；规范化为默认值，避免整条意图被打回兜底。"""
+        if isinstance(v, dict):
+            if v.get("reference") is None:
+                v["reference"] = "data_horizon"
+            if v.get("label") is None:
+                v["label"] = ""
+        return v
+
     @field_validator("comparisons", mode="before")
     @classmethod
     def _coerce_comparisons(cls, v: Any) -> Any:
@@ -108,6 +119,13 @@ class Dimension(BaseModel):
     grain: Grain | None = None           # 时间维度才需要
     label: str = ""
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_null_to_default(cls, v: Any) -> Any:
+        if isinstance(v, dict) and v.get("label") is None:
+            v["label"] = ""
+        return v
+
 
 class Metric(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -116,6 +134,13 @@ class Metric(BaseModel):
     id: str | None = None                # 元数据解析后回填
     aggregation: Literal["sum", "avg", "count", "max", "min", "rate", "share", "rank"] = "sum"
     alias: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_null_to_default(cls, v: Any) -> Any:
+        if isinstance(v, dict) and v.get("alias") is None:
+            v["alias"] = ""
+        return v
 
 
 class Chart(BaseModel):
@@ -136,6 +161,13 @@ class Comparison(BaseModel):
     periods: list[TimeRange] = []
     top_diff_k: int | None = Field(default=None, alias="topDiffK")  # 例如「差异最大的两个工序」
     by: Dimension | None = None          # 对比后下钻维度
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_null_to_default(cls, v: Any) -> Any:
+        if isinstance(v, dict) and v.get("basis") is None:
+            v["basis"] = ""
+        return v
 
     @field_validator("periods", mode="before")
     @classmethod

@@ -61,19 +61,6 @@ _REPORT_ANALYSIS_ACTIONS = (
 OUT_OF_SCOPE_PATTERNS = (
     re.compile(r"(?:天气|下雨|下雪|气温|空气质量|穿什么衣服|带伞)"),
     re.compile(r"(?:新闻|股票|彩票|星座|电影|音乐|旅游攻略)"),
-    # 日历/日期常识
-    re.compile(r"(?:几|\d+)\s*月(?:有)?多少天|今天(?:是)?(?:几号|什么日期)|(?:今年|明年).*(?:多少天|几号)"),
-    # 世界/地理常识
-    re.compile(r"(?:世界上|地球上|全中国|全世).*(?:多少|几个).*(?:国家|洲|城市)|多少个国家"),
-    # 消费/观点类
-    re.compile(r"(?:哪个|谁|什么)\s*(?:更好|更好用|好用|划算|值得买|好吃)|苹果和安卓|选哪个"),
-    # 教育/考试
-    re.compile(r"(?:高考|中考|考研|大学|分数线|录取率|录取|考试|作业|学费)"),
-    # 运势/玄学
-    re.compile(r"(?:运气|运势|命运|缘分|算命|占卜)"),
-    # 家常/生活
-    re.compile(r"(?:今天吃什么|吃什么好|吃什么|找工作|上班|房贷|房租|做饭|菜谱)"),
-    re.compile(r"(?:工资|薪水)(?:什么时候|几号|发了|还没发|发了吗|怎么发|多久发)"),
 )
 
 # 弱量化词不单独触发数据分析：“多少/平均/最大/最小”常出现在通用句中，
@@ -102,6 +89,15 @@ _QUERY_VERBS = (
 _DATA_SIGNAL_DIMS = ("工序", "产线", "设备", "产品", "工单", "订单", "物料", "库存", "缺陷", "不良", "报警", "车间", "班次")
 _DATA_SIGNAL_CHARTS = ("柱状图", "折线图", "热力图", "饼图", "散点图", "组合图", "双轴图", "趋势图", "占比图", "图表")
 
+# 生产语境兜底：用于「无明确业务实体词、但明显在问生产数量/线体/工位/工序」的问句
+# （如“每条线做了几件”“这周各车间多少件”）。它只作安全红线，让这类问句不被降级成闲聊，
+# 语义仍交给 LLM 判定。刻意用“每/各 + 产线/线/机台...”这类限定，避免“这衣服几件”之类误触发。
+_MFG_CONTEXT_RE = re.compile(
+    r"(?:每|各)\s*[\u4e00-\u9fa5]{0,3}(?:产线|线|机台|机|设备|工序|产品|工单|订单|物料|班次|车间)"
+    r"|(?:几|多少)(?:件|台|单|批|道|个)(?:产品|工单|订单|物料|良品|不良)(?:的)?(?:产量|生产|合格|不良)?"
+    r"|(?:哪?条线|哪个车间|哪道工序|几号机)(?:的|呢)?"
+)
+
 def _has_business_analysis_signal(text: str) -> bool:
     """是否为「真正的业务数据查询」，而不是常识/概念/闲聊。
 
@@ -127,6 +123,14 @@ def _has_business_analysis_signal(text: str) -> bool:
     if has_chart and (has_entity or has_data_word or has_dim or has_query or has_time):
         return True
     return False
+
+
+def _has_manufacturing_context(text: str) -> bool:
+    """生产语境兜底：无明确业务实体词、但明显在问生产数量/线体/工位/工序。
+
+    只用于安全兜底（防止把这类问句降级成闲聊），不参与语义理解；语义仍交给 LLM。
+    """
+    return bool(_MFG_CONTEXT_RE.search(str(text or "").lower()))
 
 
 def _has_data_signal(text: str) -> bool:
@@ -327,9 +331,11 @@ def should_downgrade_to_conversation(
         return False
     if _has_business_analysis_signal(question):
         return False
+    if _has_manufacturing_context(question):
+        return False
     if previous_business and _references_previous_turn(question):
         return False
-    return _is_concept_explanation(question) or _is_general_knowledge(question) or _is_known_conversation(question)
+    return True
 
 
 # 写意图词：命中即说明想改动/删除数据。分析工作流里的 intent_guard 会据此阻断，变成只读安全提示。

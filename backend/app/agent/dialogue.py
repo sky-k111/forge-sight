@@ -19,13 +19,6 @@ from __future__ import annotations
 
 import re
 
-# 明确指代上一轮结果的词（路由门，非语义来源）。刻意不收「它/该」等过宽代词，
-# 以免把「继续看看它最近怎么样」这类业务追问误判成确认。
-_REFERENCE_TERMS = (
-    "这个", "这些", "那个", "那些", "上面", "刚才", "前面", "之前", "上一次",
-    "上一条", "这条", "那个数", "这个数", "这些数", "你刚才", "你刚刚", "刚刚",
-    "上一步",
-)
 # 范围/口径确认式（如「所有产线的吗」「整体的是吗」）
 _SCOPE_CONFIRM_RE = re.compile(r"(所有|全部|整体|全部产线|这些产线|哪些).*(吗|呢|是不是|对不对|对吗|是吗|对吧)")
 
@@ -40,15 +33,16 @@ _ROLE_ANSWER = (
 
 
 def _looks_referential(text: str) -> bool:
-    """是否像是引用/确认上一轮结果的短追问。"""
+    """是否像「引用上一轮结果」的追问/口径确认。
+
+    刻意做窄：只有当问句是明确的「范围/口径确认式」（带 所有/全部/整体/哪些 等范围词
+    和 吗/呢/是不是 等确认语气）才当作指代上一轮，避免把「这个月产量」「这个月的良率」
+    这类带真实指标+时间的新查询误降级成对话。真正的语义判断交给 LLM 意图层兜底。
+    """
     t = str(text or "").strip()
     if not t:
         return False
-    if any(p in t for p in _REFERENCE_TERMS):
-        return True
-    if _SCOPE_CONFIRM_RE.search(t):
-        return True
-    return False
+    return bool(_SCOPE_CONFIRM_RE.search(t))
 
 
 def has_previous_result(context: list[dict[str, str]] | None) -> bool:

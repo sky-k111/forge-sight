@@ -237,7 +237,7 @@ def intent_to_tasks(intent: AgentIntent, *, question: str | None = None) -> list
             tasks[i]["groupBy"] = dims
         return tasks
     return [_task(0, _resolve_tc(intent.time, q), "single", [],
-                  hint=(metrics[0].semantic if metrics else None), nq=q)]
+                  hint=metric_hint, nq=q)]
 
 
 def task_from_planner_arguments(arguments: dict[str, Any] | None, fallback_task: dict[str, Any] | None = None) -> dict[str, Any]:

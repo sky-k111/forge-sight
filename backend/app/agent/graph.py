@@ -29,10 +29,12 @@ from app.agent.interpretation import (
     _build_kpis as rebuild_interpretation_kpis,
 )
 from app.agent.intent import (
+    _has_business_analysis_signal,
     _is_turn_switch,
     build_intent_plan,
     build_request_route,
     has_write_intent,
+    should_downgrade_to_conversation,
 )
 from app.agent.intent_adapter import intent_to_tasks, task_from_planner_arguments
 from app.agent.intent_contract import AgentIntent
@@ -999,30 +1001,59 @@ def _clarification_answers(response: Any, fields: list[dict[str, Any]]) -> dict[
 def _model_route_decision(
     raw: str, unknown_segments: list[dict[str, Any]]
 ) -> tuple[dict[int, str], dict[int, str], dict[int, dict[str, Any]]]:
+    """解析 LLM 路由输出，并把不同 model 可能给出的 JSON 形态归一化。
+
+    模型返回产物并不总与提示词完全一致（可能用 intents/intent/type 而不是
+    segments/kind）。这里做的是「容忍真实输出」而非正则再猜语义——语义仍是 LLM 说了算，
+    解析失败才安全兜底为 conversation（避免误把闲聊推进 SQL）。
+    """
     fenced = re.search(r"```(?:json)?\s*(.*?)```", str(raw), flags=re.IGNORECASE | re.DOTALL)
     candidate = (fenced.group(1) if fenced else str(raw)).strip()
     try:
         decoded = json.loads(candidate)
     except json.JSONDecodeError:
         return {item["index"]: "conversation" for item in unknown_segments}, {}, {}
-    items = decoded.get("segments", decoded) if isinstance(decoded, dict) else decoded
-    if not isinstance(items, list):
-        return {item["index"]: "conversation" for item in unknown_segments}, {}, {}
+
     allowed_indices = {item["index"] for item in unknown_segments}
+
+    def _norm_kind(value: Any) -> str:
+        k = str(value or "").strip().lower()
+        if k in {"clarify", "modeling", "code", "utility", "unknown"}:
+            # 路由契约只接受 analysis / conversation / report；其余一律按对话安全处理，
+            # 避免被误当成查询。真正需要查询的语义由意图层（agent_intent）兜住。
+            return "conversation"
+        return k if k in {"analysis", "conversation", "report"} else "conversation"
+
+    def _items(dec: Any) -> list[dict[str, Any]]:
+        if isinstance(dec, list):
+            return [x for x in dec if isinstance(x, dict)]
+        if not isinstance(dec, dict):
+            return []
+        # 顶层可能是 {"intent": "conversation"} 的单意图，或 {"segments": [...]} 的列表。
+        for key in ("segments", "intents", "items", "routes"):
+            val = dec.get(key)
+            if isinstance(val, list):
+                return [x for x in val if isinstance(x, dict)]
+        single = dec.get("intent") or dec.get("kind") or dec.get("type")
+        if isinstance(single, str) and single:
+            return [{"index": item["index"], "kind": single} for item in unknown_segments]
+        return []
+
     labels: dict[int, str] = {}
     responses: dict[int, str] = {}
     specs: dict[int, dict[str, Any]] = {}
-    for item in items:
-        if not isinstance(item, dict):
-            continue
+    for item in _items(decoded):
         try:
-            index = int(item.get("index"))
+            index = int(item.get("index", item.get("id")))
         except (TypeError, ValueError):
             continue
-        kind = str(item.get("kind", "")).lower()
+        kind = _norm_kind(item.get("kind", item.get("intent", item.get("type"))))
+        spec = item.get("spec") if isinstance(item.get("spec"), dict) else None
         if index in allowed_indices and kind in {"analysis", "conversation", "report"}:
             labels[index] = kind
-            response = str(item.get("response") or "").strip()
+            if spec:
+                specs[index] = spec
+            response = str(item.get("response", item.get("reply", item.get("message"))) or "").strip()
             if kind == "conversation" and response:
                 responses[index] = response[:800]
     for item in unknown_segments:
@@ -1046,7 +1077,13 @@ def _route_model_prompt(
         "不要在路由阶段查询数据。"
         "conversation=不需要企业数据的正常对话。对 conversation 应以 ForgeSight 身份自然、简洁地回应，"
         "可以正常交流，但不得假装已经查询过企业数据；必要时再引导用户提出业务问题。"
-        "例如“横坐标能不能就一个 2026”“纵坐标改成百分比”“横轴换成按周”“不要重复年份”“改成折线图”。"
+        "判定边界（重要）：只有明确在查询/对比企业生产、质量、设备、库存业务数据，且带真实业务指标或维度"
+        "（产量/良率/不良/产线/工序/设备/库存/工单/物料/合格/缺陷/停机/报警/产能…）时才是 analysis。" 
+        "纯常识、概念解释、生活/通用问题——即使出现 分析/统计/比较/多少/查询 等词——一律 conversation："
+        "例如“5月有多少天”“世界上有多少个国家”“苹果和安卓哪个好”“今年高考录取率多少”"
+        "“你分析一下我今天的运气”“什么是OEE”“这个月的工资什么时候发”。不要臆造业务指标，也不要为这些路由到查询。"
+        "对图表的调整也判为 conversation，例如“横坐标能不能就一个 2026”“纵坐标改成百分比”“横轴换成按周”"
+        "“不要重复年份”“改成折线图”。"
         "并用 spec 结构化表达调整，如 {\"axis\":\"x\",\"granularity\":\"year\"}、"
         "{\"axis\":\"y\",\"format\":\"percent\"} 或 {\"chartType\":\"line\"}；未指明时 axis 默认 \"x\"。"
     )
@@ -1069,6 +1106,26 @@ def _route_model_prompt(
 def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
     capability_registry = build_default_registry()
     capability_executor = CapabilityExecutor(capability_registry)
+
+    def _conversation_reply(state: AnalysisState, question: str, conversation_context: list[dict[str, str]]) -> str:
+        """自然对话回复：当 LLM 意图/安全网判定该轮不查数据时使用。失败回退到通用兜底。"""
+        system = (
+            "你是 ForgeSight，面向制造企业数据底座的智能问析 Agent。你可以自然、友善、简洁地正常对话；"
+            "你的核心职责是帮助用户理解生产、质量、设备和库存数据，在企业数据场景中只做已授权的只读分析，"
+            "绝不假装查询过数据，也不编造业务事实。当前问题不需要查询数据库，请直接回应，不输出 JSON，"
+            "不复述规则；通常控制在 180 字以内。"
+        )
+        user = json.dumps(
+            {"recentConversation": conversation_context[-4:], "currentMessage": question},
+            ensure_ascii=False,
+        )
+        try:
+            return deps.generate_text(state, "conversation.reply", system, user).strip()[:2000]
+        except Exception:  # noqa: BLE001 - keep ordinary dialogue available during provider outages
+            return (
+                "我是 ForgeSight，主要负责生产、质量、设备和库存数据的只读问析。"
+                "当前对话模型暂时不可用，你仍可以直接告诉我想分析的业务问题。"
+            )
 
     def route_request(state: AnalysisState) -> dict:
         preclassified_labels = {
@@ -1139,15 +1196,40 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         ]
         if model_responses:
             route["conversationResponse"] = "\n\n".join(model_responses)
-        # Phase B：当旁路/开启 intent 时，路由直接采用已解析意图的 kind，避免路由正则与
-        # 意图解析在「是不是数据分析」上打架。不在上述范围（闲聊/utility）则不覆盖。
+        # Phase B：LLM 意图是语义权威，路由只作安全兜底。只要 intent 是 LLM 产出，
+        # 就以其 kind 为准——即便确定性路由把某句判成了 analysis，LLM 说 conversation
+        # 就能把它拉回对话（避免正则把闲聊误判成查库）。确定性只负责：
+        #   1) 写/删意图拦截（上面已短路）；
+        #   2) 明显非业务且非业务追问时，把 LLM 的 analysis 降级为对话，防跑空 SQL。
+        previous_business = any(
+            _has_business_analysis_signal(str(item.get("content") or ""))
+            for item in reversed(conversation_context)
+            if item.get("role") == "user"
+        )
         agent_intent = state.get("agent_intent")
         if agent_intent and _is_llm_intent(agent_intent):
             ik = _intent_kind(agent_intent)
             if ik in {"analysis", "modeling", "report", "investigation"}:
-                route["kind"] = ik
-                route["analysisQuestion"] = state["user_question"]
-                route["segments"] = route.get("segments") or [{"kind": ik, "text": state["user_question"], "index": 0}]
+                if should_downgrade_to_conversation(
+                    state["user_question"], ik, previous_business=previous_business
+                ):
+                    route["kind"] = "conversation"
+                    route["analysisQuestion"] = ""
+                    route["segments"] = [{"kind": "conversation", "text": state["user_question"], "index": 0}]
+                    route["conversationResponse"] = _conversation_reply(state, state["user_question"], conversation_context) or route["conversationResponse"]
+                else:
+                    route["kind"] = ik
+                    route["analysisQuestion"] = state["user_question"]
+                    route["segments"] = route.get("segments") or [{"kind": ik, "text": state["user_question"], "index": 0}]
+            elif ik in {"conversation", "utility"}:
+                # LLM 说是对话/系统问题：覆盖正则判定的 analysis，改走对话，不再查库。
+                route["kind"] = "utility" if ik == "utility" else "conversation"
+                route["analysisQuestion"] = ""
+                route["segments"] = route.get("segments") or [{"kind": route["kind"], "text": state["user_question"], "index": 0}]
+                if ik == "utility":
+                    route["utilityQuestion"] = route.get("utilityQuestion") or state["user_question"]
+                else:
+                    route["conversationResponse"] = _conversation_reply(state, state["user_question"], conversation_context) or route["conversationResponse"]
         return {
             "intent_kind": route["kind"],
             "analysis_question": route["analysisQuestion"],
