@@ -61,11 +61,11 @@ def test_should_use_planner_intent_paths():
 
 def test_intent_to_tasks_splits_comparison_and_keeps_process():
     tasks = intent_to_tasks(_comparison_intent())
-    assert len(tasks) == 2
+    assert len(tasks) == 1
     for t in tasks:
         assert {"产线", "工序"} <= set(t["groupBy"])
-        assert t["timeConstraint"]["label"] in {"5月", "6月"}
-    assert tasks[0]["timeConstraint"]["kind"] == "specific_month"
+        assert {p["label"] for p in t["timeConstraint"]["periods"]} == {"5月", "6月"}
+    assert tasks[0]["timeConstraint"]["kind"] == "comparison"
 
 
 def test_build_fallback_plan_uses_intent():
@@ -75,10 +75,10 @@ def test_build_fallback_plan_uses_intent():
         agent_intent=_comparison_intent(),
     )
     query_steps = [s for s in plan.steps if s.capability == "analysis.query_data"]
-    assert len(query_steps) == 2
+    assert len(query_steps) == 1
     for s in query_steps:
         task = s.arguments.get("task", {})
-        assert set(task.get("groupBy") or []) == {"产线", "工序"}
+        assert set(task.get("groupBy") or []) == {"产线", "工序", "月份"}
 
 
 def test_validate_intent_resolves_dims_and_metric():
@@ -133,7 +133,7 @@ def test_compile_intent_renders_dimension_sql():
     assert result is not None
     sql, meta = result
     assert "line_id" in sql and "process_id" in sql
-    assert meta["groupBy"] == ["产线", "工序"]
+    assert meta["groupBy"] == ["产线", "工序", "月份"]
 
 
 def test_classify_request_kind_promotes_data_signal_when_intent_enabled():

@@ -16,6 +16,7 @@ import re
 from typing import Any
 
 from app.gateway.connectors import get_adapter
+from app.gateway.connectors.base import PhysicalTableRef
 
 
 _DIM_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -115,13 +116,50 @@ def _period_filter(metric: dict[str, Any], periods: list[dict[str, Any]], dialec
     quoted = adapter.quote_identifier(tfield)
     clauses: list[str] = []
     for p in periods:
+        bounds = []
         s = p.get("startInclusive")
         e = p.get("endExclusive")
         if s:
-            clauses.append(f"f.{quoted} >= '{s}'")
+            bounds.append(f"f.{quoted} >= '{str(s).replace(chr(39), chr(39) * 2)}'")
         if e:
-            clauses.append(f"f.{quoted} < '{e}'")
-    return " AND ".join(clauses) if clauses else None
+            bounds.append(f"f.{quoted} < '{str(e).replace(chr(39), chr(39) * 2)}'")
+        if bounds:
+            clauses.append("(" + " AND ".join(bounds) + ")")
+    return "(" + " OR ".join(clauses) + ")" if clauses else None
+
+
+def _sql_literal(value: Any) -> str:
+    """Render values, never identifiers, for the governed filter subset."""
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _render_bound_filter(binding: dict[str, Any], adapter) -> str | None:
+    if binding.get("status") != "bound" or not binding.get("field") or not binding.get("alias"):
+        return None
+    column = f"{binding['alias']}.{adapter.quote_identifier(str(binding['field']))}"
+    operator = str(binding.get("operator") or "eq").strip().lower()
+    operator = {
+        "=": "eq", "==": "eq", "!=": "ne", "<>": "ne",
+        ">": "gt", ">=": "gte", "<": "lt", "<=": "lte",
+    }.get(operator, operator)
+    value = binding.get("value")
+    if operator in {"eq", "ne"} and value is None:
+        return f"{column} IS {'NOT ' if operator == 'ne' else ''}NULL"
+    binary = {"eq": "=", "ne": "<>", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
+    if operator in binary:
+        return f"{column} {binary[operator]} {_sql_literal(value)}"
+    if operator in {"in", "not_in"} and isinstance(value, list) and value:
+        values = ", ".join(_sql_literal(item) for item in value)
+        return f"{column} {'NOT ' if operator == 'not_in' else ''}IN ({values})"
+    if operator == "between" and isinstance(value, (list, tuple)) and len(value) == 2:
+        return f"{column} BETWEEN {_sql_literal(value[0])} AND {_sql_literal(value[1])}"
+    return None
 
 
 def _time_group(dialect: str, metric: dict[str, Any], grain: str) -> str | None:
@@ -130,21 +168,15 @@ def _time_group(dialect: str, metric: dict[str, Any], grain: str) -> str | None:
         return None
     adapter = get_adapter(dialect)
     quoted = adapter.quote_identifier(tfield)
-    if dialect == "mysql":
-        if grain in ("year", "年"):
-            return f"DATE_FORMAT(f.{quoted}, '%Y')"
-        if grain in ("month", "月"):
-            return f"DATE_FORMAT(f.{quoted}, '%Y-%m')"
-        if grain in ("quarter", "季度"):
-            return f"CONCAT(DATE_FORMAT(f.{quoted}, '%Y'), '-Q', QUARTER(f.{quoted}))"
-        if grain in ("week", "周"):
-            return f"YEARWEEK(f.{quoted})"
-        return f"DATE(f.{quoted})"
-    return f"DATE(f.{quoted})"
+    return adapter.render_time_bucket(f"f.{quoted}", grain)
 
 
 def _is_time_dim(dim: str) -> bool:
-    return any(t in dim for t in ("日期", "时间", "天", "日", "星期", "date", "time", "day", "weekday", "月份", "月", "周"))
+    lowered = str(dim or "").lower()
+    return any(t in lowered for t in (
+        "日期", "时间", "天", "日", "星期", "月份", "月", "周", "季度", "季", "年",
+        "date", "time", "day", "weekday", "week", "month", "quarter", "year",
+    ))
 
 
 
@@ -174,7 +206,8 @@ def compile_query(
 ) -> tuple[str, dict[str, Any]] | None:
     metrics = (semantic_context or {}).get("metrics") or []
     qtext = str((task or {}).get("normalizedQuestion") or (task or {}).get("originalQuestion") or "")
-    metric = _pick_metric(metrics, qtext, (task or {}).get("metricHint") or None)
+    contract = (task or {}).get("queryBinding") or {}
+    metric = contract.get("metric") or _pick_metric(metrics, qtext, (task or {}).get("metricHint") or None)
     if not metric:
         return None
     dialect = (dialect or (semantic_context or {}).get("source", {}).get("type") or "mysql").lower()
@@ -183,17 +216,24 @@ def compile_query(
 
     tables = (semantic_context or {}).get("tables") or []
     fact = None
-    for t in tables or []:
-        if "fact" in str(t.get("objectType", "")).lower():
-            fact = t
-            break
+    bound_fact = str(contract.get("factTable") or "")
+    if bound_fact:
+        fact = next((t for t in tables if bound_fact in {str(t.get("qualifiedName") or ""), str(t.get("name") or "")}), None)
     if not fact:
-        src = metric.get("sourceTables") or []
-        fact = next((t for t in tables if t.get("name") == (src[0] if src else None)), None)
+        src = set(metric.get("sourceTables") or [])
+        fact = next((t for t in tables if {str(t.get("name") or ""), str(t.get("qualifiedName") or "")} & src), None)
+    if not fact:
+        fact = next((t for t in tables or [] if "fact" in str(t.get("objectType", "")).lower()), None)
     if not fact:
         return None
 
-    fq = fact.get("qualifiedName") or fact.get("name")
+    def qualified_table(table):
+        return adapter.qualify_table(PhysicalTableRef(
+            schema=str(table.get("schemaName") or ""),
+            name=str(table.get("name") or ""),
+        ))
+
+    fq = qualified_table(fact)
     metric_expr = str(metric.get("physicalFormula") or "")
     if not metric_expr:
         return None
@@ -207,13 +247,25 @@ def compile_query(
     filt = metric.get("filterExpression")
     if filt:
         where_parts.append(f"({filt})")
+    filter_bindings = contract.get("filters") or (task or {}).get("filterBindings") or []
+    if (task.get("filters") or []) and len(filter_bindings) != len(task.get("filters") or []):
+        return None
+    for binding in filter_bindings:
+        rendered = _render_bound_filter(binding, adapter)
+        if not rendered:
+            return None
+        where_parts.append(rendered)
 
     group_by = (task or {}).get("groupBy") or []
+    bindings = {str(item.get("semantic")): item for item in (task or {}).get("dimensionBindings") or []}
     dim_cols: list[str] = []
     dim_raw: list[str] = []
     for dim in group_by:
         if _is_time_dim(dim):
-            col = _time_group(dialect, metric, (_dim_time_grain(dim) or str(time_constraint.get("timeGrain") or "day")))
+            time_metric = dict(metric)
+            if (bindings.get(str(dim)) or {}).get("field"):
+                time_metric["physicalTimeField"] = bindings[str(dim)]["field"]
+            col = _time_group(dialect, time_metric, (_dim_time_grain(dim) or str(time_constraint.get("timeGrain") or "day")))
             if not col:
                 # 用户明确要求“按月份/按周/按天/逐月”拆分，但当前指标没有登记时间字段，
                 # 不能静默退化为整段聚合（会把“各月份”变成“全年求和”）。回退给 LLM 生成。
@@ -221,18 +273,22 @@ def compile_query(
             dim_cols.append(col)
             dim_raw.append(dim)
             continue
-        col = _resolve_dimension(dim, fact, dialect)
+        binding = bindings.get(str(dim)) or {}
+        if binding.get("status") == "unresolved_join":
+            return None
+        col = binding.get("field") or _resolve_dimension(dim, fact, dialect)
         if not col:
             return None
-        dim_cols.append(f"f.{adapter.quote_identifier(col)}")
+        alias = str(binding.get("alias") or "f")
+        dim_cols.append(f"{alias}.{adapter.quote_identifier(col)}")
         dim_raw.append(dim)
 
     atype = (task or {}).get("analysisType") or ""
     q = str((task or {}).get("normalizedQuestion") or (task or {}).get("originalQuestion") or "")
-    limit: int | None = None
+    limit: int | None = task.get("topN")
     order: str | None = None
     out_hint = "chart"
-    if "rank" in atype or "top" in atype or "排行" in atype or "前" in q:
+    if "rank" in atype or "top" in atype or "排行" in atype or (not task.get("semanticIntent") and "前" in q):
         order = "DESC"
         m = re.search(r"前\s*(\d+)", q)
         if m:
@@ -248,7 +304,7 @@ def compile_query(
     elif "trend" in atype or "趋势" in atype:
         order = "ASC"
         if not dim_raw:
-            col = _time_group(dialect, metric, (_dim_time_grain(dim) or str(time_constraint.get("timeGrain") or "day")))
+            col = _time_group(dialect, metric, str(time_constraint.get("timeGrain") or "day"))
             if col:
                 dim_cols = [col]
                 dim_raw = ["时间"]
@@ -262,18 +318,44 @@ def compile_query(
         select_parts.append(f"{col} AS {adapter.quote_identifier(raw)}")
     select_parts.append(f"{metric_expr} AS {adapter.quote_identifier(metric.get('name') or 'metric')}")
     sql = f"SELECT {', '.join(select_parts)} FROM {fq} AS f"
+    table_by_identity = {}
+    for item in tables:
+        table_by_identity[str(item.get("qualifiedName") or item.get("name") or "")] = item
+        table_by_identity.setdefault(str(item.get("name") or ""), item)
+    aliases = {str(contract.get("factTable") or ""): "f"}
+    for join in contract.get("joins") or []:
+        target = table_by_identity.get(str(join.get("toTable") or ""))
+        source_alias = aliases.get(str(join.get("fromTable") or ""))
+        target_alias = str(join.get("alias") or f"d{len(aliases)}")
+        if not target or not source_alias or not join.get("fromField") or not join.get("toField"):
+            return None
+        sql += (
+            f" JOIN {qualified_table(target)} AS {target_alias} ON "
+            f"{source_alias}.{adapter.quote_identifier(str(join['fromField']))} = "
+            f"{target_alias}.{adapter.quote_identifier(str(join['toField']))}"
+        )
+        aliases[str(join.get("toTable"))] = target_alias
     if where_parts:
         sql += " WHERE " + " AND ".join(where_parts)
     if dim_cols:
         sql += " GROUP BY " + ", ".join(dim_cols)
-    if order and dim_cols:
+    if task.get("sort"):
+        ordering = []
+        for spec in task["sort"]:
+            field = str(spec.get("field") or "")
+            direction = str(spec.get("direction") or "asc").upper()
+            if direction not in {"ASC", "DESC"} or field not in [*dim_raw, metric.get("name")]:
+                return None
+            ordering.append(f"{adapter.quote_identifier(field)} {direction}")
+        sql += " ORDER BY " + ", ".join(ordering)
+    elif order and dim_cols:
         if atype in ("trend",) or "趋势" in atype:
             order_col = dim_cols[0]
         else:
             order_col = metric_expr
         sql += " ORDER BY " + order_col + f" {order}"
     if limit:
-        sql += f" LIMIT {int(limit)}"
+        sql = adapter.apply_row_limit(sql, int(limit))
     first_dim = dim_raw[0] if dim_raw else None
     axis = None
     if first_dim:
@@ -294,7 +376,13 @@ def compile_query(
         "outputHint": out_hint,
         "sourceType": source.get("type"),
         "factTable": fq,
+        "joins": contract.get("joins") or [],
         "axis": axis,
+        "resultSchema": [
+            {"key": d, "role": "time" if _is_time_dim(d) else "dimension",
+             "grain": _dim_time_grain(d) if _is_time_dim(d) else None}
+            for d in dim_raw
+        ] + [{"key": metric.get("name") or "metric", "role": "measure", "unit": metric.get("unit")}],
     }
 
 

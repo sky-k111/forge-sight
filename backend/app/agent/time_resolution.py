@@ -46,13 +46,18 @@ def resolve_time_constraint(constraint: dict[str, Any] | None, horizon: Any = No
     if not constraint:
         return None
     kind = constraint.get("kind")
-    if constraint.get("reference") == "data_horizon" or kind in {
+    # Absolute boundaries are already authoritative. Never discard them merely
+    # because their reference metadata says now/data_horizon.
+    if kind == "absolute" and constraint.get("periods"):
+        return dict(constraint)
+    resolvable = {
         "previous_month", "previous_week", "previous_quarter", "previous_year",
         "current_month", "current_week", "current_quarter", "current_year", "recent",
-        "specific_month",
-    }:
-        return _resolve_relative(constraint, reference_date(horizon))
-    # 已有 periods（如 current_vs_previous_month 由两段组成）直接放行
+        "specific_month", "specific_year", "comparison",
+    }
+    if kind in resolvable:
+        ref = reference_date() if constraint.get("reference") == "now" else reference_date(horizon)
+        return _resolve_relative(constraint, ref, horizon=horizon)
     return dict(constraint)
 
 
@@ -75,7 +80,7 @@ def _month_start(d: date) -> date:
     return d.replace(day=1)
 
 
-def _resolve_relative(constraint: dict[str, Any], ref: date) -> dict[str, Any]:
+def _resolve_relative(constraint: dict[str, Any], ref: date, horizon: Any = None) -> dict[str, Any]:
     kind = constraint.get("kind")
     out: dict[str, Any] = dict(constraint)
     out.pop("periods", None)
@@ -102,13 +107,14 @@ def _resolve_relative(constraint: dict[str, Any], ref: date) -> dict[str, Any]:
         }]
     elif kind == "previous_quarter":
         quarter = (today.month - 1) // 3
-        prev_q_start = date(today.year, quarter * 3 + 1, 1)
-        prev_q_label = f"{prev_q_start:%Y-Q{(quarter + 1)}}"
+        q_start = date(today.year, quarter * 3 + 1, 1)
+        prev_q_start = date(today.year, (quarter - 1) * 3 + 1, 1) if quarter else date(today.year - 1, 10, 1)
+        prev_q_label = f"{prev_q_start.year}-Q{(prev_q_start.month - 1) // 3 + 1}"
         out["periods"] = [{
             "key": "previous",
             "label": prev_q_label,
             "startInclusive": prev_q_start.isoformat(),
-            "endExclusive": date(today.year, (quarter + 1) * 3 + 1, 1).isoformat(),
+            "endExclusive": q_start.isoformat(),
         }]
     elif kind == "previous_year":
         prev_year = today.year - 1
@@ -140,7 +146,7 @@ def _resolve_relative(constraint: dict[str, Any], ref: date) -> dict[str, Any]:
             "key": "current",
             "label": f"{q_start:%Y-Q{quarter + 1}}",
             "startInclusive": q_start.isoformat(),
-            "endExclusive": date(today.year, (quarter + 1) * 3 + 1, 1).isoformat(),
+            "endExclusive": (date(today.year + 1, 1, 1) if quarter == 3 else date(today.year, (quarter + 1) * 3 + 1, 1)).isoformat(),
         }]
     elif kind == "current_year":
         out["periods"] = [{
@@ -172,7 +178,12 @@ def _resolve_relative(constraint: dict[str, Any], ref: date) -> dict[str, Any]:
             members = [{"label": constraint.get("label")}]
         resolved: list[dict[str, Any]] = []
         for p in members:
+            if isinstance(p, dict) and p.get("startInclusive") and p.get("endExclusive"):
+                resolved.append(dict(p))
+                continue
             label = str(p.get("label") or "") if isinstance(p, dict) else str(p)
+            member_reference = str(p.get("reference") or constraint.get("reference") or "data_horizon") if isinstance(p, dict) else str(constraint.get("reference") or "data_horizon")
+            member_today = reference_date() if member_reference == "now" else reference_date(horizon)
             month = None
             m = re.search(r"(\d{1,2})\s*月", label)
             if m:
@@ -185,14 +196,14 @@ def _resolve_relative(constraint: dict[str, Any], ref: date) -> dict[str, Any]:
                 continue
             if not (1 <= month <= 12):
                 continue
-            year = today.year if month <= today.month else today.year - 1
+            year = member_today.year if month <= member_today.month else member_today.year - 1
             start = date(year, month, 1)
             end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
             resolved.append({"label": label, "startInclusive": start.isoformat(), "endExclusive": end.isoformat()})
         if resolved:
             mstart = min(d["startInclusive"] for d in resolved)
             mend = max(d["endExclusive"] for d in resolved)
-            out["periods"] = [{"label": "对比区间", "startInclusive": mstart, "endExclusive": mend}]
+            out["periods"] = resolved
             out["periodBreakdown"] = resolved
     elif kind == "recent":
         amount = _amount(constraint.get("amount"))

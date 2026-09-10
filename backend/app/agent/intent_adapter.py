@@ -54,21 +54,20 @@ def _time_constraint_from_range(r: TimeRange | None) -> dict[str, Any] | None:
         return d
 
     if r.mode == TimeMode.COMPARISON:
-        # 对比型（如「5月 vs 6月」）：只保留「周期标签」，绝对日期交给
-        # time_resolution 按数据地平线锚定，避免采纳 LLM 猜的 2023 年份；
-        # 月度拆分由 group_by 里的时间粒度维度负责。
+        # 对比型（如「5月 vs 6月」）：裸月份可由 time_resolution 锚定到数据
+        # 地平线，但用户明确给出的 start/end 必须原样进入查询约束。
         members = [r] + list(r.comparisons)
         return {
             "kind": "comparison",
             "label": label,
             "timeGrain": grain,
-            "reference": "data_horizon",
-            "periods": [{"label": (m.label or f"{m.start}-{m.end}")} for m in members],
+            "reference": r.reference,
+            "periods": [period_dict(m) for m in members],
         }
     if r.mode == TimeMode.ABSOLUTE:
         # 优先按 label 里的「N 月」锚定数据地平线，而不是无条件使用 LLM 猜的绝对日期
         # （LLM 常把“5月”写成 2023-05-01）；这样“对比5月与6月”能落到真实数据年份。
-        month = _extract_month(label)
+        month = _extract_month(label) if not (r.start and r.end) else None
         if month is not None and r.reference != "now":
             return {"kind": "specific_month", "month": month, "label": label, "timeGrain": grain, "reference": "data_horizon"}
         if r.start or r.end:
@@ -78,10 +77,10 @@ def _time_constraint_from_range(r: TimeRange | None) -> dict[str, Any] | None:
         kind = {"month": "current_month", "week": "current_week", "quarter": "current_quarter", "year": "current_year"}.get(grain, "current_month")
         return {"kind": kind, "label": label, "timeGrain": grain, "reference": "now"}
     if r.mode == TimeMode.RECENT:
-        return {"kind": "recent", "label": label, "amount": r.amount, "unit": r.unit, "timeGrain": grain, "reference": "data_horizon"}
+        return {"kind": "recent", "label": label, "amount": r.amount, "unit": r.unit, "timeGrain": grain, "reference": r.reference}
     if r.mode == TimeMode.RELATIVE:
         kind = {"week": "previous_week", "month": "previous_month", "quarter": "previous_quarter", "year": "previous_year"}.get(grain, "previous_month")
-        return {"kind": kind, "label": label, "timeGrain": grain, "reference": "data_horizon"}
+        return {"kind": kind, "label": label, "timeGrain": grain, "reference": r.reference}
     return None
 
 
@@ -115,8 +114,8 @@ def _comparison_periods(intent: AgentIntent) -> list[TimeRange]:
         if key in seen:
             continue
         seen.add(key)
-        # 对比周期一律锚定数据地平线，忽略 LLM 猜的年份/now，避免落到不存在的数据年份。
-        out.append(p.model_copy(update={"reference": "data_horizon"}))
+        # 裸周期由后续时间解析锚定；显式 start/end 属于用户的绝对约束，不能覆盖。
+        out.append(p)
     return out
 
 
@@ -197,6 +196,20 @@ def _resolve_tc(time_range, q: str) -> dict[str, Any] | None:
 def intent_to_tasks(intent: AgentIntent, *, question: str | None = None) -> list[dict[str, Any]]:
     """把 AgentIntent 翻译成下游受治理子图能直接消费的 AnalysisTask 列表。"""
     q = question or intent.question
+    if intent.stepsHint:
+        tasks = []
+        for index, step in enumerate(intent.stepsHint):
+            child = AgentIntent.model_validate({**intent.model_dump(),
+                **step.model_dump(), "stepsHint": [], "relation": "new",
+                "question": q, "comparison": step.comparison,
+            })
+            for task in intent_to_tasks(child, question=q):
+                task["order"] = len(tasks) + 1
+                task["requirementId"] = f"R{index + 1}"
+                tasks.append(task)
+        return tasks
+    if intent.relation != "new":
+        q = "；".join([q, "指标：" + "、".join(m.semantic for m in intent.metrics)])
     base_dim_tokens = [_dimension_token(d) for d in intent.dimensions]
     chart = intent.chart.type if intent.chart else None
     atype = _analysis_type_from(intent)
@@ -220,10 +233,29 @@ def intent_to_tasks(intent: AgentIntent, *, question: str | None = None) -> list
             "groupBy": list(dict.fromkeys(base_dim_tokens)),
             "dependsOn": depends,
             "metricHint": hint if hint is not None else metric_hint,
+            "filters": intent.filters,
+            "sort": intent.sort,
+            "topN": intent.topN,
+            "understanding": intent.understanding,
+            "relation": intent.relation,
+            "operation": intent.operation,
+            "inheritedFrom": intent.inheritedFrom,
+            "requirementId": "R1",
+            "semanticIntent": intent.model_dump(mode="json", by_alias=True),
         }
 
     if periods:
-        return [_task(i, _time_constraint_from_range(p), "parallel", []) for i, p in enumerate(periods)]
+        task = _task(0, {"kind": "comparison", "label": intent.comparison.basis if intent.comparison else "周期比较",
+                         "timeGrain": (intent.time.grain if intent.time else None) or "month", "reference": periods[0].reference,
+                         "periods": [{"label": p.label, "reference": p.reference,
+                                      **({"startInclusive": p.start} if p.start else {}),
+                                      **({"endExclusive": p.end} if p.end else {})} for p in periods]}, "single", [])
+        if not any(_time_dimish(d) for d in task["groupBy"]):
+            task["groupBy"].append("月份")
+        return [task]
+
+    if intent.producer == "llm":
+        return [_task(0, _time_constraint_from_range(intent.time), "single", [], hint=metric_hint, nq=q)]
 
     pieces = _metric_compound_pieces(q)
     if len(pieces) > 1:
@@ -258,21 +290,50 @@ def task_from_planner_arguments(arguments: dict[str, Any] | None, fallback_task:
     group_by = list(task.get("groupBy") or [])
     if not group_by and dims:
         for d in dims:
-            dim = d if isinstance(d, Dimension) else Dimension.model_validate(d)
+            # planner 的 dimensions 有时是纯字符串（如 "车间"/"产线"），
+            # 直接喂给 Dimension.model_validate 会抛 ValidationError，导致维度回填整体失败。
+            if isinstance(d, Dimension):
+                dim = d
+            elif isinstance(d, dict):
+                try:
+                    dim = Dimension.model_validate(d)
+                except Exception:  # noqa: BLE001 - 未知结构时退回字符串兜底
+                    dim = Dimension(semantic=str(d.get("semantic") or d.get("label") or ""), label=str(d))
+            else:
+                dim = Dimension(semantic=str(d), label=str(d))
             token = _dimension_token(dim)
             if token and token not in group_by:
                 group_by.append(token)
 
     tc = task.get("timeConstraint")
     if tc is None and time:
-        model = time if isinstance(time, TimeRange) else TimeRange.model_validate(time)
-        tc = _time_constraint_from_range(model)
+        if isinstance(time, TimeRange):
+            model = time
+        elif isinstance(time, dict):
+            tdict = dict(time)
+            # planner 的 time 常缺 mode（有 start/end/grain）；有起止即视为绝对区间。
+            if not tdict.get("mode"):
+                tdict["mode"] = "absolute"
+                tdict.setdefault("reference", "data_horizon")
+            try:
+                model = TimeRange.model_validate(tdict)
+            except Exception:  # noqa: BLE001 - 结构异常时跳过时间约束，不阻塞查询
+                model = None
+        else:
+            model = None
+        tc = _time_constraint_from_range(model) if model is not None else None
 
     atype = task.get("analysisType") or "query"
     if comparison or (tc and tc.get("kind") == "comparison"):
         atype = "comparison"
 
-    metric_hint = task.get("metricHint") or (metrics[0].get("semantic") if metrics else None)
+    if metrics and isinstance(metrics[0], dict):
+        first_metric = metrics[0].get("semantic")
+    elif metrics:
+        first_metric = str(metrics[0])
+    else:
+        first_metric = None
+    metric_hint = task.get("metricHint") or first_metric
 
     # 对比型查询补时间粒度维度，使 SQL 按 月份/周 拆分，而不是把两段时期单独 AND。
     if tc and tc.get("kind") == "comparison":

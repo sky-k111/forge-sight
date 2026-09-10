@@ -974,7 +974,16 @@ def _task_constraint_validation(
             failures.append("用户未要求按产品拆分，SQL 不应额外增加产品分组")
 
     if group_by:
+        from app.agent.query_requirements import dimension_outputs
+        _, missing = dimension_outputs(sql, task, context)
+        failures.extend(missing)
         checks.append(f"显式分组：{', '.join(sorted(group_by))}")
+
+    from app.agent.query_requirements import query_contract_failures
+    contract_failures = query_contract_failures(sql, task, context)
+    failures.extend(contract_failures)
+    if task.get("filters") or task.get("sort") or task.get("topN"):
+        checks.append("筛选、排序与数量限制：按绑定契约校验")
 
     score = 100 if not failures else max(0, 100 - 25 * len(failures))
     if failures:
@@ -1137,6 +1146,33 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             for index, response in (state.get("preclassified_route_responses") or {}).items()
         }
         conversation_context = state.get("conversation_context") or []
+        unified = state.get("agent_intent")
+        if unified and not has_write_intent(state["user_question"]):
+            intent = AgentIntent.model_validate(unified)
+            kind = intent.kind.value
+            if kind == "clarify":
+                if intent.producer == "fallback":
+                    failure = intent.failure or {"code": "INTENT_OUTPUT_INVALID", "userSafeMessage": "分析请求解析失败，请重试。", "retryable": True}
+                    return {"analysis_question": "", "intent_kind": "clarify", "direct_response": failure["userSafeMessage"], "error": failure}
+                answer = interrupt({"kind": "clarification", "fields": [f.model_dump() for f in intent.clarify]})
+                from app.agent.llm_intent import resolve_intent
+                clarified, _, error = resolve_intent(state["user_question"] + "\n用户补充：" + json.dumps(answer, ensure_ascii=False), conversation_context, deps.generate_text, state=state)
+                if error or clarified.kind.value == "clarify":
+                    return {"analysis_question": "", "intent_kind": "clarify", "direct_response": "补充条件仍不完整，请重新发起分析。", "error": {"code": "INTENT_UNRESOLVED", "retryable": False, "userSafeMessage": "补充条件仍不完整，请重新发起分析。"}}
+                intent = clarified
+                unified = clarified.model_dump(mode="json")
+                kind = intent.kind.value
+            from app.agent.delivery import build_requirement_ledger
+            return {
+                "agent_intent": unified,
+                "request_requirements": build_requirement_ledger(intent, state["user_question"]),
+                "intent_kind": kind,
+                "analysis_question": state["user_question"] if kind in {"analysis", "investigation", "report", "modeling"} else "",
+                "utility_question": state["user_question"] if kind == "utility" else "",
+                "direct_response": _conversation_reply(state, state["user_question"], conversation_context) if kind == "conversation" else "",
+                "request_segments": [{"kind": kind, "text": state["user_question"], "index": 0}],
+                "blocked": False, "error": None,
+            }
         # 写/删意图必须先短路，交给 intent_guard 统一阻断为只读保护；否则会被未知路由/模型路由
         # 调一次 LLM 后误当成普通分析吞掉而绕过安全边界。
         if has_write_intent(state["user_question"]):
@@ -1252,7 +1288,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
 
     def intent_guard(state: AnalysisState) -> dict:
         lowered = state.get("analysis_question", state["user_question"]).lower()
-        if any(term in lowered for term in WRITE_TERMS):
+        if has_write_intent(lowered):
             return {
                 "blocked": True,
                 "error": {
@@ -1314,6 +1350,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         )
         return {
             "plan": dump_contract(plan),
+            "request_requirements": state.get("request_requirements") or [],
             "plan_revision": 1,
             "planner_degraded": source == "deterministic_fallback",
             "planning_reason": (
@@ -1575,6 +1612,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                 "sql": state.get("sql"), "validation": state.get("validation", {}),
                 "execution": state.get("execution", {}), "conclusion": state.get("conclusion", ""),
                 "confidence": state.get("confidence", {}), "metricResolution": state.get("metric_resolution", {}),
+                "interpretation": state.get("interpretation", {}),
             })
         return {
             "observations": [*(state.get("observations") or []), dump_contract(observation)],
@@ -1789,6 +1827,12 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         }
 
     def finalize_business_plan(state: AnalysisState) -> dict:
+        from app.agent.delivery import assess_delivery
+        delivery = assess_delivery(
+            state.get("request_requirements") or [],
+            state.get("task_results") or [],
+            state.get("observations") or [],
+        )
         decision = state.get("progress_decision") or {}
         observations = state.get("observations") or []
         has_usable_result = any(
@@ -1804,19 +1848,37 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         for summary in summaries:
             if summary not in direct:
                 direct = "\n\n".join(item for item in (direct, summary) if item)
+        partial_delivery = bool(delivery["delivered"]) and bool(delivery["missing"])
+        if delivery["missing"]:
+            disclosure = (
+                "本次仅部分完成，尚未交付需求："
+                if partial_delivery else "本次未能交付需求："
+            ) + "、".join(delivery["missing"]) + "。"
+            if partial_delivery:
+                disclosure += "已有结果不代表全部请求已完成。"
+            direct = "\n\n".join(item for item in (direct, disclosure) if item)
+        incomplete_error = state.get("error") or {
+            "code": "REQUEST_DELIVERY_INCOMPLETE",
+            "userSafeTitle": "本次分析未完成",
+            "userSafeMessage": "没有产生可交付的已校验结果，请查看证据链中的失败原因。",
+        }
         return {
+            "delivery": delivery,
             "finalization_reason": decision.get("reasonCode", "GOAL_SATISFIED"),
             "direct_response": direct,
             "active_plan_step": None,
             "active_plan_step_id": None,
             "proposed_plan_step": None,
-            "error": None if has_usable_result else state.get("error"),
+            "error": ({"code": "PARTIAL_DELIVERY", "userSafeTitle": "本次分析仅部分完成",
+                       "userSafeMessage": "部分需求尚未完成，请查看已完成结果及未交付需求。"}
+                      if partial_delivery else incomplete_error if delivery["missing"]
+                      else None if has_usable_result else state.get("error")),
         }
 
     def plan_tasks(state: AnalysisState) -> dict:
-        effective_question = _rewrite_followup_question(
-            deps, state, state.get("analysis_question") or state["user_question"]
-        )
+        effective_question = state.get("analysis_question") or state["user_question"]
+        if not state.get("agent_intent"):
+            effective_question = _rewrite_followup_question(deps, state, effective_question)
         # Phase C：当开启了 AgentIntent 且非恢复时，快速路径直接消费已解析意图，
         # 由 Agent 一次性给出维度/时间/图表，而不是再让 plan_tasks 用正则猜一遍。
         # 任何解析失败/未开启，均落回确定性 build_intent_plan，行为与旧版一致。
@@ -1824,10 +1886,25 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         if agent_intent and _is_llm_intent(agent_intent):
             try:
                 intent_model = AgentIntent.model_validate(agent_intent)
+                from app.agent.delivery import build_requirement_ledger
+                from app.agent.request_context import presentation_reuse_task
+                reuse_task = presentation_reuse_task(
+                    intent_model,
+                    (state.get("previous_task") or {}).get("analysisContext"),
+                )
+                if reuse_task:
+                    return {
+                        "tasks": [reuse_task],
+                        "request_requirements": state.get("request_requirements") or build_requirement_ledger(intent_model, effective_question),
+                        "task_index": 0,
+                        "task_results": [],
+                        "clarification_response": None,
+                    }
                 intent_tasks = intent_to_tasks(intent_model, question=effective_question)
                 if intent_tasks:
                     return {
                         "tasks": intent_tasks,
+                        "request_requirements": state.get("request_requirements") or build_requirement_ledger(intent_model, effective_question),
                         "task_index": 0,
                         "task_results": [],
                         "clarification_response": None,
@@ -1850,8 +1927,11 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                 clarification_response,
                 previous_task=state.get("previous_task"),
             )
+        from app.agent.delivery import ledger_from_tasks, number_requirements
+        planned_tasks = number_requirements(planning["tasks"])
         return {
-            "tasks": planning["tasks"],
+            "tasks": planned_tasks,
+            "request_requirements": state.get("request_requirements") or ledger_from_tasks(planned_tasks),
             "task_index": 0,
             "task_results": [],
             "clarification_response": clarification_response,
@@ -2032,6 +2112,8 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         resolution = _published_metric_resolution(context)
         if resolution:
             context["metricResolution"] = resolution
+        from app.agent.query_requirements import bind_query_requirements
+        bound_task = bind_query_requirements(state.get("task") or {}, context)
         # Phase C：语义归 Agent，安全归确定性。这里只做「校验/回填 + 审计标记」，
         # 不在这里猜用户想什么。校验失败/需澄清 → intent_degraded=True，供下游降级与审计。
         intent_validation = None
@@ -2059,10 +2141,26 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             intent_degraded = True
         return {
             "semantic_context": context,
+            "task": bound_task,
             "metric_resolution": resolution or {},
             "intent_validation": intent_validation,
             "intent_degraded": intent_degraded,
             "waiting_user": False,
+            "error": None,
+        }
+
+    def reuse_presentation(state: AnalysisState) -> dict:
+        """Fulfil a chart-only follow-up from the accepted snapshot without another SQL execution."""
+        from app.agent.request_context import apply_presentation_change
+        task = state.get("task") or {}
+        reuse = task.get("presentationReuse") or {}
+        return {
+            "sql": reuse.get("sql") or "",
+            "execution": {**(reuse.get("execution") or {}), "reused": True},
+            "metric_resolution": reuse.get("metricResolution") or {},
+            "interpretation": apply_presentation_change(task),
+            "confidence": {"presentationOnly": True},
+            "conclusion": "已按要求调整展示方式；本次复用上一结果，未重新查询数据库。",
             "error": None,
         }
 
@@ -2224,6 +2322,9 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                     "sourceType": comp_meta.get("sourceType"),
                     "factTable": comp_meta.get("factTable"),
                     "axis": comp_meta.get("axis"),
+                    "resultSchema": comp_meta.get("resultSchema"),
+                    "name": comp_meta.get("metric"),
+                    "formula": comp_meta.get("expression"),
                 }
                 semantic_context = dict(state["semantic_context"])
                 semantic_context["metricResolution"] = metric_resolution
@@ -2358,6 +2459,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         )
         payload["taskChecks"] = task_checks
         payload["taskComplianceScore"] = task_score
+        payload["taskReason"] = task_reason
         payload["checks"] = [*payload.get("checks", []), *task_checks]
         if not task_ok:
             period_comparison = (state.get("task", {}).get("timeConstraint") or {}).get("kind") == "current_vs_previous_month"
@@ -2376,6 +2478,10 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                     "suggestion": "系统会先自动修正查询；达到重试上限后，可重新发起问题。",
                 },
             }
+        from app.agent.query_requirements import bound_result_schema
+        payload["resultSchema"] = bound_result_schema(
+            state["sql"], state.get("task", {}), state["semantic_context"]
+        )
         if deps.explain_sql is not None:
             cost_check = deps.explain_sql(state["sql"], state["source_id"])
             cost_payload = asdict(cost_check)
@@ -2412,6 +2518,11 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         result = deps.execute_sql(state["sql"], state["source_id"])
         payload = asdict(result)
         if result.ok:
+            if (state.get("task") or {}).get("groupBy"):
+                from app.agent.query_requirements import validate_result
+                missing = validate_result(state["sql"], state["task"], state.get("semantic_context") or {}, payload)
+                if missing:
+                    return {"execution": payload, "error": {"code": "RESULT_CONSTRAINT_MISMATCH", "message": "；".join(missing), "userSafeMessage": "；".join(missing), "retryable": True}}
             return {"execution": payload, "error": None}
         lowered = (result.error or "").lower()
         retryable = any(term in lowered for term in ("unknown column", "不存在", "syntax", "语法", "column"))
@@ -2477,7 +2588,9 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         try:
             conclusion = deps.generate_text(state, "result.explain", system, user)
             confidence = _confidence_assessment(state)
-            resolution = state.get("metric_resolution") or {}
+            resolution = dict(state.get("metric_resolution") or {})
+            if not resolution.get("resultSchema") and (state.get("validation") or {}).get("resultSchema"):
+                resolution["resultSchema"] = state["validation"]["resultSchema"]
             disclosure = ""
             if resolution.get("source") == "agent_inferred":
                 assumptions = "；".join(resolution.get("assumptions") or []) or "未提供额外业务约束"
@@ -2514,7 +2627,9 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             # 结论撰写失败不应让整次分析殉葬：只要数据已取回，就回退到确定性列表，而不是终止。
             if code == "RESULT_EXPLANATION_FAILED":
                 fallback = _fallback_conclusion(state, execution)
-                resolution = state.get("metric_resolution") or {}
+                resolution = dict(state.get("metric_resolution") or {})
+                if not resolution.get("resultSchema") and (state.get("validation") or {}).get("resultSchema"):
+                    resolution["resultSchema"] = state["validation"]["resultSchema"]
                 try:
                     interpretation = build_interpretation(
                         state.get("task") or {},
@@ -2545,6 +2660,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                 "conclusion": state.get("conclusion", ""),
                 "confidence": state.get("confidence", {}),
                 "metricResolution": state.get("metric_resolution", {}),
+                "interpretation": state.get("interpretation", {}),
             }
         )
         return {"task_results": results, "task_index": state.get("task_index", 0) + 1}
@@ -2576,6 +2692,9 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         if capability in {"analysis.query_data", "modeling.propose"}:
             return "activate_task"
         return "invoke_business_capability"
+
+    def after_activation(state: AnalysisState) -> str:
+        return "reuse_presentation" if (state.get("task") or {}).get("presentationReuse") else "retrieve_memory"
 
     def after_context(state: AnalysisState) -> str:
         if state.get("error"):
@@ -2626,7 +2745,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         return "finalize_business_plan"
 
     def after_advance(state: AnalysisState) -> str:
-        return "activate_task" if state.get("task_index", 0) < len(state.get("tasks", [])) else END
+        return "activate_task" if state.get("task_index", 0) < len(state.get("tasks", [])) else "finalize_business_plan"
 
     graph = StateGraph(AnalysisState)
     graph.add_node("route_request", route_request)
@@ -2645,6 +2764,7 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
     graph.add_node("finalize_business_plan", finalize_business_plan)
     graph.add_node("plan_tasks", plan_tasks)
     graph.add_node("activate_task", activate_task)
+    graph.add_node("reuse_presentation", reuse_presentation)
     graph.add_node("retrieve_memory", retrieve_memory)
     graph.add_node("retrieve_skill", retrieve_skill)
     graph.add_node("retrieve_context", retrieve_context)
@@ -2671,7 +2791,8 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
     graph.add_edge("revise_business_plan", "select_business_step")
     graph.add_edge("finalize_business_plan", END)
     graph.add_edge("plan_tasks", "activate_task")
-    graph.add_edge("activate_task", "retrieve_memory")
+    graph.add_conditional_edges("activate_task", after_activation)
+    graph.add_edge("reuse_presentation", "advance_task")
     graph.add_edge("retrieve_memory", "retrieve_skill")
     graph.add_edge("retrieve_skill", "retrieve_context")
     graph.add_conditional_edges("retrieve_context", after_context)

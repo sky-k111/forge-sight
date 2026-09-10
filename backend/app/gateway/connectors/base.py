@@ -116,6 +116,7 @@ class DatabaseAdapter(Protocol):
     def quote_identifier(self, value: str) -> str: ...
     def qualify_table(self, ref: PhysicalTableRef) -> str: ...
     def apply_row_limit(self, sql: str, limit: int) -> str: ...
+    def render_time_bucket(self, field_expression: str, grain: str) -> str | None: ...
     def explain_statement(self, sql: str) -> str | None: ...
     def dialect_prompt(self) -> str: ...
 
@@ -179,6 +180,42 @@ class BaseRelationalAdapter:
             if isinstance(value, exp.Literal) and value.is_int and int(value.this) <= int(limit):
                 return expression.sql(dialect=self.sqlglot_dialect)
         return expression.limit(int(limit)).sql(dialect=self.sqlglot_dialect)
+
+    def render_time_bucket(self, field_expression: str, grain: str) -> str | None:
+        """Render a portable time bucket owned by the connector, not the agent.
+
+        A new database adapter can override this method without changing the
+        query compiler.  Returning ``None`` deliberately sends the long tail to
+        the governed LLM SQL path instead of silently using the wrong grain.
+        """
+        normalized = {
+            "年": "year", "月": "month", "月份": "month", "季": "quarter", "季度": "quarter",
+            "周": "week", "星期": "week", "日": "day", "天": "day",
+        }.get(str(grain or "").lower(), str(grain or "day").lower())
+        if normalized not in {"year", "month", "quarter", "week", "day"}:
+            return None
+        dialect = self.sqlglot_dialect
+        if dialect == "mysql":
+            formats = {"year": "%Y", "month": "%Y-%m", "week": "%x-%v", "day": "%Y-%m-%d"}
+            if normalized == "quarter":
+                return f"CONCAT(DATE_FORMAT({field_expression}, '%Y'), '-Q', QUARTER({field_expression}))"
+            return f"DATE_FORMAT({field_expression}, '{formats[normalized]}')"
+        if dialect == "postgres":
+            return f"DATE_TRUNC('{normalized}', {field_expression})"
+        if dialect == "tsql":
+            if normalized == "year":
+                return f"DATEFROMPARTS(YEAR({field_expression}), 1, 1)"
+            if normalized == "month":
+                return f"DATEFROMPARTS(YEAR({field_expression}), MONTH({field_expression}), 1)"
+            if normalized == "quarter":
+                return f"DATEADD(quarter, DATEDIFF(quarter, 0, {field_expression}), 0)"
+            if normalized == "week":
+                return f"DATEADD(week, DATEDIFF(week, 0, {field_expression}), 0)"
+            return f"CAST({field_expression} AS date)"
+        if dialect == "oracle":
+            units = {"year": "YYYY", "month": "MM", "quarter": "Q", "week": "IW"}
+            return f"TRUNC({field_expression}{', ' + repr(units[normalized]) if normalized != 'day' else ''})"
+        return f"CAST({field_expression} AS DATE)" if normalized == "day" else None
 
     def explain_statement(self, sql: str) -> str | None:
         return None

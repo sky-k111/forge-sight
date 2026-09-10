@@ -142,6 +142,14 @@ beforeEach(() => {
     vi.fn((url, options) => {
       const u = String(url);
       const method = options?.method ?? "GET";
+      if (u.endsWith("/api/analysis/sessions") && method === "POST") {
+        return okJson({
+          id: "ses-created",
+          title: "未命名分析",
+          sourceId: 1,
+          sourceName: "华东制造数据底座",
+        });
+      }
       if (u.includes("/api/analysis/sessions?") && method === "GET") {
         return okJson([
           {

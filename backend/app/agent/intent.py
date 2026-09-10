@@ -350,6 +350,9 @@ _WRITE_TERMS = (
 def has_write_intent(text: str) -> bool:
     """是否包含明确的写/删意图（如“删除某记录”“更新指标”）。"""
     low = str(text or "").lower()
+    # Presentation/analysis edits are not database mutations. Explicit SQL and
+    # record/table writes still go through the read-only safety gate.
+    low = re.sub(r"(?:修改|更新|调整|改成|改为)(?:一下)?(?:分析)?(?:时间范围|时间|条件|分组|维度|图表|展示方式|柱状图|折线图)", "", low)
     return any(term in low for term in _WRITE_TERMS)
 
 

@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import time
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -27,9 +28,12 @@ from app.agent.ids import new_id
 from app.agent.intent import (
     _has_analysis_verb,
     _has_business_analysis_signal,
+    _is_turn_switch,
+    _requested_chart,
     build_request_route,
     should_downgrade_to_conversation,
 )
+from app.agent.dialogue import has_previous_result as _has_previous_result
 from app.agent.llm_intent import resolve_intent
 from app.config import settings
 from app.db.models import (
@@ -65,6 +69,14 @@ CHAT_REPORT_TYPE_OPTIONS = (
 
 TERMINAL_STATUSES = {"succeeded", "failed", "blocked", "cancelled"}
 
+# Monotonic timestamps are process-local and must never be trusted after a
+# durable checkpoint is resumed.  The active invocation context overrides the
+# serialized state while graph-only unit tests can still use state values.
+_ACTIVE_RUNTIME: ContextVar[tuple[str, float, float] | None] = ContextVar(
+    "agent_active_runtime",
+    default=None,
+)
+
 NODE_META = {
     "route_request": ("intent.route", 0, "判断问题类型"),
     "system_utility": ("system.utility", 1, "读取系统与数据范围"),
@@ -81,6 +93,7 @@ NODE_META = {
     "revise_business_plan": ("planner.revise", 10, "有限调整业务计划"),
     "finalize_business_plan": ("planner.finalize", 11, "汇总计划结果与限制"),
     "plan_tasks": ("intent.parse", 2, "理解并拆解业务问题"),
+    "reuse_presentation": ("result.reuse_presentation", 7, "复用结果并调整展示"),
     "retrieve_memory": ("memory.retrieve", 3, "召回相关记忆"),
     "retrieve_skill": ("skill.retrieve", 3, "匹配分析技能"),
     "retrieve_context": ("context.retrieve", 4, "定位数据资源"),
@@ -95,7 +108,7 @@ NODE_META = {
 CHECKPOINT_NODES = {
     "build_business_plan", "validate_business_plan", "record_business_observation",
     "record_delegated_observation", "revise_business_plan", "finalize_business_plan",
-    "plan_tasks", "retrieve_context", "validate_query", "execute_query", "explain_result",
+    "plan_tasks", "reuse_presentation", "retrieve_context", "validate_query", "execute_query", "explain_result",
 }
 PLANNER_LOOP_NODES = {
     "select_business_step", "authorize_capability", "invoke_business_capability",
@@ -119,6 +132,10 @@ def _extract_previous_task(session: Any, run: Any) -> dict[str, Any] | None:
         )
         if not prev_run:
             return None
+        previous_message = session.query(AnalysisMessage).filter_by(run_id=prev_run.id, role="assistant").order_by(AnalysisMessage.sequence_no.desc()).first()
+        snapshot = (previous_message.metadata_json or {}).get("analysisContext") if previous_message else None
+        if snapshot and snapshot.get("sourceId") == run.source_id:
+            return {**(snapshot.get("task") or {}), "analysisContext": snapshot}
         tasks = (
             session.query(AnalysisTask)
             .filter_by(run_id=prev_run.id)
@@ -187,6 +204,16 @@ def _tracked_generate(state: dict, step_key: str, system: str, user: str) -> str
     previous_call_id: str | None = None
     last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
+        active_runtime = _ACTIVE_RUNTIME.get()
+        if active_runtime and active_runtime[0] == state.get("run_id"):
+            _, runtime_started, runtime_limit = active_runtime
+        else:
+            runtime_started = float(state.get("runtime_started_monotonic") or 0)
+            runtime_limit = float(state.get("runtime_duration_limit") or 0)
+        elapsed = time.monotonic() - runtime_started if runtime_started else 0.0
+        remaining = runtime_limit - elapsed if runtime_limit > 0 else None
+        if remaining is not None and remaining <= 0:
+            raise BudgetExceeded("max_duration_seconds", elapsed, runtime_limit)
         retry_of = previous_call_id or (
             _latest_call_id(state["run_id"], task_id, step_key) if state.get("retry_count") else None
         )
@@ -205,6 +232,10 @@ def _tracked_generate(state: dict, step_key: str, system: str, user: str) -> str
                 user,
                 temperature=0.1,
                 max_tokens=max_tokens,
+                timeout_seconds=min(float(settings.llm_timeout_seconds), remaining) if remaining is not None else None,
+                **({"structured": True} if step_key in {
+                    "intent.parse", "intent.repair", "planner.build", "planner.evaluate", "visual.contract"
+                } else {}),
             )
         except Exception as exc:  # noqa: BLE001
             usage.finish_call(
@@ -216,7 +247,11 @@ def _tracked_generate(state: dict, step_key: str, system: str, user: str) -> str
             previous_call_id = call_id
             last_error = exc
             if attempt < max_attempts and _llm_error_is_transient(exc):
-                time.sleep(base_delay * attempt)
+                delay = base_delay * attempt
+                if remaining is not None:
+                    delay = min(delay, max(0.0, remaining))
+                if delay:
+                    time.sleep(delay)
                 continue
             raise
         u = response.usage
@@ -369,6 +404,10 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
             if row:
                 row.status = "succeeded"
                 row.finished_at = datetime.now()
+                row.intent_json = {**(row.intent_json or {}), **{key: task.get(key) for key in (
+                    "groupBy", "timeConstraint", "metricHint", "filters", "sort", "topN",
+                    "relation", "operation", "understanding", "inheritedFrom", "queryBinding",
+                )}}
             append_event(
                 session,
                 run,
@@ -585,6 +624,7 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
                 "revision": update.get("plan_revision"),
                 "replanCount": update.get("replan_count"),
             }),
+            "finalize_business_plan": ("delivery-ledger", update.get("delivery")),
             "retrieve_memory": ("memory-context", update.get("memory_context")),
             "retrieve_skill": ("analysis-skill", update.get("skill_context")),
             "retrieve_context": ("context", update.get("semantic_context")),
@@ -609,7 +649,9 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
         }
         if node in artifact_map and artifact_map[node][1] is not None:
             artifact_id = _artifact(session, run, task_id, *artifact_map[node])
-        if node == "explain_result" and update.get("interpretation"):
+        if node == "retrieve_context" and (update.get("task") or {}).get("queryBinding"):
+            _artifact(session, run, task_id, "query-binding", update["task"]["queryBinding"])
+        if node in {"explain_result", "reuse_presentation"} and update.get("interpretation"):
             _artifact(session, run, task_id, "interpretation", update.get("interpretation"))
         if node == "retrieve_skill":
             from app.skills.service import record_usage
@@ -852,8 +894,11 @@ def _finish_run(run_id: str, state: dict) -> None:
                 f"{index + 1}. {text}" if len(conclusions) > 1 else text
                 for index, text in enumerate(conclusions)
             ) or state.get("conclusion", "")
+            from app.agent.request_context import successful_snapshot
+            analysis_snapshot = successful_snapshot(state)
+            understanding = " · ".join((state.get("agent_intent") or {}).get("understanding") or [])
             content = "\n\n".join(
-                part for part in (state.get("direct_response", ""), analysis_content) if part
+                part for part in (state.get("direct_response", ""), understanding, analysis_content) if part
             ) or "分析完成"
             session.add(
                 AnalysisMessage(
@@ -863,6 +908,7 @@ def _finish_run(run_id: str, state: dict) -> None:
                     role="assistant",
                     content=content,
                     sequence_no=sequence_no,
+                    metadata_json={"analysisContext": analysis_snapshot} if analysis_snapshot else {},
                 )
             )
         if run.status != "succeeded":
@@ -1186,6 +1232,40 @@ def execute_inline_route(run_id: str) -> dict:
         labels,
         context,
     )
+
+    # 多轮追问继承：极简的视角切换/下钻（“拆开来”“按产线看”“按周”“再看下排名”这类承前省略），
+    # 在上一轮已有分析结果时，应作为新一轮查询继续分析——由 worker 里的 _rewrite_followup_question
+    # 继承上一轮指标/时间并补全维度，而不是给一句“我这就去查”的对话承诺就收尾。
+    # 仅当确实承前省略、且当前句无独立业务指标时才触发，避免覆盖真正的闲聊。
+    if (
+        _has_previous_result(context)
+        and _is_turn_switch(state["user_question"])
+        and not _has_business_analysis_signal(state["user_question"])
+        and _requested_chart(state["user_question"]) is None
+    ):
+        with PlatformSession() as session:
+            run = session.query(AnalysisRun).filter_by(id=run_id).with_for_update().one()
+            if run.status in TERMINAL_STATUSES or run.lease_owner != "inline-conversation":
+                return {"runId": run.id, "status": run.status}
+            message = session.query(AnalysisMessage).filter_by(id=run.trigger_message_id).one()
+            metadata = dict(message.metadata_json or {})
+            metadata["routeLabels"] = {str(seg.get("index")): "analysis" for seg in routed["segments"]}
+            message.metadata_json = metadata
+            run.status = "queued"
+            run.started_at = None
+            run.current_step_key = None
+            run.lease_owner = None
+            run.lease_expires_at = None
+            append_event(
+                session,
+                run,
+                "run.routed",
+                {"status": "queued", "kind": "analysis", "reason": "followup_refinement"},
+                step_key="intent.route",
+            )
+            session.commit()
+        return {"runId": run_id, "status": "queued"}
+
     # 安全网：模型/规则把「明显非业务问句」判成分析时，直接按对话收尾，避免跑空 SQL。
     # 例如“5月有多少天”“比较苹果安卓哪个好”“世界上有多少个国家”——无任何真实业务实体，
     # 也不该进入数据检索。判定遵循「LLM 决定语义、确定性只守安全边界」。
@@ -1263,6 +1343,8 @@ def execute_inline_route(run_id: str) -> dict:
 
 def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies | None = None) -> dict:
     """执行一个已入队 Run。Worker 和测试均通过此入口，避免两套执行逻辑。"""
+    active_started_at = time.monotonic()
+    _ACTIVE_RUNTIME.set((run_id, active_started_at, 0.0))
     graph = build_analysis_graph(dependencies or default_dependencies(), checkpointer=checkpointer)
     # 先探查是否已有 checkpoint（恢复场景），避免恢复时重新调用 LLM 意图解析。
     config = {"configurable": {"thread_id": run_id}}
@@ -1339,10 +1421,19 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
             {"status": "running", "interactionId": resolved_interaction.id if resolved_interaction else None},
         )
         frozen_access = (run.budget_snapshot_json or {}).get("access") or {}
+        duration_limit = float(
+            (run.budget_snapshot_json or {}).get("max_duration_seconds")
+            or settings.agent_max_duration_seconds
+        )
+        _ACTIVE_RUNTIME.set((run_id, active_started_at, duration_limit))
         previous_task = _extract_previous_task(session, run)
+        if previous_task and previous_task.get("analysisContext"):
+            conversation_context.append({"role": "system", "content": "上一轮成功分析条件", "analysisContext": previous_task["analysisContext"]})
         initial = {
             "session_id": run.session_id,
             "run_id": run.id,
+            "runtime_started_monotonic": active_started_at,
+            "runtime_duration_limit": duration_limit,
             "source_id": run.source_id,
             "tenant_id": frozen_access.get("tenantId") or (business_session.tenant_id if business_session else "tenant-default"),
             "role": frozen_access.get("role") or "business",
@@ -1367,6 +1458,7 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
             "retry_count": 0,
             "attempted_sqls": [],
             "tasks": [],
+            "request_requirements": [],
             "task_index": 0,
             "task_results": [],
             "previous_task": previous_task,
@@ -1405,7 +1497,8 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
         # 僵死事务挡住新 worker（配合 Postgres idle_in_transaction_session_timeout 兜底）。
         session.commit()
         # 写意图在意图解析之前拦截：删除/更新等写入问法不进 LLM，由 intent_guard 一键阻断。
-        has_write_terms = any(term in str(message.content or "").lower() for term in WRITE_TERMS)
+        from app.agent.intent import has_write_intent
+        has_write_terms = has_write_intent(message.content)
         if settings.agent_intent_enabled and not is_resume and not has_checkpoint and not has_write_terms:
             # AgentIntent 驱动：旁路产出 AgentIntent 注入 state，route/planner/编译层消费它。
             # 仅在有开关且非恢复时执行；任何失败都不影响主执行路径。
@@ -1416,8 +1509,11 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
                     conversation_context,
                     deps.generate_text,
                     run_id=run.id,
+                    state=initial,
                 )
                 initial["agent_intent"] = intent.model_dump(mode="json", by_alias=True)
+                from app.agent.delivery import build_requirement_ledger
+                initial["request_requirements"] = build_requirement_ledger(intent, message.content)
                 append_event(
                     session,
                     run,
@@ -1463,6 +1559,7 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
         state = dict(initial)
         stream_input = initial
     try:
+        deadline_exceeded = False
         for item in graph.stream(stream_input, config=config, stream_mode="updates"):
             for node, update in item.items():
                 if node == "__interrupt__":
@@ -1479,9 +1576,39 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
                 _persist_update(run_id, node, update, state)
                 _project_checkpoint(run_id, node, state, graph, config)
                 with PlatformSession() as session:
-                    current_status = session.query(AnalysisRun.status).filter_by(id=run_id).scalar()
+                    current_run = session.query(AnalysisRun).filter_by(id=run_id).first()
+                    current_status = current_run.status if current_run else None
+                    elapsed = time.monotonic() - active_started_at
+                    if duration_limit > 0 and elapsed >= duration_limit:
+                        state["error"] = {
+                            "code": "RUN_DEADLINE_EXCEEDED",
+                            "category": "budget",
+                            "retryable": False,
+                            "userSafeTitle": "分析已达到最长执行时间",
+                            "userSafeMessage": "本次分析已停止，已完成的步骤和证据仍会保留。请缩小范围后重试。",
+                            "usedSeconds": round(elapsed, 3),
+                            "limitSeconds": duration_limit,
+                        }
+                        if current_run is not None:
+                            append_event(
+                                session,
+                                current_run,
+                                "run.budget.exceeded",
+                                {
+                                    "errorCode": "RUN_DEADLINE_EXCEEDED",
+                                    "budgetType": "max_duration_seconds",
+                                    "used": elapsed,
+                                    "limit": duration_limit,
+                                },
+                            )
+                            session.commit()
+                        deadline_exceeded = True
                 if current_status == "cancelled":
                     return {"runId": run_id, "status": "cancelled", "state": state}
+                if deadline_exceeded:
+                    break
+            if deadline_exceeded:
+                break
         if is_resume:
             with PlatformSession() as session:
                 interaction = session.query(AnalysisInteraction).filter_by(id=resolved_interaction.id).first()

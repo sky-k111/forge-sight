@@ -112,6 +112,118 @@ def test_registry_exposes_business_capabilities_not_raw_sql_or_shell():
     assert "report.send" not in business_names
 
 
+def test_planner_path_checks_immutable_requirement_ledger_end_to_end():
+    intent = {
+        "kind": "analysis", "question": "比较良率，并统计逐周产量", "producer": "llm",
+        "stepsHint": [
+            {"kind": "analysis", "metrics": [{"semantic": "良率", "aggregation": "rate"}],
+             "dimensions": [{"semantic": "时间", "grain": "month"}],
+             "time": {"mode": "absolute", "start": "2026-06-01", "end": "2026-08-01"},
+             "chart": {"type": "bar"}},
+            {"kind": "analysis", "metrics": [{"semantic": "产量"}],
+             "dimensions": [{"semantic": "时间", "grain": "week"}],
+             "time": {"mode": "absolute", "start": "2026-06-01", "end": "2026-07-01"},
+             "chart": {"type": "line"}},
+        ],
+    }
+    context = {
+        "source": {"id": 1, "type": "mysql"},
+        "metrics": [
+            {"id": "yield", "name": "良率", "physicalFormula": "SUM(good_qty) / SUM(input_qty)",
+             "physicalTimeField": "stat_date", "sourceTables": ["fact"]},
+            {"id": "output", "name": "产量", "physicalFormula": "SUM(output_qty)",
+             "physicalTimeField": "stat_date", "sourceTables": ["fact"]},
+        ],
+        "tables": [{"name": "fact", "objectType": "fact", "fields": [
+            {"name": "stat_date", "semanticName": "日期"}, {"name": "good_qty"},
+            {"name": "input_qty"}, {"name": "output_qty"}]}],
+        "relations": [], "businessRules": [],
+        "executionPolicy": {"allowedTables": ["fact"]}, "coverage": {"status": "ready"},
+    }
+    from app.agent.intent_adapter import intent_to_tasks
+    from app.agent.intent_contract import AgentIntent
+    assert all((task.get("timeConstraint") or {}).get("periods") for task in intent_to_tasks(AgentIntent.model_validate(intent)))
+
+    def execute(sql, _source_id):
+        if "`周`" in sql:
+            return ExecutionResult(ok=True, columns=["周", "产量"], rows=[[202623, 100]], row_count=1)
+        return ExecutionResult(ok=True, columns=["月份", "良率"], rows=[["2026-06", 0.95]], row_count=1)
+
+    graph = build_analysis_graph(GraphDependencies(
+        retrieve_context=lambda *_: context,
+        generate_text=lambda _state, step, *_: "invalid" if step == "planner.build" else "分析完成。",
+        validate_sql=lambda _sql, _allowed: SqlCheckResult(ok=True, tables=["fact"], checks=["只读通过"]),
+        execute_sql=execute,
+    ), checkpointer=InMemorySaver())
+    result = graph.invoke({"session_id": "ses-ledger", "run_id": "run-ledger", "source_id": 1,
+        "user_question": intent["question"], "analysis_question": intent["question"],
+        "agent_intent": intent, "planner_enabled": True, "planner_model_enabled": False,
+        "retry_count": 0, "attempted_sqls": []},
+        config={"configurable": {"thread_id": "run-ledger"}})
+    assert result["execution_path"] == "planner"
+    assert all((step.get("arguments", {}).get("task", {}).get("timeConstraint") or {}).get("periods")
+               for step in result["plan"]["steps"] if step["capability"] == "analysis.query_data"), result["plan"]
+    assert (result.get("task") or {}).get("timeConstraint", {}).get("periods"), result.get("task")
+    assert (result.get("validation") or {}).get("taskComplianceScore") == 100, {
+        "reason": (result.get("validation") or {}).get("taskReason"), "sql": result.get("sql"), "task": result.get("task")}
+    assert not [item for item in result.get("observations", []) if item.get("status") == "failed"], result.get("observations")
+    assert result["delivery"]["complete"] is True, {"delivery": result["delivery"], "tasks": result.get("task_results"), "observations": result.get("observations")}
+    assert result["delivery"]["required"] == ["R1", "R1:chart", "R2", "R2:chart"]
+    assert result["error"] is None
+
+
+def test_presentation_only_followup_skips_database_query():
+    calls = {"retrieve": 0, "execute": 0}
+
+    def retrieve(*_args):
+        calls["retrieve"] += 1
+        return _context()
+
+    def execute(*_args):
+        calls["execute"] += 1
+        raise AssertionError("presentation-only follow-up must not execute SQL")
+
+    previous = {
+        "version": 2,
+        "runId": "run-old",
+        "sourceId": 1,
+        "results": [{
+            "resultId": "R2",
+            "sql": "SELECT month, SUM(output_qty) AS output_qty FROM fact GROUP BY month",
+            "task": {"title": "月度产量", "groupBy": ["月份"]},
+            "metricResolution": {"name": "产量", "source": "published"},
+            "agentIntent": {"kind": "analysis", "question": "月度产量", "metrics": [{"semantic": "产量"}]},
+            "interpretation": {"chart": {"type": "bar", "xKey": "month",
+                "bars": [{"key": "output_qty", "name": "产量"}],
+                "data": [{"month": "6月", "output_qty": 100}]}, "charts": []},
+        }],
+    }
+    intent = {
+        "kind": "analysis", "question": "把第二张改成折线图", "producer": "llm",
+        "relation": "refine_previous", "operation": "change_presentation",
+        "changedFields": ["chart"], "targetResultId": "R2", "chart": {"type": "line"},
+        "metrics": [{"semantic": "产量"}],
+    }
+    graph = build_analysis_graph(GraphDependencies(
+        retrieve_context=retrieve,
+        generate_text=lambda *_: "should not be called",
+        validate_sql=lambda *_: SqlCheckResult(ok=True, tables=[], checks=[]),
+        execute_sql=execute,
+    ), checkpointer=InMemorySaver())
+
+    result = graph.invoke({
+        "session_id": "ses-reuse", "run_id": "run-reuse", "source_id": 1,
+        "user_question": intent["question"], "analysis_question": intent["question"],
+        "agent_intent": intent, "previous_task": {"analysisContext": previous},
+        "planner_enabled": True, "retry_count": 0, "attempted_sqls": [],
+    }, config={"configurable": {"thread_id": "run-reuse"}})
+
+    assert calls == {"retrieve": 0, "execute": 0}
+    assert result["interpretation"]["chart"]["type"] == "line"
+    assert result["interpretation"]["presentationOnly"] is True
+    assert result["delivery"]["complete"] is True
+
+
 def test_capability_authorization_freezes_source_scope_and_requires_approval():
     registry = build_default_registry()
     executor = CapabilityExecutor(registry)

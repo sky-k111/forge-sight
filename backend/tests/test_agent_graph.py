@@ -1,6 +1,7 @@
 """阶段 5C 最小真实 LangGraph 与持久化投影。"""
 
 from copy import deepcopy
+import pytest
 
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -16,6 +17,17 @@ from app.db.models import AuditLog
 from app.gateway.cost_guard import ExplainCheckResult
 from app.gateway.executor import ExecutionResult
 from app.gateway.sql_validator import SqlCheckResult
+
+
+@pytest.fixture(autouse=True)
+def legacy_graph_contract(monkeypatch):
+    """This suite's SQL-only model doubles exercise the legacy opt-out path.
+
+    Unified parser behavior is covered in test_request_context and
+    test_agent_intent_driven with structured model responses.
+    """
+    from app.config import settings
+    monkeypatch.setattr(settings, "agent_intent_enabled", False)
 
 
 def _context():
@@ -450,7 +462,7 @@ def test_free_conversation_completes_inline_with_one_small_model_call(analysis_s
 
     model_calls = []
 
-    def fake_completion(system, user, *, temperature, max_tokens):
+    def fake_completion(system, user, *, temperature, max_tokens, **_options):
         model_calls.append((system, user, temperature, max_tokens))
         return LLMResponse(
             content=(
@@ -477,13 +489,51 @@ def test_free_conversation_completes_inline_with_one_small_model_call(analysis_s
     assert "ForgeSight" in model_calls[0][0]
 
 
+def test_active_runtime_replaces_stale_checkpoint_monotonic_deadline(monkeypatch):
+    """A resumed checkpoint may contain a monotonic value from an older process."""
+    import time
+    from app.llm.provider import LLMResponse, LLMUsage
+
+    captured = {}
+
+    def fake_completion(_system, _user, **options):
+        captured.update(options)
+        return LLMResponse(
+            content="ok",
+            model="test-runtime",
+            provider_request_id="req-runtime",
+            usage=LLMUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+        )
+
+    monkeypatch.setattr(runner.settings, "llm_retry_max_attempts", 1)
+    monkeypatch.setattr(runner.settings, "llm_timeout_seconds", 30)
+    monkeypatch.setattr(runner.provider, "chat_completion", fake_completion)
+    monkeypatch.setattr(runner.usage, "start_call", lambda *_args, **_kwargs: "call-runtime")
+    monkeypatch.setattr(runner.usage, "finish_call", lambda *_args, **_kwargs: None)
+    runner._ACTIVE_RUNTIME.set(("run-runtime", time.monotonic() - 2, 10.0))
+
+    result = runner._tracked_generate(
+        {
+            "run_id": "run-runtime",
+            "runtime_started_monotonic": time.monotonic() - 1000,
+            "runtime_duration_limit": 10,
+        },
+        "result.explain",
+        "system",
+        "user",
+    )
+
+    assert result == "ok"
+    assert 7.0 <= captured["timeout_seconds"] <= 8.1
+
+
 def test_unknown_business_request_is_preclassified_once_then_queued(analysis_session, monkeypatch):
     from app.llm.provider import LLMResponse, LLMUsage
 
     calls = []
     lease_windows = []
 
-    def fake_completion(system, user, *, temperature, max_tokens):
+    def fake_completion(system, user, *, temperature, max_tokens, **_options):
         calls.append((system, user, max_tokens))
         with analysis_session() as session:
             active = session.query(runner.AnalysisRun).filter_by(status="running").one()
@@ -512,7 +562,7 @@ def test_unknown_business_request_is_preclassified_once_then_queued(analysis_ses
 def test_router_understands_natural_report_request_without_report_keyword(analysis_session, monkeypatch):
     from app.llm.provider import LLMResponse, LLMUsage
 
-    def fake_completion(system, user, *, temperature, max_tokens):
+    def fake_completion(system, user, *, temperature, max_tokens, **_options):
         assert "report" in system.lower()
         return LLMResponse(
             content='{"segments":[{"index":0,"kind":"report","response":""}]}',
@@ -844,9 +894,10 @@ def test_runner_projects_steps_events_artifacts_and_message(analysis_session):
             "context.retrieve",
         "query.generate",
         "query.validate",
-        "query.execute",
-        "result.explain",
-    ]
+            "query.execute",
+            "result.explain",
+            "planner.finalize",
+        ]
     events = service.list_events(run_id)
     assert events[-1]["type"] == "run.completed"
     session_view = service.get_session(created["id"])

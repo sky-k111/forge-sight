@@ -229,6 +229,12 @@ def build_fallback_intent(
 # LLM 意图解析：唯一语义源（producer=llm）。失败即回退到 build_fallback_intent。
 # ---------------------------------------------------------------------------
 _INTENT_SYSTEM = (
+    "多轮请求必须声明 relation(new/refine_previous/retry_previous)、operation(query/add_dimension/replace_dimension/remove_dimension/change_presentation/replace_filter/retry)、changedFields。"
+    "若 previousAnalysis.results 有多个结果，追问必须用 targetResultId 指向结果 ID；用户没有明确指向时返回 clarify，不能自行选择。"
+    "changedFields 只列用户本轮明确修改的字段；未提及的字段由代码继承，不自行重写。"
+    "按车间拆开/再按车间表示 add_dimension，保留原时间维度；不要按月改为按车间表示 replace_dimension。"
+    "换成柱状图表示 change_presentation，changedFields=[chart]。二车间呢表示 replace_filter，filters=[{field:车间,operator:eq,value:二车间}]。"
+    "有 previousAnalysis 时，省略指标的追问也属于 analysis。歧义需 clarify。"
     "你是 ForgeSight 制造业数据分析 Agent 的唯一意图解析器。把用户的问题（含多轮上下文）"
     "理解成一个 JSON 对象，严格符合给定 schema。只输出 JSON，不要输出任何解释或思维链。\n"
     "字段与取值：\n"
@@ -251,6 +257,10 @@ _INTENT_SYSTEM = (
     "- confidence: 0~1 理解把握\n"
     "- reasons: 简短数组，说明为什么这样理解（供审计）\n"
     "- stepsHint: 若问题是复合/多步，数组，每项含 kind/metrics/dimensions/time/chart/comparison\n"
+    "- targetResultId: 多结果追问所指向的 previousAnalysis.results[].resultId；新问题留空\n"
+    "时间基准规则：用户说今天/本周/本月/上周/上个月等自然日历时间，且没有明确说‘截至最新数据’时，"
+    "reference 必须是 now；只有用户明确要求按数据最新日期、数据截至日期计算时才用 data_horizon。"
+    "用户给出明确 ISO 起止日期时用 absolute，必须原样保留 start/end。\n"
     "判定边界（重要）：\n"
     "- 只有当用户明确要查询/对比企业生产、质量、设备、库存等业务数据，且问题里带真实业务指标或维度"
     "（产量/良率/不良/产线/工序/设备/库存/工单/物料/合格/缺陷/停机/报警/产能…）时，kind 才取 analysis。\n"
@@ -271,7 +281,8 @@ def _user_prompt(question: str, conversation_context: list[dict[str, str]] | Non
         if role and content:
             recent.append(f"{role}: {content}")
     return json.dumps(
-        {"question": question, "context": recent},
+        {"question": question, "context": recent, "schema": AgentIntent.model_json_schema(),
+         "previousAnalysis": next((item.get("analysisContext") for item in reversed(conversation_context or []) if item.get("analysisContext")), None)},
         ensure_ascii=False,
     )
 
@@ -290,10 +301,28 @@ def resolve_intent(
             st = dict(state or {})
             st.setdefault("run_id", run_id)
             raw = generate_text(st, "intent.parse", _INTENT_SYSTEM, _user_prompt(question, conversation_context))
-            intent = AgentIntent.model_validate(_extract_json(raw))
-            return intent.model_copy(update={"producer": "llm", "question": question}), "llm", None
+            try:
+                intent = AgentIntent.model_validate(_extract_json(raw))
+            except (ValueError, TypeError) as parse_error:
+                raw = generate_text(st, "intent.repair", _INTENT_SYSTEM,
+                                    _user_prompt(question, conversation_context) +
+                                    "\n修复以下输出，只更正格式，不改变需求：" + raw[:8000] +
+                                    "\n校验错误：" + str(parse_error)[:3000] +
+                                    "\nSchema：" + json.dumps(AgentIntent.model_json_schema(), ensure_ascii=False))
+                intent = AgentIntent.model_validate(_extract_json(raw))
+            from app.agent.request_context import merge_intent
+            previous = next((item.get("analysisContext") for item in reversed(conversation_context or []) if item.get("analysisContext")), None)
+            intent = merge_intent(intent, previous)
+            return intent.model_copy(update={"producer": "llm", "question": question, "failure": None}), "llm", None
         except Exception as exc:  # noqa: BLE001 - 非法/失败必须安全降级
-            fallback = build_fallback_intent(question, conversation_context)
-            return fallback.model_copy(update={"producer": "fallback"}), "fallback", type(exc).__name__
+            format_error = isinstance(exc, (ValueError, TypeError))
+            failure = {
+                "code": "INTENT_OUTPUT_INVALID" if format_error else "INTENT_SERVICE_UNAVAILABLE",
+                "retryable": True,
+                "userSafeMessage": "分析服务返回的格式未通过校验，请重试。" if format_error else "分析服务暂时不可用，请稍后重试。",
+            }
+            fallback = AgentIntent(kind=IntentKind.CLARIFY, question=question, producer="fallback",
+                failure=failure, reasons=["意图解析未完成"])
+            return fallback, "fallback", type(exc).__name__
     fallback = build_fallback_intent(question, conversation_context)
     return fallback, "fallback", None

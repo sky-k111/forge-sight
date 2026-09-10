@@ -361,6 +361,16 @@ export function adaptAnalysisRun(snapshot) {
   const fallbackKpis = buildBusinessKpis(execution, chart);
   const kpis = lastInterpKpis?.length ? lastInterpKpis : fallbackKpis;
   const validation = [...artifacts].reverse().find((item) => item.type === "validation")?.content ?? {};
+  const rawDelivery = snapshot.delivery
+    ?? [...artifacts].reverse().find((item) => item.type === "delivery-ledger")?.content
+    ?? null;
+  const delivery = rawDelivery ? {
+    ...rawDelivery,
+    items: (rawDelivery.requirements ?? []).map((item) => ({
+      ...item,
+      status: (rawDelivery.delivered ?? []).includes(item.id) ? "delivered" : "missing",
+    })),
+  } : null;
   const rowCount = execution.row_count ?? execution.rowCount ?? 0;
   const conversationOnly = snapshot.status === "succeeded"
     && (snapshot.tasks?.length ?? 0) === 0
@@ -430,6 +440,7 @@ export function adaptAnalysisRun(snapshot) {
       allowCustom: interactionPrompt.allowCustom,
     } : null,
     error: businessError,
+    delivery,
     plan,
     planDetails,
     planner: {

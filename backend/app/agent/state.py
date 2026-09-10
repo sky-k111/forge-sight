@@ -4,6 +4,8 @@ from typing import Any, TypedDict
 
 
 class AnalysisState(TypedDict, total=False):
+    runtime_started_monotonic: float
+    runtime_duration_limit: float
     session_id: str
     run_id: str
     source_id: int
@@ -30,6 +32,7 @@ class AnalysisState(TypedDict, total=False):
     retry_count: int
     attempted_sqls: list[str]
     tasks: list[dict[str, Any]]
+    request_requirements: list[dict[str, Any]]
     task_index: int
     task: dict[str, Any]
     task_results: list[dict[str, Any]]
@@ -63,6 +66,7 @@ class AnalysisState(TypedDict, total=False):
     pending_approval: dict[str, Any] | None
     progress_decision: dict[str, Any]
     finalization_reason: str | None
+    delivery: dict[str, Any]
     planner_degraded: bool
     error: dict[str, Any] | None
 

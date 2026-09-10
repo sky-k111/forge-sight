@@ -619,18 +619,23 @@ def decide_charts(
     truncated: bool,
     metric_key: str | None = None,
     axis_hint: dict[str, Any] | None = None,
+    result_schema: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """图表契约：多维/热力图场景可产出多张图；否则回退到单图 decide_chart。"""
     values = _value_columns(columns, rows) or _numeric_columns(columns, rows)
     dims = _dimension_columns(columns, rows)
+    if result_schema:
+        values = [f["key"] for f in result_schema if f.get("role") == "measure" and f["key"] in columns]
+        dims = [f["key"] for f in result_schema if f.get("role") in {"time", "dimension"} and f["key"] in columns]
     want_heat = requested_chart in ("heatmap", "matrix") or any(k in question for k in _HEATMAP_INDEXED)
     if want_heat and len(dims) >= 2 and values:
         vkey = metric_key or _pick_value_column(values, metric_name, question, False) or values[0]
         return [_build_heatmap(dims[0], dims[1], vkey, columns, rows, row_count, truncated)]
     if len(values) == 1 and len(dims) >= 2:
         vkey = metric_key or values[0]
-        time_dims = [d for d in dims if _TIME_DIM_RE.match(str(d))]
-        if _MULTI_GROUP_RE.search(str(question)):
+        time_dims = ([f["key"] for f in result_schema if f.get("role") == "time" and f["key"] in dims]
+                     if result_schema else [d for d in dims if _TIME_DIM_RE.match(str(d))])
+        if not result_schema and _MULTI_GROUP_RE.search(str(question)):
             charts: list[dict[str, Any]] = []
             for d in dims:
                 others = [x for x in dims if x != d]
@@ -733,6 +738,7 @@ def build_interpretation(
         truncated=truncated,
         metric_key=(metric.get("chartValueKey") or None),
         axis_hint=axis_hint,
+        result_schema=metric.get("resultSchema"),
     )
     chart = charts[0] if charts else None
     return {

@@ -229,7 +229,8 @@ def create_run(
         ):
             request_kind = "conversation"
         report_request = is_report_request(normalized_question)
-        inline_conversation = request_kind in {"conversation", "utility", "unknown"}
+        # With unified intent enabled all entries are parsed once by the worker.
+        inline_conversation = (not settings.agent_intent_enabled) and request_kind in {"conversation", "utility", "unknown"}
         sequence_no = (
             session.query(func.coalesce(func.max(AnalysisMessage.sequence_no), 0))
             .filter_by(session_id=session_id)
@@ -398,6 +399,8 @@ def get_run(run_id: str) -> dict:
             None,
         )
         result["artifacts"] = [_artifact_dict(item) for item in artifacts]
+        delivery_artifact = next((item for item in reversed(artifacts) if item.type == "delivery-ledger"), None)
+        result["delivery"] = delivery_artifact.content_json if delivery_artifact else None
         base_plan_artifact = next((item for item in reversed(artifacts) if item.type == "agent-plan"), None)
         plan_artifact = next(
             (item for item in reversed(artifacts) if item.type in {"agent-plan", "agent-plan-revision"}),

@@ -899,8 +899,11 @@ function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClari
   const openEvidence = hasEvidence ? () => onOpenEvidence(run) : null;
   if (run.status === "blocked") return <BlockedCard error={run.error} onOpenEvidence={openEvidence} />;
   if (run.status === "clarifying" && run.clarification) return <ClarifyCard clarification={run.clarification} onSelect={onClarify} submitting={clarifySubmitting} error={clarifyError} />;
+  if (run.status === "failed" && run.error?.code === "PARTIAL_DELIVERY" && run.delivery?.delivered?.length) {
+    return <AnalysisResult run={run} onOpenEvidence={openEvidence} onFollowUp={onFollowUp} />;
+  }
   if (run.status === "failed" || run.status === "cancelled") return <FailedRunCard run={run} onOpenEvidence={openEvidence} />;
-  if (run.status === "modeling-proposal" && run.proposal) return <ModelingProposalCard proposal={run.proposal} runId={run.id} onOpenModeling={onOpenModeling} />;
+  if (run.status === "modeling-proposal" && run.proposal) return <ModelingProposalCard proposal={run.proposal} delivery={run.delivery} runId={run.id} onOpenModeling={onOpenModeling} />;
   // 澄清/建模提案在缺少 interaction/proposal 数据（如占位快照或异常快照）时按“运行中”兜底，避免空数据卡片抛错。
   if (["queued", "running", "retrying", "clarifying", "modeling-proposal"].includes(run.status)) {
     const livePlan = run.plan?.length ? run.plan : [{ id: "accepted", label: "正在理解业务问题", caption: "任务已进入可靠执行队列" }];
@@ -1116,7 +1119,7 @@ function FailedRunCard({ run, onOpenEvidence }) {
   );
 }
 
-function ModelingProposalCard({ proposal, runId, onOpenModeling }) {
+function ModelingProposalCard({ proposal, delivery, runId, onOpenModeling }) {
   const [confirmed, setConfirmed] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [createError, setCreateError] = useState(null);
@@ -1161,6 +1164,7 @@ function ModelingProposalCard({ proposal, runId, onOpenModeling }) {
       </div>
       <div className="px-4 py-3.5">
         <p className="text-body leading-relaxed text-ink">{reusableModel ? <>已发现同一数据源中用途相近的<strong className="font-semibold">已发布模型</strong>，优先复用可以避免重复训练。</> : <>我将这个问题识别为<strong className="font-semibold">{proposal.taskTypeLabel || proposal.taskType}</strong>任务。系统会先形成可复核方案，不会在你不知情的情况下直接训练。</>}</p>
+        {delivery && <DeliveryLedger delivery={delivery} />}
         <div className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-card border border-line bg-line sm:grid-cols-4">
           {reusableModel ? <>
             <ProposalField label="生产模型" value={reusableModel.name} />
@@ -1353,6 +1357,7 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
   const confidence = run.conclusion?.confidence;
   const metricResolution = run.conclusion?.metricResolution;
   const inferredMetric = metricResolution?.source === "agent_inferred";
+  const partialDelivery = run.status === "failed" && run.error?.code === "PARTIAL_DELIVERY";
   const emptyResult = Number(run.execution.rowCount ?? 0) === 0;
   const copySql = async () => {
     if (!sqlCode) return;
@@ -1391,12 +1396,24 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
       <header className="border-b border-line px-5 py-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-tag bg-green/10 text-green"><Icon name="check" size={15} strokeWidth={2.2} /></span>
-            <div><span className="block text-[10px] font-semibold tracking-wide text-faint">分析完成</span><h3 className="mt-0.5 text-body font-semibold text-ink">分析结果</h3></div>
+            <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-tag", partialDelivery ? "bg-amber/10 text-amber" : "bg-green/10 text-green")}><Icon name={partialDelivery ? "warning" : "check"} size={15} strokeWidth={2.2} /></span>
+            <div><span className="block text-[10px] font-semibold tracking-wide text-faint">{partialDelivery ? "部分交付" : "分析完成"}</span><h3 className="mt-0.5 text-body font-semibold text-ink">{partialDelivery ? "已完成的分析结果" : "分析结果"}</h3></div>
           </div>
           <span className="text-[11px] text-faint">{emptyResult ? "当前范围无记录" : `${run.execution.rowCount} 条记录`} · 分析用时 {formatDuration(analysisDuration)}</span>
         </div>
         <p className="mt-3 max-w-[720px] break-words text-body leading-relaxed text-ink-2">{run.conclusion.text}</p>
+        {partialDelivery && (
+          <div className="mt-3 flex items-start gap-2 rounded-control border border-amber/30 bg-amber-soft px-3 py-2.5 text-xs leading-relaxed text-amber" role="status">
+            <Icon name="alert" size={14} className="mt-0.5 shrink-0" />
+            <span>原请求没有全部完成；下方仅展示已校验的结果，未交付项不会被冒充为成功。</span>
+          </div>
+        )}
+        {run.tasks?.some((task) => task.intent?.understanding?.length) && (
+          <div className="mt-3 rounded-control border border-primary/20 bg-primary-soft px-3 py-2 text-xs text-primary" aria-label="本轮分析条件">
+            {[...new Set(run.tasks.flatMap((task) => task.intent?.understanding ?? []))].map((text) => <p key={text}>{text}</p>)}
+          </div>
+        )}
+        {run.delivery && <DeliveryLedger delivery={run.delivery} />}
         {emptyResult && (
           <div className="mt-3 flex items-start gap-2 rounded-control border border-amber/25 bg-amber-soft px-3 py-2.5 text-xs leading-relaxed text-amber">
             <Icon name="help" size={14} className="mt-0.5 shrink-0" />
@@ -1421,7 +1438,7 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
                     ? "bg-amber/10 text-amber"
                     : "bg-red/10 text-red",
               )}>
-                {emptyResult ? "空结果已验证" : confidence.label} · {confidence.score}%
+                {emptyResult ? "空结果已验证" : "分析质量检查"}
               </span>
               <strong className="text-xs font-semibold text-ink">
                 {inferredMetric ? "Agent 临时推导口径" : "企业已发布口径"}
@@ -1567,6 +1584,42 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
         <button type="button" onClick={onOpenEvidence} className="shrink-0 cursor-pointer font-semibold text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25">查看证据链</button>
       </footer>
     </article>
+  );
+}
+
+function DeliveryLedger({ delivery }) {
+  const items = delivery.items ?? [];
+  const complete = Boolean(delivery.complete);
+  return (
+    <section
+      className={cn(
+        "mt-3 rounded-control border px-3.5 py-3",
+        complete ? "border-green/25 bg-green/5" : "border-amber/30 bg-amber/5",
+      )}
+      aria-label="本次交付检查"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className={cn("grid h-5 w-5 place-items-center rounded-full", complete ? "bg-green/10 text-green" : "bg-amber/10 text-amber")}>
+            <Icon name={complete ? "check" : "alert"} size={12} />
+          </span>
+          <strong className="text-xs text-ink">交付检查{complete ? "已完成" : "部分完成"}</strong>
+        </div>
+        <span className="text-[11px] text-muted">已交付 {delivery.delivered?.length ?? 0}/{delivery.required?.length ?? items.length}</span>
+      </div>
+      <div className="mt-2 grid gap-1.5">
+        {items.map((item) => (
+          <div key={item.id} className="flex min-w-0 items-center gap-2 text-[11px] text-ink-2">
+            <Icon name={item.status === "delivered" ? "check" : "clock"} size={13} className={item.status === "delivered" ? "shrink-0 text-green" : "shrink-0 text-amber"} />
+            <span className="min-w-0 truncate">{item.label ?? item.id}</span>
+            <span className={cn("ml-auto shrink-0", item.status === "delivered" ? "text-green" : "text-amber")}>
+              {item.status === "delivered" ? "已交付" : "未交付"}
+            </span>
+          </div>
+        ))}
+      </div>
+      {!complete && <p className="mt-2 border-t border-amber/15 pt-2 text-[11px] leading-relaxed text-amber">已有结果仅覆盖已交付项目，不能代表原始请求全部完成。</p>}
+    </section>
   );
 }
 

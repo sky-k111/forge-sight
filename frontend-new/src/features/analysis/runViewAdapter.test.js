@@ -412,4 +412,29 @@ AOI检测 | 99.21%`);
     expect(run.execution.rows).toHaveLength(2);
     expect(run.result.kpis).toHaveLength(3);
   });
+
+  test("maps the immutable delivery ledger for partial-result rendering", () => {
+    const snapshot = snapshotWithResult({
+      question: "对比两项指标",
+      columns: ["产线", "产量"],
+      rows: [["L1", 100]],
+    });
+    snapshot.status = "failed";
+    snapshot.error = { code: "PARTIAL_DELIVERY", userSafeMessage: "部分需求尚未完成" };
+    snapshot.delivery = {
+      requirements: [{ id: "R1", label: "产量" }, { id: "R2", label: "良率" }],
+      required: ["R1", "R2"],
+      delivered: ["R1"],
+      missing: ["R2"],
+      complete: false,
+    };
+
+    const run = adaptAnalysisRun(snapshot);
+
+    expect(run.delivery.items).toEqual([
+      expect.objectContaining({ id: "R1", status: "delivered" }),
+      expect.objectContaining({ id: "R2", status: "missing" }),
+    ]);
+    expect(run.error.code).toBe("PARTIAL_DELIVERY");
+  });
 });

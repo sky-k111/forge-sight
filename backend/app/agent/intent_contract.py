@@ -10,6 +10,7 @@ planner / graph / query_compiler / interpretation 全部消费它，而不再用
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from enum import Enum
 import re
 from typing import Any, Literal
@@ -24,8 +25,9 @@ def _coerce_time_range(v: Any) -> Any:
 
     LLM 常把对比周期写成 "2023-05" / "5月" / "2023" 这类字符串；直接喂给
     list[TimeRange] 会抛 ValidationError。这里统一按月份/年份提取，并把
-    月份类周期锚定到 data_horizon（不采纳 LLM 猜测的绝对年份，避免落到
-    不存在的数据年份）。非字符串/字典原样返回，交给校验器处理。
+    裸月份（如“5月”）锚定到 data_horizon；显式年份（如“2026-05”）则是
+    用户给出的事实，必须保留为绝对边界，不能悄悄改写成数据最新年份。
+    非字符串/字典原样返回，交给校验器处理。
     """
     if v is None:
         return v
@@ -43,17 +45,24 @@ def _coerce_time_range(v: Any) -> Any:
             return {"mode": "absolute", "grain": "month", "label": f"{mo}月", "reference": "data_horizon"}
     m = re.fullmatch(r"(\d{4})[-/](\d{1,2})", s)
     if m:
+        year = int(m.group(1))
         mo = int(m.group(2))
         if 1 <= mo <= 12:
-            return {"mode": "absolute", "grain": "month", "label": f"{mo}月", "reference": "data_horizon"}
+            start = date(year, mo, 1)
+            end = date(year + 1, 1, 1) if mo == 12 else date(year, mo + 1, 1)
+            return {"mode": "absolute", "grain": "month", "label": f"{year}-{mo:02d}",
+                    "reference": "now", "start": start.isoformat(), "end": end.isoformat()}
     m = re.fullmatch(r"(\d{4})", s)
     if m:
-        return {"mode": "absolute", "grain": "year", "label": s, "reference": "data_horizon"}
+        year = int(m.group(1))
+        return {"mode": "absolute", "grain": "year", "label": s, "reference": "now",
+                "start": f"{year}-01-01", "end": f"{year + 1}-01-01"}
     m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", s)
     if m:
         y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        return {"mode": "absolute", "grain": "day", "label": f"{mo}月{d}日", "reference": "data_horizon",
-                "start": f"{y:04d}-{mo:02d}-{d:02d}"}
+        start = date(y, mo, d)
+        return {"mode": "absolute", "grain": "day", "label": f"{y:04d}-{mo:02d}-{d:02d}", "reference": "now",
+                "start": start.isoformat(), "end": (start + timedelta(days=1)).isoformat()}
     return {"mode": "absolute", "label": s, "reference": "data_horizon"}
 
 
@@ -232,6 +241,16 @@ class StepIntent(BaseModel):
 class AgentIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    relation: Literal["new", "refine_previous", "retry_previous"] = "new"
+    operation: Literal["query", "add_dimension", "replace_dimension", "remove_dimension", "change_presentation", "replace_filter", "retry"] = "query"
+    changedFields: list[str] = []
+    filters: list[dict[str, Any]] = []
+    sort: list[dict[str, Any]] = []
+    topN: int | None = Field(default=None, ge=1, le=10000)
+    inheritedFrom: str | None = None
+    targetResultId: str | None = None       # 多结果追问明确指向的结果，例如 R2
+    understanding: list[str] = []
+    failure: dict[str, Any] | None = None  # 系统故障，不是业务澄清
     kind: IntentKind
     question: str                        # 原始输入（多轮时已含上下文解析文本）
     metrics: list[Metric] = []

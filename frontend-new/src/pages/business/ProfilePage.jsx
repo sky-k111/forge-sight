@@ -49,6 +49,23 @@ const memoryKindLabels = {
   procedural: "分析方法",
 };
 
+const emptyLlmSettings = {
+  configured: false,
+  baseUrl: "",
+  model: "",
+  maskedKey: "",
+  activeProfileId: null,
+  profiles: [],
+};
+
+function normalizeLlmSettings(value) {
+  if (!value || typeof value !== "object") return emptyLlmSettings;
+  const profiles = Array.isArray(value.profiles)
+    ? value.profiles.filter((profile) => profile && typeof profile === "object" && profile.id)
+    : [];
+  return { ...emptyLlmSettings, ...value, profiles };
+}
+
 export default function ProfilePage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -61,7 +78,7 @@ export default function ProfilePage() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [llmSetupOpen, setLlmSetupOpen] = useState(false);
-  const [llmSettings, setLlmSettings] = useState({ configured: false, baseUrl: "", model: "", maskedKey: "" });
+  const [llmSettings, setLlmSettings] = useState(emptyLlmSettings);
 
   const load = async () => {
     setLoading(true);
@@ -77,7 +94,7 @@ export default function ProfilePage() {
     setMemorySettings(settings && !Array.isArray(settings) ? settings : { enabled: false });
     const normalizedMemories = Array.isArray(memoryItems) ? memoryItems : memoryItems?.items ?? [];
     setMemories(normalizedMemories.filter((item) => !["deleted", "superseded"].includes(item.status)));
-    if (llm) setLlmSettings(llm);
+    setLlmSettings(normalizeLlmSettings(llm));
     setLoading(false);
   };
 
@@ -97,6 +114,8 @@ export default function ProfilePage() {
   const memoryCounts = useMemo(() => memories.reduce((counts, item) => ({ ...counts, [item.kind]: (counts[item.kind] ?? 0) + 1 }), {}), [memories]);
   const displayName = user.displayName || user.username;
   const initials = displayName.charAt(0).toUpperCase();
+  const activeLlmProfile = llmSettings.profiles.find((profile) => profile.id === llmSettings.activeProfileId)
+    || llmSettings.profiles.find((profile) => profile.active);
 
   const bindProvider = async (provider) => {
     if (provider === "email") {
@@ -172,7 +191,7 @@ export default function ProfilePage() {
               <div className="flex items-start gap-3">
                 <span className="profile-llm-card__icon" aria-hidden="true"><Icon name="cpu" size={19} /></span>
                 <div className="min-w-0">
-                  <strong className="block text-sm font-semibold text-ink">OpenAI Compatible 模型服务</strong>
+                  <strong className="block text-sm font-semibold text-ink">{activeLlmProfile?.name || "OpenAI Compatible 模型服务"}</strong>
                   <p className="mt-1 text-[11px] leading-5 text-muted">配置完成后，智能分析、语义理解与结果解释会使用该服务。</p>
                 </div>
               </div>
@@ -231,9 +250,9 @@ export default function ProfilePage() {
         open={llmSetupOpen}
         settings={llmSettings}
         onClose={() => setLlmSetupOpen(false)}
-        onSaved={(next) => {
-          setLlmSettings(next);
-          setNotice("LLM 配置已保存，当前 API 进程已立即生效。");
+        onSaved={(next, message) => {
+          setLlmSettings(normalizeLlmSettings(next));
+          setNotice(message || "LLM 配置已保存，当前 API 进程已立即生效。");
           setLlmSetupOpen(false);
         }}
       />
@@ -252,25 +271,85 @@ function ProfileCardHeader({ eyebrow, title, description, icon, compact = false 
 }
 
 function LlmKeySetupModal({ open, settings: initialSettings, onClose, onSaved }) {
-  const [form, setForm] = useState({ baseUrl: "", model: "", apiKey: "", clearKey: false });
+  const settings = normalizeLlmSettings(initialSettings);
+  const [selectedId, setSelectedId] = useState(null);
+  const [form, setForm] = useState({ profileName: "", baseUrl: "", model: "", apiKey: "", clearKey: false });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (!open) return;
-    setForm({ baseUrl: initialSettings.baseUrl || "", model: initialSettings.model || "", apiKey: "", clearKey: false });
+    const active = settings.profiles.find((profile) => profile.id === settings.activeProfileId)
+      || settings.profiles.find((profile) => profile.active)
+      || settings.profiles[0];
+    setSelectedId(active?.id || null);
+    setForm({
+      profileName: active?.name || "",
+      baseUrl: active?.baseUrl || settings.baseUrl || "",
+      model: active?.model || settings.model || "",
+      apiKey: "",
+      clearKey: false,
+    });
     setError("");
-  }, [open, initialSettings.baseUrl, initialSettings.model]);
+  }, [open, settings.activeProfileId, settings.baseUrl, settings.model, settings.profiles.length]);
+
+  const selectedProfile = settings.profiles.find((profile) => profile.id === selectedId) || null;
+  const isNewProfile = !selectedProfile;
+
+  const chooseProfile = (profile) => {
+    setSelectedId(profile.id);
+    setForm({ profileName: profile.name || "", baseUrl: profile.baseUrl || "", model: profile.model || "", apiKey: "", clearKey: false });
+    setError("");
+  };
+
+  const startNewProfile = () => {
+    setSelectedId(null);
+    setForm({ profileName: "", baseUrl: "https://api.deepseek.com", model: "deepseek-chat", apiKey: "", clearKey: false });
+    setError("");
+  };
+
+  const activateProfile = async (profile) => {
+    setSaving(true);
+    setError("");
+    try {
+      const next = await updateLlmSettings({ profileId: profile.id, activate: true });
+      onSaved(normalizeLlmSettings(next), `${profile.name || profile.model} 已切换并生效。`);
+    } catch (reason) {
+      setError(reason.message || "模型配置切换失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteProfile = async () => {
+    if (!selectedProfile || selectedProfile.active) return;
+    if (!window.confirm(`确认删除“${selectedProfile.name || selectedProfile.model}”吗？`)) return;
+    setSaving(true);
+    setError("");
+    try {
+      const next = await updateLlmSettings({ profileId: selectedProfile.id, delete: true });
+      onSaved(normalizeLlmSettings(next), "模型配置已删除。");
+    } catch (reason) {
+      setError(reason.message || "模型配置删除失败");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const save = async (event) => {
     event.preventDefault();
     setSaving(true);
     setError("");
     try {
-      const payload = { baseUrl: form.baseUrl, model: form.model, clearKey: form.clearKey };
+      if (!form.profileName.trim()) {
+        setError("请给这个模型配置起一个容易识别的名称");
+        setSaving(false);
+        return;
+      }
+      const payload = { profileId: selectedId || undefined, profileName: form.profileName.trim(), baseUrl: form.baseUrl, model: form.model, clearKey: form.clearKey, activate: true };
       if (!form.clearKey && form.apiKey.trim()) payload.apiKey = form.apiKey.trim();
       const next = await updateLlmSettings(payload);
-      onSaved(next);
+      onSaved(normalizeLlmSettings(next), `${form.profileName.trim()} 已保存并生效。`);
     } catch (reason) {
       setError(reason.message || "LLM 配置保存失败");
     } finally {
@@ -310,17 +389,32 @@ function LlmKeySetupModal({ open, settings: initialSettings, onClose, onSaved })
           <span>明文 Key 只用于本次提交，页面不会回显已保存的 Key；后端仅返回脱敏状态。</span>
         </div>
         <div className="mt-5 grid gap-3">
+          <div className="rounded-control border border-line bg-surface-2 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs font-semibold text-ink">模型配置档</span>
+              <Button size="sm" variant="ghost" type="button" onClick={startNewProfile}>＋新增配置</Button>
+            </div>
+            {settings.profiles.length ? <div className="mt-2 grid gap-2">
+              {settings.profiles.map((profile) => <button key={profile.id} type="button" onClick={() => chooseProfile(profile)} className={`flex items-center justify-between gap-3 rounded-control border px-3 py-2 text-left transition-colors ${profile.id === selectedId ? "border-primary bg-primary-soft" : "border-line bg-surface hover:bg-surface-2"}`}>
+                <span className="min-w-0"><strong className="block truncate text-xs text-ink">{profile.name || profile.model}</strong><span className="block truncate text-[10px] text-muted">{profile.model} · {profile.maskedKey || "未配置 Key"}</span></span>
+                <span className="shrink-0 text-[10px] font-semibold text-primary">{profile.active ? "当前生效" : "选择"}</span>
+              </button>)}
+            </div> : <p className="mt-2 text-[11px] text-muted">还没有配置档，请新增一个模型服务。</p>}
+          </div>
+          <label className="grid gap-1.5 text-xs font-semibold text-ink">配置名称<input className="input-control" value={form.profileName} onChange={(event) => setForm((current) => ({ ...current, profileName: event.target.value }))} placeholder="例如：DeepSeek 生产、Qwen 免费测试" required /></label>
           <label className="grid gap-1.5 text-xs font-semibold text-ink">服务地址<input className="input-control" value={form.baseUrl} onChange={(event) => setForm((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://api.deepseek.com" required /></label>
           <label className="grid gap-1.5 text-xs font-semibold text-ink">模型名称<input className="input-control" value={form.model} onChange={(event) => setForm((current) => ({ ...current, model: event.target.value }))} placeholder="deepseek-v4-flash" required /></label>
-          <label className="grid gap-1.5 text-xs font-semibold text-ink">API Key<span className="text-[11px] font-normal text-muted">{initialSettings.configured ? `当前已配置：${initialSettings.maskedKey || "已脱敏"}，留空可保持不变` : "首次配置请输入服务商密钥"}</span><input className="input-control font-mono" type="password" value={form.apiKey} onChange={(event) => setForm((current) => ({ ...current, apiKey: event.target.value, clearKey: false }))} placeholder={initialSettings.configured ? "留空保持当前 Key" : "sk-…"} autoComplete="new-password" /></label>
-          {initialSettings.configured && <label className="flex items-center gap-2 text-xs text-muted"><input type="checkbox" checked={form.clearKey} onChange={(event) => setForm((current) => ({ ...current, clearKey: event.target.checked, apiKey: "" }))} />清除当前 Key</label>}
+          <label className="grid gap-1.5 text-xs font-semibold text-ink">API Key<span className="text-[11px] font-normal text-muted">{selectedProfile?.configured ? `当前已配置：${selectedProfile.maskedKey || "已脱敏"}，留空可保持不变` : "请输入服务商密钥"}</span><input className="input-control font-mono" type="password" value={form.apiKey} onChange={(event) => setForm((current) => ({ ...current, apiKey: event.target.value, clearKey: false }))} placeholder={selectedProfile?.configured ? "留空保持当前 Key" : "sk-…"} autoComplete="new-password" /></label>
+          {selectedProfile?.configured && <label className="flex items-center gap-2 text-xs text-muted"><input type="checkbox" checked={form.clearKey} onChange={(event) => setForm((current) => ({ ...current, clearKey: event.target.checked, apiKey: "" }))} />清除当前 Key</label>}
           {error && <p className="text-xs text-red" role="alert">{error}</p>}
           <details className="rounded-control border border-line bg-surface-2 px-3 py-2 text-[11px] text-muted"><summary className="cursor-pointer font-semibold text-ink-2">复制为服务端环境变量（可选）</summary><pre className="mt-2 overflow-x-auto font-mono leading-6 text-ink-2"><code>{`LLM_BASE_URL=${form.baseUrl || "https://api.deepseek.com"}\nLLM_MODEL=${form.model || "deepseek-v4-flash"}\nLLM_API_KEY=请填入你的服务商密钥`}</code></pre></details>
         </div>
         <div className="mt-6 flex flex-wrap justify-end gap-2 border-t border-line pt-4">
           <Button variant="ghost" type="button" onClick={copyTemplate}>复制配置模板</Button>
+          {selectedProfile && !selectedProfile.active && <Button variant="ghost" type="button" onClick={() => activateProfile(selectedProfile)} disabled={saving}>切换为当前</Button>}
+          {selectedProfile && !selectedProfile.active && selectedProfile.id !== "env" && <Button variant="ghost" type="button" onClick={deleteProfile} disabled={saving}>删除配置</Button>}
           <Button variant="secondary" type="button" onClick={onClose}>完成</Button>
-          <Button variant="primary" type="submit" disabled={saving}>{saving ? "保存中…" : "保存并启用"}</Button>
+          <Button variant="primary" type="submit" disabled={saving}>{saving ? "保存中…" : isNewProfile ? "新增并启用" : "保存并启用"}</Button>
         </div>
       </form>
     </Modal>

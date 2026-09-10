@@ -48,7 +48,7 @@ def resolve_dimension_field(
         for f in table.get("fields") or []:
             name = str(f.get("name") or "")
             sem = str(f.get("semanticName") or "")
-            if lowered in name.lower() or lowered in sem.lower() or sem in lowered or name in lowered:
+            if name and (lowered in name.lower() or (sem and (lowered in sem.lower() or sem in lowered)) or name.lower() in lowered):
                 return name
     return None
 

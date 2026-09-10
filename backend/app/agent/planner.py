@@ -330,6 +330,21 @@ def build_plan(
         candidate = AgentPlan.model_validate(_extract_json(raw))
         if any(step.capability not in allowed_capabilities for step in candidate.steps):
             raise ValueError("计划引用了未注册能力")
+        # Every requested query retains its authoritative task contract. Model
+        # planning may add inspection steps, but cannot silently drop a request.
+        required = {s.arguments["task"]["requirementId"]: s.arguments["task"]
+                    for s in fallback.steps if s.capability == "analysis.query_data"
+                    and s.arguments.get("task", {}).get("requirementId")}
+        covered = set()
+        for step in candidate.steps:
+            if step.capability != "analysis.query_data":
+                continue
+            rid = (step.arguments.get("task") or {}).get("requirementId") or step.arguments.get("requirementId")
+            if rid in required:
+                step.arguments = {**step.arguments, "task": required[rid]}
+                covered.add(rid)
+        if set(required) - covered:
+            raise ValueError("计划未覆盖全部分析要求")
         return normalize_delegated_tasks(candidate, state.get("run_id", "run")), "model", None
     except Exception as exc:  # noqa: BLE001 - invalid model output must degrade safely
         return normalize_delegated_tasks(fallback, state.get("run_id", "run")), "deterministic_fallback", type(exc).__name__
