@@ -16,10 +16,11 @@ export function TrendLineChart({ data, xKey, series, height = 240, unit = "", ar
             <Tooltip content={<ChartTooltip unit={unit} labelFormatter={xTickFormatter} />} cursor={{ stroke: "var(--color-line-strong)", strokeDasharray: "4 4" }} />
             {series.map((item, index) => {
               const color = item.color ?? seriesColors[index % seriesColors.length];
+              const dash = item.dash ? "5 4" : undefined;
               return area ? (
-                <Area key={item.key} type="monotone" dataKey={item.key} name={item.name} stroke={color} strokeWidth={2} fill={color} fillOpacity={0.1} dot={false} activeDot={{ r: 3 }} />
+                <Area key={item.key} type="monotone" dataKey={item.key} name={item.name} stroke={color} strokeWidth={item.width ?? 2} strokeDasharray={dash} fill={color} fillOpacity={item.dash ? 0 : 0.1} dot={false} activeDot={{ r: 3 }} />
               ) : (
-                <Line key={item.key} type="monotone" dataKey={item.key} name={item.name} stroke={color} strokeWidth={2} dot={false} activeDot={{ r: 3 }} />
+                <Line key={item.key} type="monotone" dataKey={item.key} name={item.name} stroke={color} strokeWidth={item.width ?? 2} strokeDasharray={dash} dot={false} activeDot={{ r: 3 }} />
               );
             })}
           </Chart>

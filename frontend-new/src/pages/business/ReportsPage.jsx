@@ -202,111 +202,66 @@ export default function ReportsPage() {
   const scopeOptions = reportScopeOptions(reports);
 
   return (
-    <PageFrame className="max-w-[1500px] gap-3">
-      <header className="flex flex-wrap items-end justify-between gap-5 border-b border-line pb-4">
-        <div>
-          <span className="section-kicker">REPORT OPERATIONS</span>
-          <h2 className="mt-1 text-[25px] font-semibold tracking-tight text-ink">
-            周报中心
-          </h2>
-          <p className="mt-1.5 text-sm text-muted">
-            管理生成、审核与交付；报告正文、证据和导出文件始终对应同一版本。
-          </p>
+    <div className="flex h-full min-h-0 flex-col bg-canvas">
+      <header className="flex h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line bg-paper px-3">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <h2 className="text-sm font-semibold tracking-tight text-ink">周报中心</h2>
+          <span className="hidden truncate text-[11px] text-faint md:block">正文、证据与导出文件对应同一冻结版本</span>
         </div>
-        <div className="flex items-center gap-2">
-          <label className="flex h-9 items-center gap-2 rounded-control border border-line bg-surface px-3 text-xs text-muted">
-            <Icon name="database" size={14} />
+        <div className="ml-auto flex min-w-0 flex-wrap items-center gap-1.5">
+          <label className="relative flex items-center">
+            <Icon name="database" size={13} className="pointer-events-none absolute left-2 text-faint" />
             <select
               value={sourceId ?? ""}
               onChange={switchSource}
-              className="max-w-44 cursor-pointer bg-transparent font-medium text-ink outline-none"
+              aria-label="数据源"
+              className="input-control h-7 max-w-[190px] appearance-none pl-7 pr-6 text-xs"
             >
               {sources.map((source) => (
-                <option key={source.id} value={source.id}>
-                  {source.name}
-                </option>
+                <option key={source.id} value={source.id}>{source.name}</option>
               ))}
             </select>
           </label>
-          <Button onClick={() => setCreateOpen(true)} disabled={!sourceId}>
-            创建报告
-          </Button>
-          <Button
-            variant="primary"
-            onClick={() => navigate("/workspace/reports/composer")}
-            disabled={!sourceId}
-          >
-            <Icon name="edit" size={15} />
+          <Button size="sm" onClick={() => setCreateOpen(true)} disabled={!sourceId}>创建报告</Button>
+          <Button size="sm" variant="primary" onClick={() => navigate("/workspace/reports/composer")} disabled={!sourceId}>
+            <Icon name="edit" size={14} />
             设计周报
           </Button>
         </div>
       </header>
 
-      <section className="grid overflow-hidden border-y border-line bg-paper lg:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="flex flex-wrap items-center gap-y-3 px-4 py-3 lg:border-r lg:border-line">
-          <div className="min-w-[260px] flex-1 pr-5">
-            <span className="text-[10px] font-semibold text-primary">本周期</span>
-            <h3 className="mt-0.5 text-sm font-semibold text-ink">{attentionCount ? `${attentionCount} 份报告需要继续处理` : "报告运行状态正常"}</h3>
-            <p className="mt-0.5 text-[11px] text-muted">发布版本不可被后续重算覆盖，异常和证据可进入详情复核。</p>
-          </div>
-          <div className="grid min-w-[300px] grid-cols-3 divide-x divide-line">
-            <Metric label="生成中" value={runningCount} />
-            <Metric label="需关注" value={attentionCount} />
-            <Metric label="已发布" value={publishedCount} />
-          </div>
-        </div>
-        <div className="flex items-center justify-between gap-4 bg-surface-2 px-4 py-3">
-          <div><span className="text-[10px] font-semibold text-faint">自动送达</span><p className="mt-0.5 text-xs font-semibold text-ink">站内摘要、报告链接与 PDF</p><p className="mt-0.5 text-[10px] text-muted">{subscriptions.filter((item) => item.enabled).length} 个启用订阅 · 仅发送已发布版本</p></div>
-          <span className="h-2 w-2 shrink-0 rounded-full bg-teal" aria-label="送达服务正常" />
-        </div>
-      </section>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-line bg-surface-2/60 px-3 py-1.5 text-[11px]">
+        <span className="font-semibold text-ink">{attentionCount ? `${attentionCount} 份报告需处理` : "本周期运行状态正常"}</span>
+        <span className="hidden h-3 w-px bg-line sm:block" />
+        <CountChip label="生成中" value={runningCount} />
+        <CountChip label="需关注" value={attentionCount} tone={attentionCount ? "amber" : "muted"} />
+        <CountChip label="已发布" value={publishedCount} tone="teal" />
+        <span className="ml-auto flex items-center gap-1.5 text-faint">
+          <i className="h-1.5 w-1.5 shrink-0 rounded-full bg-teal" aria-hidden="true" />
+          自动送达 {subscriptions.filter((item) => item.enabled).length} 个订阅 · 仅发送已发布版本
+        </span>
+      </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <section className="min-w-0 overflow-hidden rounded-section border border-line bg-paper">
-          <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3">
+      <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line bg-paper px-3 py-2">
             <div className="flex items-center gap-0.5 rounded-control bg-surface-2 p-0.5">
-              <FilterTab
-                active={filter === "all"}
-                onClick={() => setFilter("all")}
-              >
-                全部 {reports.length}
-              </FilterTab>
-              <FilterTab
-                active={filter === "running"}
-                onClick={() => setFilter("running")}
-              >
-                生成中 {runningCount}
-              </FilterTab>
-              <FilterTab
-                active={filter === "attention"}
-                onClick={() => setFilter("attention")}
-              >
-                需关注 {attentionCount}
-              </FilterTab>
-              <FilterTab
-                active={filter === "published"}
-                onClick={() => setFilter("published")}
-              >
-                已发布 {publishedCount}
-              </FilterTab>
+              <FilterTab active={filter === "all"} onClick={() => setFilter("all")}>全部 {reports.length}</FilterTab>
+              <FilterTab active={filter === "running"} onClick={() => setFilter("running")}>生成中 {runningCount}</FilterTab>
+              <FilterTab active={filter === "attention"} onClick={() => setFilter("attention")}>需关注 {attentionCount}</FilterTab>
+              <FilterTab active={filter === "published"} onClick={() => setFilter("published")}>已发布 {publishedCount}</FilterTab>
             </div>
-            <label className="relative ml-auto block w-52">
-              <Icon
-                name="search"
-                size={14}
-                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-faint"
-              />
+            <label className="relative ml-auto flex items-center">
+              <Icon name="search" size={13} className="pointer-events-none absolute left-2.5 text-faint" />
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="搜索报告"
-                className="input-control h-8 pl-8 pr-2.5 text-xs"
+                aria-label="搜索报告"
+                className="input-control h-7 w-44 pl-8 pr-2.5 text-xs"
               />
             </label>
-            <Button
-              size="sm"
-              onClick={() => setAdvancedOpen((value) => !value)}
-            >
+            <Button size="sm" variant="ghost" onClick={() => setAdvancedOpen((value) => !value)}>
               <Icon name="filter" size={13} />
               {advancedOpen ? "收起筛选" : "更多筛选"}
             </Button>
@@ -401,143 +356,105 @@ export default function ReportsPage() {
           )}
           {downloadNotice && (
             <p
-              className="border-b border-warning/20 bg-warning-soft px-4 py-2 text-sm text-warning"
+              className="shrink-0 border-b border-warning/20 bg-warning-soft px-3 py-1.5 text-xs text-warning"
               role="status"
             >
               {downloadNotice}
             </p>
           )}
-          {visible.length ? (
-            <div className="divide-y divide-line">
-              {visible.map((report) => {
-                const meta = reportListMeta(report);
-                return (
-                  <article
-                    key={report.id}
-                    className="group grid gap-4 px-4 py-4 transition-colors hover:bg-surface-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-5"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <StatusPill tone={statusTone[report.status] ?? "gray"}>
-                          {report.statusLabel}
-                        </StatusPill>
-                        {meta.anomalyCount > 0 && (
-                          <StatusPill
-                            tone={
-                              meta.highestSeverity === "critical" ||
-                              meta.highestSeverity === "high"
-                                ? "red"
-                                : "amber"
-                            }
-                          >
-                            {meta.anomalyCount} 项异常
-                          </StatusPill>
-                        )}
-                        <span className="truncate text-[11px] text-faint">
-                          {report.templateName} · {report.sourceName}
+          <div className="min-h-0 flex-1 overflow-auto">
+            {visible.length ? (
+              <div className="divide-y divide-line">
+                {visible.map((report) => {
+                  const meta = reportListMeta(report);
+                  const tone = statusTone[report.status] ?? "gray";
+                  return (
+                    <article
+                      key={report.id}
+                      className="group relative grid gap-2 py-2.5 pl-4 pr-3 transition-colors hover:bg-surface-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-4"
+                    >
+                      <span className={cn("absolute left-0 top-2 bottom-2 w-[3px] rounded-full", tone === "green" ? "bg-teal" : tone === "amber" ? "bg-amber" : tone === "red" ? "bg-red" : tone === "blue" ? "bg-primary" : "bg-line-strong")} aria-hidden="true" />
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <StatusPill tone={tone}>{report.statusLabel}</StatusPill>
+                          {meta.anomalyCount > 0 && (
+                            <StatusPill tone={meta.highestSeverity === "critical" || meta.highestSeverity === "high" ? "red" : "amber"}>
+                              {meta.anomalyCount} 项异常
+                            </StatusPill>
+                          )}
+                          <h3 className="min-w-0 truncate text-sm font-semibold text-ink">{report.title}</h3>
+                        </div>
+                        <p className="mt-1 line-clamp-1 text-xs leading-5 text-muted">
+                          {meta.headline
+                            ? reportListSummary(meta.headline)
+                            : TERMINAL.has(report.status)
+                              ? "尚未形成管理摘要。"
+                              : "正在执行章节分析，页面会自动更新真实进度。"}
+                        </p>
+                        <p className="mt-1 truncate font-mono text-[10px] text-faint">
+                          {report.templateName} · V{report.version?.version ?? 1} · 完整度 {meta.coverage == null ? "—" : `${meta.coverage}%`} · {meta.scopeLabel}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2 sm:flex-col sm:items-end sm:gap-1.5">
+                        <span className="font-mono text-[10px] text-faint sm:order-first">
+                          {report.periodStart?.slice(0, 10)} — {report.periodEnd?.slice(5, 10)}
                         </span>
-                      </div>
-                      <h3 className="mt-2 truncate text-base font-semibold text-ink">
-                        {report.title}
-                      </h3>
-                      <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted">
-                        {meta.headline
-                          ? reportListSummary(meta.headline)
-                          : TERMINAL.has(report.status)
-                            ? "尚未形成管理摘要。"
-                            : "正在执行章节分析，页面会自动更新真实进度。"}
-                      </p>
-                      <p className="mt-2 text-[12px] text-faint">
-                        V{report.version?.version ?? 1} · 完整度{" "}
-                        {meta.coverage == null ? "—" : `${meta.coverage}%`} ·{" "}
-                        {meta.scopeLabel}
-                      </p>
-                    </div>
-                    <div className="flex min-w-32 flex-col items-start justify-between gap-3 sm:items-end">
-                      <span className="font-mono text-[12px] text-faint">
-                        {report.periodStart?.slice(0, 10)} —{" "}
-                        {report.periodEnd?.slice(5, 10)}
-                      </span>
-                      <div className="flex flex-wrap gap-2">
-                        {report.files?.some(
-                          (item) =>
-                            item.format === "pdf" && item.status === "ready",
-                        ) && (
-                          <Button
-                            size="sm"
-                            disabled={downloadBusy === `${report.id}-pdf`}
-                            onClick={() => download(report, "pdf")}
-                          >
-                            <Icon name="download" size={13} />
-                            PDF
+                        <div className="flex flex-wrap gap-1.5 sm:order-last">
+                          {report.files?.some((item) => item.format === "pdf" && item.status === "ready") && (
+                            <Button size="sm" variant="ghost" disabled={downloadBusy === `${report.id}-pdf`} onClick={() => download(report, "pdf")}>
+                              <Icon name="download" size={13} />
+                              PDF
+                            </Button>
+                          )}
+                          {report.files?.some((item) => item.format === "xlsx" && item.status === "ready") && (
+                            <Button size="sm" variant="ghost" disabled={downloadBusy === `${report.id}-xlsx`} onClick={() => download(report, "xlsx")}>
+                              <Icon name="download" size={13} />
+                              Excel
+                            </Button>
+                          )}
+                          <Button size="sm" onClick={() => navigate(`/workspace/reports/${report.id}`)}>
+                            详情 <Icon name="arrow" size={13} />
                           </Button>
-                        )}
-                        {report.files?.some(
-                          (item) =>
-                            item.format === "xlsx" && item.status === "ready",
-                        ) && (
-                          <Button
-                            size="sm"
-                            disabled={downloadBusy === `${report.id}-xlsx`}
-                            onClick={() => download(report, "xlsx")}
-                          >
-                            <Icon name="download" size={13} />
-                            Excel
-                          </Button>
-                        )}
-                        <Button
-                          size="sm"
-                          onClick={() =>
-                            navigate(`/workspace/reports/${report.id}`)
-                          }
-                        >
-                          查看详情 <Icon name="arrow" size={13} />
-                        </Button>
+                        </div>
                       </div>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="grid min-h-44 place-content-center border-t border-line px-6 text-center"><p className="text-sm font-semibold text-ink">这里还没有报告</p><p className="mt-1 text-xs text-muted">设计一份周报，或调整当前筛选条件。</p><button type="button" onClick={() => navigate("/workspace/reports/composer")} className="mt-3 text-xs font-semibold text-primary hover:opacity-75">打开周报设计器 →</button></div>
-          )}
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="grid min-h-44 place-content-center px-6 py-10 text-center"><p className="text-sm font-semibold text-ink">这里还没有报告</p><p className="mt-1 text-xs text-muted">设计一份周报，或调整当前筛选条件。</p><button type="button" onClick={() => navigate("/workspace/reports/composer")} className="mt-3 text-xs font-semibold text-primary hover:opacity-75">打开周报设计器 →</button></div>
+            )}
+          </div>
         </section>
 
-        <aside className="self-start overflow-hidden rounded-section border border-line bg-paper">
-          <div className="border-b border-line px-4 py-3.5">
-            <span className="text-[10px] font-semibold text-primary">模板与覆盖</span>
-            <h3 className="mt-1 text-base font-semibold tracking-tight text-ink">
-              当前数据源可生成什么
-            </h3>
+        <aside className="flex w-full shrink-0 flex-col border-t border-line bg-paper xl:w-[320px] xl:border-t-0 xl:border-l">
+          <div className="flex h-9 shrink-0 items-center justify-between border-b border-line px-3">
+            <h3 className="text-xs font-semibold text-ink">模板与覆盖</h3>
+            <span className="font-mono text-[10px] text-faint">{templates.length} 个可生成</span>
           </div>
-          <div className="divide-y divide-line">
-            {templates.map((template) => (
-              <button
-                key={template.id}
-                type="button"
-                onClick={() => setCreateOpen(template.id)}
-                className="group flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-2"
-              >
-                <span className={cn("h-2 w-2 shrink-0 rounded-full", template.coverage?.ready ? "bg-teal" : "bg-amber")} />
-                <span className="min-w-0 flex-1">
-                  <strong className="block truncate text-xs font-semibold text-ink">
-                    {template.name}
-                  </strong>
-                  <span className="mt-0.5 block truncate text-[11px] text-muted">
-                    {template.audience}
-                  </span>
-                </span>
-                <span
-                  className={cn(
-                    "font-mono text-xs font-semibold",
-                    template.coverage?.ready ? "text-teal" : "text-amber",
-                  )}
+          <div className="min-h-0 flex-1 overflow-auto">
+            {templates.map((template) => {
+              const score = template.coverage?.score ?? 0;
+              const ready = template.coverage?.ready;
+              return (
+                <button
+                  key={template.id}
+                  type="button"
+                  onClick={() => setCreateOpen(template.id)}
+                  className="group flex w-full items-center gap-2.5 border-b border-line/60 px-3 py-2.5 text-left transition-colors last:border-0 hover:bg-surface-2"
                 >
-                  {template.coverage?.score ?? 0}%
-                </span>
-              </button>
-            ))}
+                  <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", ready ? "bg-teal" : "bg-amber")} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-semibold text-ink">{template.name}</span>
+                    <span className="mt-0.5 block truncate text-[10px] text-muted">{template.audience}</span>
+                    <span className="mt-1.5 block h-1 overflow-hidden rounded-full bg-surface-3">
+                      <i className={cn("block h-full rounded-full", ready ? "bg-teal" : "bg-amber")} style={{ width: `${score}%` }} />
+                    </span>
+                  </span>
+                  <span className={cn("shrink-0 font-mono text-[11px] font-semibold", ready ? "text-teal" : "text-amber")}>{score}%</span>
+                </button>
+              );
+            })}
           </div>
         </aside>
       </div>
@@ -551,7 +468,7 @@ export default function ReportsPage() {
         onClose={() => setCreateOpen(false)}
         onCreated={(report) => navigate(`/workspace/reports/${report.id}`)}
       />
-    </PageFrame>
+    </div>
   );
 }
 
@@ -669,14 +586,10 @@ function ReportCreateWizard({
       label="创建报告"
       maxWidth={760}
     >
-      <div className="flex items-start justify-between border-b border-line px-5 py-4">
-        <div>
-          <span className="text-[11px] font-semibold tracking-[0.08em] text-faint">
-            CREATE REPORT
-          </span>
-          <h3 className="mt-1 text-base font-semibold text-ink">
-            创建一份可复核报告
-          </h3>
+      <div className="flex items-center justify-between border-b border-line px-4 py-3">
+        <div className="flex items-baseline gap-2">
+          <h3 className="text-sm font-semibold text-ink">创建一份可复核报告</h3>
+          <span className="hidden text-[10px] font-semibold tracking-[0.08em] text-faint sm:inline">CREATE REPORT</span>
         </div>
         <button
           type="button"
@@ -693,7 +606,7 @@ function ReportCreateWizard({
             <div
               key={label}
               className={cn(
-                "flex items-center gap-2 px-4 py-3 text-xs",
+                "flex items-center gap-2 px-4 py-2 text-xs",
                 step === index + 1
                   ? "bg-primary-soft font-semibold text-primary"
                   : "text-muted",
@@ -705,14 +618,15 @@ function ReportCreateWizard({
           ),
         )}
       </div>
-      <div className="min-h-80 p-5">
+      <div className="min-h-72 p-4">
         {step === 1 && (
-          <div className="grid gap-5 md:grid-cols-[220px_1fr]">
-            <Field label="数据源">
+          <div className="grid gap-3">
+            <label className="grid gap-1 text-[11px] font-semibold text-muted">
+              <span>数据源</span>
               <select
                 value={selectedSourceId}
                 onChange={(event) => changeSource(event.target.value)}
-                className="input-control"
+                className="input-control h-9 max-w-sm text-xs"
                 disabled={loadingTemplates}
               >
                 {sources.map((source) => (
@@ -721,43 +635,40 @@ function ReportCreateWizard({
                   </option>
                 ))}
               </select>
-            </Field>
+            </label>
             <div>
-              <span className="text-xs font-semibold text-ink">报告类型</span>
-              {loadingTemplates && (
-                <p className="mt-2 text-sm text-muted" role="status">
-                  正在检查该数据源的报告覆盖率…
-                </p>
-              )}
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {availableTemplates.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setTemplateId(item.id)}
-                    className={cn(
-                      "cursor-pointer rounded-card border p-3 text-left transition-colors",
-                      templateId === item.id
-                        ? "border-primary/45 bg-primary-soft"
-                        : "border-line bg-surface hover:border-line-strong",
-                    )}
-                  >
-                    <span className="flex items-center justify-between gap-2">
-                      <strong className="text-xs text-ink">{item.name}</strong>
-                      <span
-                        className={cn(
-                          "font-mono text-[11px]",
-                          item.coverage?.ready ? "text-teal" : "text-amber",
-                        )}
-                      >
-                        {item.coverage?.score}%
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-muted">报告类型</span>
+                {loadingTemplates && (
+                  <span className="text-[11px] text-faint" role="status">正在检查覆盖率…</span>
+                )}
+              </div>
+              <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
+                {availableTemplates.map((item) => {
+                  const selected = templateId === item.id;
+                  const ready = item.coverage?.ready;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setTemplateId(item.id)}
+                      aria-pressed={selected}
+                      className={cn(
+                        "flex cursor-pointer items-start gap-2 rounded-control border px-3 py-2.5 text-left transition-colors",
+                        selected ? "border-primary bg-primary-soft" : "border-line bg-surface hover:border-line-strong",
+                      )}
+                    >
+                      <i className={cn("mt-1 h-1.5 w-1.5 shrink-0 rounded-full", ready ? "bg-teal" : "bg-amber")} aria-hidden="true" />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-baseline justify-between gap-2">
+                          <strong className="truncate text-xs font-semibold text-ink">{item.name}</strong>
+                          <span className={cn("shrink-0 font-mono text-[11px] font-semibold", ready ? "text-teal" : "text-amber")}>{item.coverage?.score}%</span>
+                        </span>
+                        <span className="mt-0.5 block text-[11px] leading-4 text-muted">{item.description}</span>
                       </span>
-                    </span>
-                    <span className="mt-1 block text-[11px] leading-relaxed text-muted">
-                      {item.description}
-                    </span>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -929,14 +840,14 @@ function ReportCreateWizard({
   );
 }
 
-function Metric({ label, value }) {
+function CountChip({ label, value, tone = "muted" }) {
+  const dot = tone === "teal" ? "bg-teal" : tone === "amber" ? "bg-amber" : "bg-line-strong";
   return (
-    <div className="px-4 first:pl-0">
-      <strong className="font-mono text-xl font-semibold text-ink">
-        {value}
-      </strong>
-      <span className="mt-0.5 block text-[11px] text-muted">{label}</span>
-    </div>
+    <span className="inline-flex items-center gap-1.5 text-muted">
+      <i className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot)} aria-hidden="true" />
+      <strong className="font-mono text-[12px] font-semibold text-ink">{value}</strong>
+      {label}
+    </span>
   );
 }
 

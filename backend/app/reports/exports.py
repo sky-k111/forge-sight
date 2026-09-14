@@ -292,10 +292,85 @@ def _pdf_chart_accent(spec: ChartSpec):
     return AMBER if spec.color_role == "quality" else BRAND
 
 
+def _parse_calendar_date(label: str):
+    text = str(label).strip()
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S"):
+        try:
+            from datetime import datetime as _dt
+            return _dt.strptime(text[:19], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _calendar_heat_color(base, ratio: float):
+    ratio = max(0.0, min(1.0, ratio))
+    return colors.Color(
+        base.red + (1 - base.red) * (1 - ratio),
+        base.green + (1 - base.green) * (1 - ratio),
+        base.blue + (1 - base.blue) * (1 - ratio),
+    )
+
+
+def _pdf_calendar(spec: ChartSpec) -> Table | None:
+    values = []
+    for point in spec.points:
+        day = _parse_calendar_date(point.label)
+        if day is None:
+            continue
+        values.append((day, point.value or 0))
+    if len(values) < 2:
+        return None
+    values.sort(key=lambda item: item[0])
+    low = min(value for _, value in values)
+    high = max(value for _, value in values)
+    spread = (high - low) or 1
+    by_day = dict(values)
+    base = _pdf_chart_accent(spec)
+    weekday_labels = ["一", "二", "三", "四", "五", "六", "日"]
+    first = values[0][0]
+    last = values[-1][0]
+    # align grid to Monday of the first week
+    from datetime import timedelta
+    grid_start = first - timedelta(days=first.weekday())
+    total_days = (last - grid_start).days + 1
+    weeks = (total_days + 6) // 7
+    header = [Paragraph(f"<font color='#8997a3'>{label}</font>", _styles()["small"]) for label in weekday_labels]
+    rows = [header]
+    styles_cmds = [
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.white),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+    ]
+    for week in range(weeks):
+        week_row = []
+        for weekday in range(7):
+            current = grid_start + timedelta(days=week * 7 + weekday)
+            if current in by_day:
+                ratio = (by_day[current] - low) / spread
+                cell_color = _calendar_heat_color(base, ratio)
+                text_hex = "#FFFFFF" if ratio > 0.55 else "#182329"
+                week_row.append(Paragraph(f"<font color='{text_hex}'>{current.day}</font>", _styles()["small"]))
+                styles_cmds.append(("BACKGROUND", (weekday, week + 1), (weekday, week + 1), cell_color))
+            else:
+                week_row.append("")
+        while len(week_row) < 7:
+            week_row.append("")
+        rows.append(week_row)
+    widths = [16 * mm] * 7
+    table = Table(rows, colWidths=widths, rowHeights=[6 * mm] + [11 * mm] * weeks)
+    table.setStyle(TableStyle(styles_cmds))
+    return table
+
+
 def _report_chart(spec: ChartSpec) -> Drawing | Table | None:
     points = spec.points
     if len(points) < 2:
         return None
+    if spec.type == "table":
+        return None
+    if spec.type == "calendar":
+        return _pdf_calendar(spec)
     drawing = Drawing(480, 190)
     if spec.type == "donut":
         chart = Pie()
@@ -517,12 +592,16 @@ def _report_chart(spec: ChartSpec) -> Drawing | Table | None:
             polygon_points.extend([left + index * step, bottom + (value - minimum) / spread * height])
         polygon_points.extend([left + width, baseline])
         drawing.add(Polygon(polygon_points, fillColor=MINT, strokeColor=None))
+    has_previous = any(point.previous_value is not None for point in points)
     chart = HorizontalLineChart()
     chart.x = 55
     chart.y = 34
     chart.height = 120
     chart.width = 390
-    chart.data = [[point.value for point in points]]
+    series: list[list[float]] = [[point.value for point in points]]
+    if has_previous:
+        series.append([point.previous_value if point.previous_value is not None else 0 for point in points])
+    chart.data = series
     chart.categoryAxis.categoryNames = [point.label for point in points]
     chart.categoryAxis.labels.fontName = _register_fonts()[0]
     chart.categoryAxis.labels.fontSize = 7
@@ -531,28 +610,48 @@ def _report_chart(spec: ChartSpec) -> Drawing | Table | None:
     chart.lines[0].strokeColor = _pdf_chart_accent(spec)
     chart.lines[0].strokeWidth = 2.5
     chart.lines[0].symbol = None
+    if has_previous:
+        chart.lines[1].strokeColor = HexColor("#98a4b0")
+        chart.lines[1].strokeWidth = 1.6
+        chart.lines[1].strokeDashArray = (4, 3)
+        chart.lines[1].symbol = None
     chart.valueAxis.gridStrokeColor = LINE
     chart.valueAxis.gridStrokeDashArray = (2, 2)
     if spec.type == "area" and min(point.value for point in points) >= 0:
         chart.valueAxis.valueMin = 0
     drawing.add(chart)
+    if has_previous:
+        drawing.add(String(58, 168, "— 本期    ⋯ 上一周期", fontName=_register_fonts()[0], fontSize=7, fillColor=colors.HexColor("#5d6d72")))
     return drawing
 
 
 def _chart_data_table(spec: ChartSpec, styles: dict) -> Table:
     has_secondary = any(point.secondary_value is not None for point in spec.points)
+    has_previous = any(point.previous_value is not None for point in spec.points)
     secondary_label = "累计贡献率" if spec.type == "pareto" else (spec.secondary_value_label or "次指标")
     headers = [spec.category_label, f"{spec.value_label}（{spec.unit}）"]
+    if spec.type == "table":
+        headers += ["占比", "累计占比"]
+    if has_previous:
+        headers.append(f"{spec.comparison_label or '上一周期'}（{spec.unit}）")
     if has_secondary:
         headers.append(f"{secondary_label}（{'%' if spec.type == 'pareto' else spec.secondary_unit or spec.unit}）")
     rows = [[Paragraph(_pdf_text(item), styles["tableHeader"]) for item in headers]]
+    table_total = sum(max(point.value or 0, 0) for point in spec.points) or 1
+    table_cumulative = 0.0
     for point in spec.points[:12]:
         label = point.label if not point.group else f"{point.label} / {point.group}"
         row = [Paragraph(_pdf_text(label), styles["small"]), f"{point.value:,.2f}"]
+        if spec.type == "table":
+            share = max(point.value or 0, 0) / table_total * 100
+            table_cumulative += share
+            row += [f"{share:.1f}%", f"{min(table_cumulative, 100.0):.1f}%"]
+        if has_previous:
+            row.append("—" if point.previous_value is None else f"{point.previous_value:,.2f}")
         if has_secondary:
             row.append("—" if point.secondary_value is None else f"{point.secondary_value:,.2f}")
         rows.append(row)
-    widths = [72 * mm, 48 * mm] + ([50 * mm] if has_secondary else [])
+    widths = [72 * mm, 48 * mm] + ([26 * mm, 30 * mm] if spec.type == "table" else []) + ([42 * mm] if has_previous else []) + ([50 * mm] if has_secondary else [])
     table = Table(rows, colWidths=widths, repeatRows=1)
     table.setStyle(_pdf_table_style())
     return table
@@ -810,6 +909,8 @@ def _native_excel_chart(sheet, spec: ChartSpec, header_row: int, first_row: int,
     categories = Reference(sheet, min_col=1, min_row=first_row, max_row=last_row)
     primary = Reference(sheet, min_col=3, min_row=header_row, max_row=last_row)
     secondary = Reference(sheet, min_col=4, min_row=header_row, max_row=last_row)
+    has_previous = any(point.previous_value is not None for point in spec.points)
+    previous = Reference(sheet, min_col=7, min_row=header_row, max_row=last_row)
     if spec.type == "donut":
         chart = DoughnutChart()
         chart.add_data(primary, titles_from_data=True)
@@ -825,15 +926,21 @@ def _native_excel_chart(sheet, spec: ChartSpec, header_row: int, first_row: int,
     elif spec.type == "area":
         chart = AreaChart()
         chart.add_data(primary, titles_from_data=True)
+        if has_previous:
+            chart.add_data(previous, titles_from_data=True)
         chart.set_categories(categories)
     elif spec.type == "line":
         chart = LineChart()
         chart.add_data(primary, titles_from_data=True)
+        if has_previous:
+            chart.add_data(previous, titles_from_data=True)
         chart.set_categories(categories)
     elif spec.type == "column":
         chart = BarChart()
         chart.type = "col"
         chart.add_data(primary, titles_from_data=True)
+        if has_previous:
+            chart.add_data(previous, titles_from_data=True)
         chart.set_categories(categories)
     elif spec.type in {"combo", "pareto"}:
         chart = BarChart()
@@ -884,6 +991,7 @@ def _create_chart_sheet(workbook: Workbook, report: StructuredWeeklyReport) -> N
     sheet.column_dimensions["D"].width = 18
     sheet.column_dimensions["E"].width = 34
     sheet.column_dimensions["F"].width = 14
+    sheet.column_dimensions["G"].width = 18
     sheet.column_dimensions["H"].width = 2
 
     specs = _export_chart_specs(report)
@@ -911,6 +1019,7 @@ def _create_chart_sheet(workbook: Workbook, report: StructuredWeeklyReport) -> N
         )
         row += 1
         header_row = row
+        has_previous = any(point.previous_value is not None for point in spec.points)
         secondary_header = (
             "累计贡献率（%）"
             if spec.type == "pareto"
@@ -924,6 +1033,8 @@ def _create_chart_sheet(workbook: Workbook, report: StructuredWeeklyReport) -> N
             "证据引用",
             "图表类型",
         ]
+        if has_previous:
+            headers.append(f"上一周期（{spec.unit}）")
         for column, value in enumerate(headers, start=1):
             cell = sheet.cell(row, column, _excel_safe(value))
             cell.font = Font(name="Microsoft YaHei", bold=True, color="FFFFFF")
@@ -940,6 +1051,8 @@ def _create_chart_sheet(workbook: Workbook, report: StructuredWeeklyReport) -> N
                 "、".join(spec.evidence_artifact_ids),
                 spec.type,
             ]
+            if has_previous:
+                values.append(point.previous_value)
             for column, value in enumerate(values, start=1):
                 cell = sheet.cell(row, column, _excel_safe(value))
                 cell.font = Font(name="Microsoft YaHei", size=9, color="172033")
@@ -994,7 +1107,50 @@ def _create_chart_sheet(workbook: Workbook, report: StructuredWeeklyReport) -> N
                         end_type="max", end_color="0B6E69",
                     ),
                 )
-        else:
+        elif spec.type == "calendar":
+            parsed = []
+            for point in spec.points:
+                day = _parse_calendar_date(point.label)
+                if day is not None:
+                    parsed.append((day, point.value or 0))
+            if len(parsed) >= 2:
+                from datetime import timedelta
+                parsed.sort(key=lambda item: item[0])
+                grid_start = parsed[0][0] - timedelta(days=parsed[0][0].weekday())
+                last_day = parsed[-1][0]
+                weeks = ((last_day - grid_start).days + 7) // 7
+                by_day = dict(parsed)
+                pivot_row = title_row
+                pivot_column = 8
+                sheet.cell(pivot_row, pivot_column, _excel_safe(spec.title)).font = Font(
+                    name="Microsoft YaHei", size=11, bold=True, color="172033"
+                )
+                for index, label in enumerate(["一", "二", "三", "四", "五", "六", "日"]):
+                    head = sheet.cell(pivot_row + 1, pivot_column + index, label)
+                    head.font = Font(name="Microsoft YaHei", size=9, bold=True, color="FFFFFF")
+                    head.fill = PatternFill("solid", fgColor="084C49")
+                    head.alignment = Alignment(horizontal="center")
+                for week in range(weeks):
+                    for weekday in range(7):
+                        current = grid_start + timedelta(days=week * 7 + weekday)
+                        cell = sheet.cell(pivot_row + 2 + week, pivot_column + weekday)
+                        if current in by_day:
+                            cell.value = by_day[current]
+                            cell.number_format = "0"
+                        cell.alignment = Alignment(horizontal="center")
+                grid_range = (
+                    f"{get_column_letter(pivot_column)}{pivot_row + 2}:"
+                    f"{get_column_letter(pivot_column + 6)}{pivot_row + 1 + weeks}"
+                )
+                sheet.conditional_formatting.add(
+                    grid_range,
+                    ColorScaleRule(
+                        start_type="min", start_color="DDF4EF",
+                        mid_type="percentile", mid_value=50, mid_color="7FCFC4",
+                        end_type="max", end_color="0B6E69",
+                    ),
+                )
+        elif spec.type != "table":
             native_chart = _native_excel_chart(
                 sheet, spec, header_row, first_data_row, last_data_row
             )

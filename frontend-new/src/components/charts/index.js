@@ -10,3 +10,5 @@ export { CorrelationScatterChart } from "./CorrelationScatterChart";
 export { ComboMetricChart } from "./ComboMetricChart";
 export { MatrixHeatmapChart } from "./MatrixHeatmapChart";
 export { Sparkline } from "./Sparkline";
+export { DataTableBars } from "./DataTableBars";
+export { CalendarHeatmap } from "./CalendarHeatmap";

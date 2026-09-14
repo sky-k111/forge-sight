@@ -449,6 +449,8 @@ def _composition_section(block, metric: dict) -> dict:
     elif block.kind == "trend":
         grain = {"day": "日", "week": "周", "month": "月"}[block.grain]
         question = f"按{grain}展示统计周期内的{metric['name']}趋势"
+        if block.compare:
+            question += "，并叠加紧邻的等长上一周期同粒度趋势作对比"
     else:
         question = f"按{dimension}汇总统计周期内的{metric['name']}，展示前 {block.topN} 项"
     question += f"；展示方式固定为{block.chart}，不要替换指标或维度"
@@ -641,6 +643,47 @@ def _sync_running_sections(session, report: Report, run: AnalysisRun) -> None:
         }.get(task.status, task.status)
 
 
+def _composition_compare_context(session, report: Report, version: ReportVersion) -> dict | None:
+    snapshot = (version.data_snapshot_json or {}).get("compositionSnapshot") or (report.scope_json or {}).get("compositionSnapshot")
+    if not snapshot or not snapshot.get("blocks"):
+        return None
+    from app.db.models import DataSource
+
+    tenant_id = session.query(DataSource.tenant_id).filter_by(id=report.source_id).scalar()
+    if not tenant_id:
+        return None
+    blocks = {str(block.get("id")): block for block in snapshot.get("blocks", []) if block.get("id")}
+    return {
+        "source_id": report.source_id,
+        "tenant_id": str(tenant_id),
+        "user_id": report.owner_id,
+        "period_start": report.period_start,
+        "period_end": report.period_end,
+        "blocks": blocks,
+    }
+
+
+def _trend_previous_rows(compare_context: dict | None, section, presentation: dict) -> list | None:
+    if not compare_context or str(presentation.get("kind")) != "trend" or not presentation.get("compare"):
+        return None
+    block = compare_context["blocks"].get(str(section.code))
+    if not block:
+        return None
+    from app.reports.composition import previous_period_rows
+
+    try:
+        return previous_period_rows(
+            compare_context["source_id"],
+            compare_context["tenant_id"],
+            compare_context["user_id"],
+            block,
+            compare_context["period_start"],
+            compare_context["period_end"],
+        )
+    except Exception:
+        return None
+
+
 def _finalize_report(session, report: Report, run: AnalysisRun) -> None:
     version = session.query(ReportVersion).filter_by(id=report.current_version_id).one()
     if version.status in {"awaiting_review", "review_pending", "approved", "published"}:
@@ -661,6 +704,9 @@ def _finalize_report(session, report: Report, run: AnalysisRun) -> None:
     succeeded = 0
     confidence_scores: list[int] = []
     frozen_sections = []
+    # 个人组合报告的趋势对比：在冻结前用同一受治理只读口径补查紧邻等长上一周期，
+    # 使站内预览、PDF、Excel 的双序列与本期数值口径一致；失败时静默省略对比。
+    compare_context = _composition_compare_context(session, report, version)
     for section, task in zip(sections, tasks, strict=False):
         section.analysis_task_id = task.id
         artifacts = by_task.get(task.id, [])
@@ -677,6 +723,10 @@ def _finalize_report(session, report: Report, run: AnalysisRun) -> None:
         section.confidence = score
         section.artifact_ids_json = [item.id for item in artifacts]
         presentation = (section.content_json or {}).get("presentation")
+        if presentation and result.get("rows"):
+            previous_rows = _trend_previous_rows(compare_context, section, presentation)
+            if previous_rows:
+                result = {**result, "previousRows": previous_rows}
         section.content_json = {
             "question": task.normalized_question,
             "result": result,

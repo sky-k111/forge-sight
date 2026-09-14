@@ -81,16 +81,18 @@ class ChartPoint(ReportContentModel):
     value: float
     group: str | None = None
     secondary_value: float | None = Field(default=None, alias="secondaryValue")
+    previous_value: float | None = Field(default=None, alias="previousValue")
 
 
 class ChartSpec(ReportContentModel):
     key: str = Field(min_length=1)
-    type: Literal["line", "area", "column", "bar", "pareto", "donut", "heatmap", "scatter", "combo"]
+    type: Literal["line", "area", "column", "bar", "pareto", "donut", "heatmap", "scatter", "combo", "table", "calendar"]
     title: str = Field(min_length=1, max_length=120)
     description: str = Field(min_length=1, max_length=240)
     unit: str = Field(min_length=1, max_length=24)
     category_label: str = Field(alias="categoryLabel", min_length=1, max_length=80)
     value_label: str = Field(alias="valueLabel", min_length=1, max_length=80)
+    comparison_label: str | None = Field(default=None, alias="comparisonLabel", min_length=1, max_length=40)
     secondary_value_label: str | None = Field(
         default=None, alias="secondaryValueLabel", min_length=1, max_length=80
     )

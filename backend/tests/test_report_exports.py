@@ -232,6 +232,37 @@ def test_pdf_heatmap_keeps_missing_cells_blank_instead_of_zero():
     assert flattened.count("—") == 2
 
 
+def test_pdf_calendar_renders_a_week_grid_table():
+    table = _report_chart(ChartSpec.model_validate({
+        "key": "daily", "type": "calendar", "title": "日产量日历",
+        "description": "逐日分布", "unit": "件", "categoryLabel": "日期",
+        "valueLabel": "产量", "points": [
+            {"label": "2026-06-01", "value": 100}, {"label": "2026-06-02", "value": 120},
+            {"label": "2026-06-03", "value": 90}, {"label": "2026-06-04", "value": 140},
+        ], "evidenceArtifactIds": ["artifact-output"], "colorRole": "production",
+    }))
+    assert table is not None
+    assert len(table._cellvalues[0]) == 7  # 周一到周日表头
+    # 四天都在同一周（2026-06-01 是周一），首周行应含四个数字单元格
+    first_week = table._cellvalues[1]
+    day_texts = [getattr(cell, "text", "") for cell in first_week]
+    assert any(">1<" in text for text in day_texts)
+    assert any(">4<" in text for text in day_texts)
+
+
+def test_pdf_trend_compare_draws_two_line_series():
+    chart = _report_chart(ChartSpec.model_validate({
+        "key": "trend", "type": "line", "title": "产量趋势",
+        "description": "两期对比", "unit": "件", "categoryLabel": "周",
+        "valueLabel": "产量", "comparisonLabel": "上一周期", "points": [
+            {"label": "2026-23", "value": 120, "previousValue": 90},
+            {"label": "2026-24", "value": 135, "previousValue": 100},
+        ], "evidenceArtifactIds": ["artifact-output"], "colorRole": "production",
+    }))
+    line = next(item for item in chart.contents if isinstance(item, HorizontalLineChart))
+    assert len(line.data) == 2
+
+
 def test_pdf_exports_every_agent_chart_instead_of_only_the_first_one():
     content = _report_content()
     content["charts"] = [

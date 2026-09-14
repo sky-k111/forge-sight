@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import HTTPException
@@ -209,7 +210,7 @@ def preview(composition: ReportComposition, source_id: int, tenant_id: str, user
         metric = by_id[block.metricId]
         try:
             result = _query_block(source, context, metric, block, start, end, user_id)
-            if block.kind == "kpi" and block.compare and result.get("state") == "ready":
+            if block.kind in {"kpi", "trend"} and block.compare and result.get("state") == "ready":
                 duration = period_end - period_start
                 previous = _query_block(source, context, metric, block, (period_start - duration).date().isoformat(), start, user_id)
                 result["previousRows"] = previous.get("rows") if previous.get("state") == "ready" else None
@@ -224,3 +225,35 @@ def preview(composition: ReportComposition, source_id: int, tenant_id: str, user
         },
         "items": items,
     }
+
+
+def previous_period_rows(
+    source_id: int, tenant_id: str, user_id: str, block: dict, period_start: datetime, period_end: datetime,
+) -> list | None:
+    """Deterministically fetch the shifted equal-length window for a trend+compare block.
+
+    Reuses the same governed read-only compiler as preview so the frozen report's
+    comparison series shares the exact metric口径 with the current period.
+    """
+    if not block or block.get("kind") != "trend" or not block.get("compare") or not block.get("metricId"):
+        return None
+    duration = period_end - period_start
+    if duration.total_seconds() <= 0:
+        return None
+    with PlatformSession() as session:
+        source = ensure_source_access(session, source_id, tenant_id)
+        context = _context(session, source, tenant_id)
+    metric = next((item for item in context["metrics"] if item["id"] == block["metricId"]), None)
+    if not metric:
+        return None
+    proxy = SimpleNamespace(
+        kind="trend",
+        grain=block.get("grain", "day"),
+        dimension=block.get("dimension"),
+        topN=block.get("topN", 12),
+        title=block.get("title", "趋势"),
+    )
+    previous_start = (period_start - duration).date().isoformat()
+    previous_end = period_start.date().isoformat()
+    result = _query_block(source, context, metric, proxy, previous_start, previous_end, user_id)
+    return result.get("rows") if result.get("state") == "ready" else None

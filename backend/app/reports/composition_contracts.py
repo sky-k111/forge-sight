@@ -19,7 +19,7 @@ class ReportBlock(CompositionModel):
     metricId: str | None = Field(default=None, max_length=40)
     dimension: str | None = Field(default=None, max_length=80)
     grain: Literal["day", "week", "month"] = "day"
-    chart: Literal["number", "line", "area", "column", "bar", "donut", "pareto"] | None = None
+    chart: Literal["number", "line", "area", "column", "bar", "donut", "pareto", "table", "calendar"] | None = None
     width: Literal["half", "full"] = "full"
     height: Literal["compact", "standard", "focus"] = "standard"
     accent: AccentPreset = "default"
@@ -33,16 +33,16 @@ class ReportBlock(CompositionModel):
         if self.kind == "breakdown" and not self.dimension:
             raise ValueError("维度分析必须选择指标支持的维度")
         allowed = {
-            "kpi": {"number"}, "trend": {"line", "area", "column"},
-            "breakdown": {"bar", "donut", "pareto"},
+            "kpi": {"number"}, "trend": {"line", "area", "column", "calendar"},
+            "breakdown": {"bar", "donut", "pareto", "table"},
         }
         self.chart = self.chart or {"kpi": "number", "trend": "line", "breakdown": "bar"}[self.kind]
         if self.chart not in allowed[self.kind]:
             raise ValueError("图表类型与内容的数据结构不兼容")
         if self.chart == "donut" and self.topN > 12:
-            raise ValueError("环形图最多展示 12 个分类，请改用条形图查看更多项目")
-        if self.kind != "kpi" and self.compare:
-            raise ValueError("上一周期对比仅用于指标概览，不能对分组数值直接求和")
+            raise ValueError("环形图最多展示 12 个分类，请改用条形图或数据条表格查看更多项目")
+        if self.kind == "breakdown" and self.compare:
+            raise ValueError("上一周期对比仅用于指标概览与趋势，不能对分组数值直接求和")
         return self
 
 

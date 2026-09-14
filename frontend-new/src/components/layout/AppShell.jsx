@@ -324,7 +324,7 @@ export default function AppShell() {
           tenants={tenants}
           onTenantChange={switchTenant}
         />
-        <main className={cn("app-main min-h-0 flex-1", page === "analysis" ? "overflow-hidden" : "overflow-auto")}>
+        <main className={cn("app-main min-h-0 flex-1", page === "analysis" || location.pathname === "/workspace/reports/composer" || location.pathname === "/workspace/reports" ? "overflow-hidden" : "overflow-auto")}>
           <Suspense fallback={<RouteSkeleton />}>
             <Outlet context={{ evidenceOpen, setEvidenceOpen, navigatePage, refreshSessions }} />
           </Suspense>

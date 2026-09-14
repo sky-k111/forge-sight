@@ -38,4 +38,41 @@ describe("weekly report chart orchestration", () => {
     expect(screen.getAllByText(/证据 1 项/)).toHaveLength(4);
     expect(screen.getByText("停机时长（分钟）")).toBeTruthy();
   });
+
+  test("renders a data-bar table without the redundant exact-data table", () => {
+    render(
+      <WeeklyReportCharts
+        sourceName="生产数据库"
+        charts={[
+          { ...base, key: "defect", type: "table", title: "缺陷明细", categoryLabel: "缺陷类型", points: [{ label: "尺寸", value: 70 }, { label: "外观", value: 30 }] },
+        ]}
+      />,
+    );
+    expect(screen.getByText("明细数据表")).toBeTruthy();
+    expect(screen.getByText("尺寸")).toBeTruthy();
+    expect(screen.getByText("占比")).toBeTruthy();
+    expect(screen.getByText("累计")).toBeTruthy();
+    expect(screen.queryByText("查看精确数据")).toBeNull();
+  });
+
+  test("renders a calendar heatmap and a two-period trend line", () => {
+    render(
+      <WeeklyReportCharts
+        sourceName="生产数据库"
+        charts={[
+          { ...base, key: "cal", type: "calendar", title: "日产量日历", categoryLabel: "日期", points: [
+            { label: "2026-06-01", value: 100 }, { label: "2026-06-02", value: 120 }, { label: "2026-06-03", value: 90 },
+          ] },
+          { ...base, key: "cmp", type: "line", title: "产量趋势", categoryLabel: "周", comparisonLabel: "上一周期", points: [
+            { label: "2026-23", value: 120, previousValue: 90 }, { label: "2026-24", value: 135, previousValue: 100 },
+          ] },
+        ]}
+      />,
+    );
+    expect(screen.getByText("日历热力")).toBeTruthy();
+    expect(screen.getAllByText("日").length).toBeGreaterThan(0);
+    expect(screen.getByText("低")).toBeTruthy();
+    expect(screen.getByText("高")).toBeTruthy();
+    expect(screen.getByText("上一周期")).toBeTruthy();
+  });
 });

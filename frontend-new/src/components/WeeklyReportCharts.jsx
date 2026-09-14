@@ -1,6 +1,8 @@
 import {
+  CalendarHeatmap,
   ComboMetricChart,
   CorrelationScatterChart,
+  DataTableBars,
   HorizontalRankChart,
   MatrixHeatmapChart,
   RankBarChart,
@@ -18,6 +20,8 @@ const TYPE_LABELS = {
   heatmap: "矩阵热力",
   scatter: "相关性散点",
   combo: "双指标组合",
+  table: "明细数据表",
+  calendar: "日历热力",
 };
 const ACCENT_COLORS = {
   ocean: "#25677a",
@@ -69,7 +73,7 @@ function ChartArticle({ chart, sourceName }) {
           {chart.legacy ? "兼容旧版数据" : `证据 ${evidenceCount} 项`}
         </span>
       </div>
-      <ChartDataTable chart={chart} />
+      {chart.type !== "table" && <ChartDataTable chart={chart} />}
     </article>
   );
 }
@@ -78,6 +82,9 @@ function ChartVisual({ chart }) {
   const color = ACCENT_COLORS[chart.accent] ?? ROLE_COLORS[chart.colorRole] ?? ROLE_COLORS.neutral;
   const height = CHART_HEIGHTS[chart.height] ?? CHART_HEIGHTS.standard;
   const data = chart.points ?? [];
+  if (chart.type === "table") {
+    return <DataTableBars data={data} unit={chart.unit} valueName={chart.valueLabel} categoryName={chart.categoryLabel} color={color} height={height} />;
+  }
   if (chart.type === "column") {
     return <RankBarChart data={data} xKey="label" bars={[{ key: "value", name: chart.valueLabel, color }]} unit={chart.unit} height={height} />;
   }
@@ -150,15 +157,29 @@ function ChartVisual({ chart }) {
       />
     );
   }
+  if (chart.type === "calendar") {
+    return <CalendarHeatmap data={data} unit={chart.unit} valueName={chart.valueLabel} color={color} />;
+  }
+  const hasPrevious = data.some((point) => point.previousValue != null);
+  const series = [{ key: "value", name: chart.valueLabel, color, width: 2 }];
+  if (hasPrevious) series.push({ key: "previousValue", name: chart.comparisonLabel ?? "上一周期", color: "var(--color-faint)", width: 1.5, dash: true });
   return (
-    <TrendLineChart
-      data={data}
-      xKey="label"
-      series={[{ key: "value", name: chart.valueLabel, color }]}
-      unit={chart.unit}
-      area={chart.type === "area"}
-      height={height}
-    />
+    <>
+      {hasPrevious && (
+        <div className="flex justify-end gap-3 pb-1 text-[10px] text-faint">
+          <span className="inline-flex items-center gap-1"><i className="inline-block h-0 w-4 border-t-2" style={{ borderColor: color }} />{chart.valueLabel}</span>
+          <span className="inline-flex items-center gap-1"><i className="inline-block h-0 w-4 border-t-2 border-dashed border-faint" />{chart.comparisonLabel ?? "上一周期"}</span>
+        </div>
+      )}
+      <TrendLineChart
+        data={data}
+        xKey="label"
+        series={series}
+        unit={chart.unit}
+        area={chart.type === "area"}
+        height={height}
+      />
+    </>
   );
 }
 
