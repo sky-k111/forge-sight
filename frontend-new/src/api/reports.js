@@ -1,4 +1,4 @@
-import { apiUrl, httpGet, httpPost } from "./_http";
+import { apiUrl, httpDelete, httpGet, httpPost, httpRequest } from "./_http";
 import { currentUserId } from "../lib/auth";
 import { getToken } from "../lib/auth";
 
@@ -11,6 +11,32 @@ export async function listReportTemplates(sourceId) {
 
 export function getTemplateCoverage(templateId, sourceId) {
   return httpGet(`/api/v1/report-templates/${templateId}/coverage?sourceId=${encodeURIComponent(sourceId)}`);
+}
+
+export function getReportComposerCatalog(sourceId) {
+  return httpGet(`/api/v1/report-composer/catalog?sourceId=${encodeURIComponent(sourceId)}`);
+}
+
+export async function listReportCompositions(sourceId) {
+  return (await httpGet(`/api/v1/report-compositions?sourceId=${encodeURIComponent(sourceId)}&ownerId=${encodeURIComponent(USER_ID())}`)).items;
+}
+
+export function saveReportComposition(sourceId, composition, saved) {
+  const path = saved?.id
+    ? `/api/v1/report-compositions/${saved.id}`
+    : "/api/v1/report-compositions";
+  return httpRequest(`${path}?sourceId=${encodeURIComponent(sourceId)}&ownerId=${encodeURIComponent(USER_ID())}`, {
+    method: saved?.id ? "PUT" : "POST",
+    body: JSON.stringify({ version: saved?.version ?? 0, composition }),
+  });
+}
+
+export function deleteReportComposition(sourceId, templateId) {
+  return httpDelete(`/api/v1/report-compositions/${templateId}?sourceId=${encodeURIComponent(sourceId)}&ownerId=${encodeURIComponent(USER_ID())}`);
+}
+
+export function previewReportComposition(payload) {
+  return httpPost(`/api/v1/report-compositions/preview?ownerId=${encodeURIComponent(USER_ID())}`, payload);
 }
 
 export async function listReports({ ownerId = USER_ID(), sourceId, status } = {}) {

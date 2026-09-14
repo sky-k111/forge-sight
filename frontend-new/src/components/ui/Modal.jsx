@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import cn from "../../lib/cn";
 
-export function Modal({ open, onClose, children, maxWidth = 560, label }) {
+export function Modal({ open, onClose, children, maxWidth = 560, label, dismissOnBackdrop = true }) {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (event) => {
@@ -16,7 +16,7 @@ export function Modal({ open, onClose, children, maxWidth = 560, label }) {
     <div
       className="fixed inset-0 z-50 grid place-items-center bg-ink/40 p-6 backdrop-blur-sm"
       role="presentation"
-      onClick={onClose}
+      onClick={dismissOnBackdrop ? onClose : undefined}
     >
       <div
         role="dialog"

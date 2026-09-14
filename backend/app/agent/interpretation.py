@@ -250,25 +250,31 @@ def decide_chart(
     truncated: bool,
     metric_key: str | None = None,
     axis_hint: dict[str, Any] | None = None,
+    allow_question_fallback: bool = True,
 ) -> dict[str, Any]:
     """基于已解析意图 + 指标口径 + 结果列，决定图表类型与轴。"""
+    requested_chart = requested_chart if requested_chart not in {"auto", "none", "table"} else None
     numeric = _numeric_columns(columns, rows)
     values = _value_columns(columns, rows) or numeric
     share = requested_chart == "donut" or (
-        not requested_chart and bool(_SHARE_QUESTION_RE.search(question))
+        not requested_chart and allow_question_fallback and bool(_SHARE_QUESTION_RE.search(question))
     )
     trend = requested_chart == "line" or (
         not requested_chart and (
-            analysis_type == "trend" or bool(_TREND_QUESTION_RE.search(question))
+            analysis_type == "trend" or (allow_question_fallback and bool(_TREND_QUESTION_RE.search(question)))
         )
     )
     rank = requested_chart == "rank" or (
-        not requested_chart and (analysis_type == "ranking" or bool(_RANK_QUESTION_RE.search(question)))
+        not requested_chart and (
+            analysis_type == "ranking" or (allow_question_fallback and bool(_RANK_QUESTION_RE.search(question)))
+        )
     )
-    heatmap = requested_chart in ("heatmap", "matrix") or any(k in question for k in _HEATMAP_INDEXED)
+    heatmap = requested_chart in ("heatmap", "matrix") or (
+        allow_question_fallback and any(k in question for k in _HEATMAP_INDEXED)
+    )
     corr = requested_chart == "scatter" or analysis_type == "correlation"
     compare = not (share or trend or rank or heatmap or corr) and (
-        analysis_type == "comparison" or bool(_COMPARE_QUESTION_RE.search(question))
+        analysis_type == "comparison" or (allow_question_fallback and bool(_COMPARE_QUESTION_RE.search(question)))
     )
 
     x_key = _pick_dimension_column(columns, numeric, group_by, rows)
@@ -622,12 +628,15 @@ def decide_charts(
     result_schema: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """图表契约：多维/热力图场景可产出多张图；否则回退到单图 decide_chart。"""
+    requested_chart = requested_chart if requested_chart not in {"auto", "none", "table"} else None
     values = _value_columns(columns, rows) or _numeric_columns(columns, rows)
     dims = _dimension_columns(columns, rows)
     if result_schema:
         values = [f["key"] for f in result_schema if f.get("role") == "measure" and f["key"] in columns]
         dims = [f["key"] for f in result_schema if f.get("role") in {"time", "dimension"} and f["key"] in columns]
-    want_heat = requested_chart in ("heatmap", "matrix") or any(k in question for k in _HEATMAP_INDEXED)
+    want_heat = requested_chart in ("heatmap", "matrix") or (
+        not result_schema and any(k in question for k in _HEATMAP_INDEXED)
+    )
     if want_heat and len(dims) >= 2 and values:
         vkey = metric_key or _pick_value_column(values, metric_name, question, False) or values[0]
         return [_build_heatmap(dims[0], dims[1], vkey, columns, rows, row_count, truncated)]
@@ -646,7 +655,7 @@ def decide_charts(
             return charts
         x = time_dims[0] if time_dims else dims[0]
         others = [c for c in dims if c != x]
-        base_type = requested_chart if requested_chart in ("line", "bar") else ("line" if _TIME_DIM_RE.match(str(x)) else "bar")
+        base_type = requested_chart if requested_chart in ("line", "bar") else ("line" if x in time_dims else "bar")
         chart = _pivot_chart(x, others, vkey, columns, rows, row_count, truncated, base_type)
         chart["xAxis"] = {**_axis_meta(group_by, x, axis_hint), "labels": {}}
         return [chart]
@@ -662,6 +671,7 @@ def decide_charts(
         truncated=truncated,
         metric_key=metric_key,
         axis_hint=axis_hint,
+        allow_question_fallback=not bool(result_schema),
     )]
 
 

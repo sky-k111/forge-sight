@@ -85,7 +85,7 @@ class ChartPoint(ReportContentModel):
 
 class ChartSpec(ReportContentModel):
     key: str = Field(min_length=1)
-    type: Literal["line", "area", "bar", "pareto", "donut", "heatmap", "scatter", "combo"]
+    type: Literal["line", "area", "column", "bar", "pareto", "donut", "heatmap", "scatter", "combo"]
     title: str = Field(min_length=1, max_length=120)
     description: str = Field(min_length=1, max_length=240)
     unit: str = Field(min_length=1, max_length=24)
@@ -102,6 +102,9 @@ class ChartSpec(ReportContentModel):
     color_role: Literal[
         "production", "quality", "equipment", "inventory", "neutral"
     ] = Field(alias="colorRole")
+    width: Literal["half", "full"] = "half"
+    height: Literal["compact", "standard", "focus"] = "standard"
+    accent: Literal["default", "ocean", "teal", "violet", "graphite"] = "default"
 
 
 class Anomaly(ReportContentModel):

@@ -62,23 +62,26 @@ def mysql_strict_group_by_violation(sql: str) -> str | None:
         statement = sqlglot.parse_one(sql, read="mysql")
     except Exception:
         return None
-    group = statement.find(exp.Group)
-    if group is None:
-        return None
-    group_set = {_normalize_expr(e) for e in group.expressions}
-    for projection in statement.expressions:
-        # 聚合或含聚合的表达式本身可脱离 GROUP BY（如 ROUND(SUM(...))）。
-        if list(projection.find_all(exp.AggFunc)):
+    # GROUP BY belongs to one SELECT scope. Pairing a GROUP BY inside a CTE
+    # with the outer SELECT projections rejects valid queries.
+    for select in statement.find_all(exp.Select):
+        group = select.args.get("group")
+        if group is None:
             continue
-        # 去掉 SELECT 列别名，取核心表达式本身比较（避免 alias 导致误报）。
-        expr = projection.this if isinstance(projection, exp.Alias) else projection
-        normalized = _normalize_expr(expr)
-        if normalized in group_set:
-            continue
-        # 未引用任何列（常量/子查询等）也不属于只依赖 GROUP BY 列的情况。
-        if not list(expr.find_all(exp.Column)):
-            continue
-        return normalized
+        group_set = {_normalize_expr(e) for e in group.expressions}
+        for projection in select.expressions:
+            # 聚合或含聚合的表达式本身可脱离 GROUP BY（如 ROUND(SUM(...))）。
+            if list(projection.find_all(exp.AggFunc)):
+                continue
+            # 去掉 SELECT 列别名，取核心表达式本身比较（避免 alias 导致误报）。
+            expr = projection.this if isinstance(projection, exp.Alias) else projection
+            normalized = _normalize_expr(expr)
+            if normalized in group_set:
+                continue
+            # 未引用任何列（常量/子查询等）也不属于只依赖 GROUP BY 列的情况。
+            if not list(expr.find_all(exp.Column)):
+                continue
+            return normalized
     return None
 
 

@@ -952,6 +952,20 @@ class DingTalkOAuthState(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class PersonalReportTemplate(Base):
+    """Versioned personal report composition, isolated by tenant/account/source."""
+
+    __tablename__ = "personal_report_template"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenant.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("data_source.id", ondelete="CASCADE"), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    config_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class ReportTemplate(Base):
     """报告模板只描述业务问题，不绑定具体企业的物理表字段。"""
 
@@ -1561,6 +1575,23 @@ class DataScopePolicy(Base):
     effective_to: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_by: Mapped[str] = mapped_column(String(40), default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class DashboardPreference(Base):
+    """Personal dashboard configuration inside a tenant and data-source boundary."""
+
+    __tablename__ = "dashboard_preference"
+    __table_args__ = (
+        PrimaryKeyConstraint("tenant_id", "user_id", "source_id", name="pk_dashboard_preference"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenant.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("data_source.id", ondelete="CASCADE"), index=True)
+    config_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 

@@ -11,6 +11,7 @@ from app.api import (
     analysis,
     auth,
     datasources,
+    dashboard,
     deliveries,
     dingtalk,
     feishu,
@@ -152,6 +153,7 @@ app.include_router(feishu.router)
 app.include_router(gateway.router)
 app.include_router(resources.router)
 app.include_router(datasources.router)
+app.include_router(dashboard.router)
 app.include_router(deliveries.router)
 app.include_router(knowledge.router)
 app.include_router(messages.router)

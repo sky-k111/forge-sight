@@ -17,6 +17,12 @@ import {
 const okJson = (data) =>
   Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
 
+const ResizeObserverStub = class ResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+
 function makeAnalysisSnapshot({
   id = "run-real",
   status = "succeeded",
@@ -129,19 +135,47 @@ function makeAnalysisSnapshot({
 }
 
 let analysisRuns;
+let llmSettings;
 
 beforeEach(() => {
   vi.stubEnv("VITE_DEMO_MODE", "true");
+  globalThis.ResizeObserver = ResizeObserverStub;
   window.history.replaceState({}, "", "/workspace/overview");
   window.sessionStorage.clear();
   window.localStorage.clear();
   analysisRuns = { "run-real": makeAnalysisSnapshot() };
+  llmSettings = {
+    configured: true,
+    baseUrl: "https://api.deepseek.com",
+    model: "deepseek-chat",
+    maskedKey: "sk-••••391e",
+    activeProfileId: "deepseek",
+    profiles: [
+      { id: "deepseek", name: "DeepSeek 生产", protocol: "openai_compatible", authMode: "auto", baseUrl: "https://api.deepseek.com", model: "deepseek-chat", configured: true, active: true, maskedKey: "sk-••••391e" },
+      { id: "qwen", name: "Qwen 测试", protocol: "openai_compatible", authMode: "auto", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus", configured: true, active: false, maskedKey: "sk-••••8820" },
+    ],
+  };
   // 资源中心与安全审计已接真实后端，测试环境统一打桩 /api/*，避免依赖本机服务
   vi.stubGlobal(
     "fetch",
     vi.fn((url, options) => {
       const u = String(url);
       const method = options?.method ?? "GET";
+      if (u.endsWith("/api/model-settings/llm/discover-models") && method === "POST") {
+        return okJson({ models: ["deepseek-chat", "deepseek-reasoner"] });
+      }
+      if (u.endsWith("/api/model-settings/llm") && method === "PATCH") {
+        const payload = JSON.parse(options?.body ?? "{}");
+        if (payload.activate && payload.profileId) {
+          llmSettings = {
+            ...llmSettings,
+            activeProfileId: payload.profileId,
+            profiles: llmSettings.profiles.map((profile) => ({ ...profile, active: profile.id === payload.profileId })),
+          };
+        }
+        return okJson(llmSettings);
+      }
+      if (u.endsWith("/api/model-settings/llm") && method === "GET") return okJson(llmSettings);
       if (u.endsWith("/api/analysis/sessions") && method === "POST") {
         return okJson({
           id: "ses-created",
@@ -165,6 +199,14 @@ beforeEach(() => {
           id: "ses-real",
           runs: Object.values(analysisRuns).map((run) => ({ id: run.id })),
         });
+      }
+      if (u.endsWith("/api/analysis/sessions/ses-real") && method === "PATCH") {
+        const payload = JSON.parse(options?.body ?? "{}");
+        return okJson({ sessionId: "ses-real", title: payload.title, displayTitle: payload.title });
+      }
+      if (u.endsWith("/api/analysis/sessions/bulk-delete") && method === "POST") {
+        const payload = JSON.parse(options?.body ?? "{}");
+        return okJson({ deletedIds: payload.sessionIds, deletedCount: payload.sessionIds.length, retention: "audit" });
       }
       if (
         u.includes("/api/analysis/sessions/ses-real?userId=") &&
@@ -315,6 +357,64 @@ beforeEach(() => {
             isDefault: true,
           },
         ]);
+      }
+      if (u.includes("/api/dashboard/query") && method === "POST") {
+        const payload = JSON.parse(options?.body ?? "{}");
+        if (payload.kind === "rank") {
+          return okJson({
+            state: "ready",
+            metric: { id: "M-PROD", name: "产量", unit: "件" },
+            columns: ["工序", "产量"],
+            rows: [["PR01", 1480], ["PR02", 1360]],
+            range: { start: "2026-07-09", anchor: "2026-07-15" },
+          });
+        }
+        if (payload.kind === "trend") {
+          return okJson({
+            state: "ready",
+            metric: { id: "M-PROD", name: "产量", unit: "件" },
+            columns: ["日期", "产量"],
+            rows: [["07-09", 1280], ["07-10", 1360], ["07-11", 1315]],
+            range: { start: "2026-07-09", anchor: "2026-07-15" },
+          });
+        }
+        return okJson({
+          state: "ready",
+          metric: { id: "M-PROD", name: "产量", unit: "件" },
+          columns: ["产量"],
+          rows: [[3955]],
+          range: { start: "2026-07-09", anchor: "2026-07-15" },
+        });
+      }
+      if (u.includes("/api/dashboard") && method === "GET") {
+        const config = {
+          version: 0,
+          period: "last7",
+          widgets: [
+            { id: "kpi-M-PROD", kind: "kpi", metricId: "M-PROD", title: "产量", layout: { x: 0, y: 0, w: 3, h: 3, minW: 2, minH: 2 } },
+            { id: "trend-M-PROD", kind: "trend", metricId: "M-PROD", title: "产量趋势", layout: { x: 0, y: 3, w: 9, h: 7, minW: 5, minH: 5 } },
+            { id: "rank-M-PROD", kind: "rank", metricId: "M-PROD", dimension: "工序", title: "按工序对比", layout: { x: 0, y: 10, w: 4, h: 6, minW: 3, minH: 4 } },
+            { id: "context", kind: "context", title: "调查与提醒", layout: { x: 9, y: 3, w: 3, h: 7, minW: 3, minH: 4 } },
+            { id: "recent", kind: "recent", title: "近期调查", layout: { x: 0, y: 10, w: 8, h: 6, minW: 5, minH: 4 } },
+            { id: "catalog", kind: "catalog", title: "可用指标", layout: { x: 8, y: 10, w: 4, h: 6, minW: 3, minH: 4 } },
+          ],
+        };
+        return okJson({
+          sourceId: 1,
+          catalog: [{
+            id: "M-PROD", name: "产量", definition: "指定周期内的合格数量与不良数量之和。", unit: "件",
+            topic: "生产分析", version: "1.0", kinds: ["kpi", "trend", "rank"], dimensions: ["工序"],
+          }, ...Array.from({ length: 10 }, (_, index) => ({
+            id: `M-AUX-${index + 1}`, name: `辅助指标 ${index + 1}`, definition: "已发布辅助指标。", unit: "件",
+            topic: "质量分析", version: "1.0", kinds: [], dimensions: [],
+          }))],
+          config,
+          defaultConfig: config,
+        });
+      }
+      if (u.includes("/api/dashboard") && method === "PUT") {
+        const payload = JSON.parse(options?.body ?? "{}");
+        return okJson({ ...payload, version: (payload.version ?? 0) + 1 });
       }
       if (u.includes("/api/overview/admin")) {
         return okJson({
@@ -665,6 +765,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  globalThis.ResizeObserver = ResizeObserverStub;
 });
 
 describe("ForgeSight application routes", () => {
@@ -697,8 +798,8 @@ describe("ForgeSight application routes", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "会话操作：制造业务问析" }, { timeout: 5000 }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "删除对话" }));
-    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
 
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "制造业务问析" })).toBeNull(),
@@ -711,21 +812,26 @@ describe("ForgeSight application routes", () => {
     );
   });
 
-  test("renders the business overview with yesterday operating metrics", async () => {
+  test("renders the governed business dashboard without placeholder metrics", async () => {
     const { container } = render(<App />);
     expect(
-      await screen.findByRole("heading", { name: "今日工作台" }),
+      await screen.findByRole("heading", { name: "业务看板" }),
     ).toBeTruthy();
     expect(
       await screen.findByText("华东制造数据底座", {}, { timeout: 5000 }),
     ).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "昨日运行快照" })).toBeTruthy();
-    expect(screen.getByText("昨日产量")).toBeTruthy();
-    expect(screen.getByText("停机时长")).toBeTruthy();
-    expect(screen.getByText("一次合格率")).toBeTruthy();
-    expect(screen.getByText("计划完成率")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "最近调查" })).toBeTruthy();
-    expect(screen.getByText("查看当前可分析范围")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "近 7 天" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText("MySQL · forge_sight")).toBeTruthy();
+    expect(screen.getByText("企业已发布口径")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "产量趋势" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "产量 · 按工序对比" })).toBeTruthy();
+    expect(screen.getByText("对比维度：工序")).toBeTruthy();
+    expect(screen.getByText("单位：件")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "调查与提醒" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "近期调查" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "可用指标" })).toBeTruthy();
+    expect(screen.getByText("辅助指标 10")).toBeTruthy();
+    expect(screen.getByText("已显示全部 11 项")).toBeTruthy();
     expect(screen.getByText("分析本月各工序良率并与目标值比较")).toBeTruthy();
     expect(screen.queryByText(/阶段5|EXPLAIN|验收/)).toBeNull();
     expect(screen.queryByRole("heading", { name: "今天的工作队列" })).toBeNull();
@@ -739,14 +845,79 @@ describe("ForgeSight application routes", () => {
       screen.getByAltText("ForgeSight logo").getAttribute("src"),
     ).toContain("forgesight-logo");
     expect(container.querySelector('[data-icon="analysis"]')).toBeTruthy();
-    expect(container.querySelector('[data-icon="model"]')).toBeTruthy();
+    expect(container.querySelector('[data-icon="database"]')).toBeTruthy();
     expect(container.querySelector('[data-icon="question"]')).toBeNull();
     expect(container.querySelector('[data-icon="spark"]')).toBeNull();
   });
 
+  test("stages personal dashboard edits and saves them explicitly", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "业务看板" });
+    const toolbar = screen.getByRole("region", { name: "看板工具栏" });
+
+    fireEvent.click(within(toolbar).getByRole("button", { name: "编辑布局" }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复默认" }));
+    expect(await screen.findByText("已恢复默认布局，保存后生效")).toBeTruthy();
+    expect(fetch.mock.calls.some(([url, options]) => String(url).includes("/api/dashboard") && options?.method === "DELETE")).toBe(false);
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "移动或调整产量趋势组件" }), { key: "ArrowRight" });
+    fireEvent.click(within(toolbar).getByRole("button", { name: "保存布局" }));
+    await waitFor(() => expect(fetch.mock.calls.some(([url, options]) => (
+      String(url).includes("/api/dashboard") && options?.method === "PUT"
+    ))).toBe(true));
+    expect(screen.queryByRole("region", { name: "布局编辑操作" })).toBeNull();
+  });
+
+  test("restores a removed workspace widget from the add component dialog", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "业务看板" });
+    await waitFor(() => expect(document.querySelector(".dashboard-spinner")).toBeNull());
+    const toolbar = screen.getByRole("region", { name: "看板工具栏" });
+
+    fireEvent.click(within(toolbar).getByRole("button", { name: "编辑布局" }));
+    fireEvent.click(screen.getByRole("button", { name: "移除近期调查组件" }));
+    expect(screen.queryByRole("heading", { name: "近期调查" })).toBeNull();
+
+    fireEvent.click(within(screen.getByRole("region", { name: "布局编辑操作" })).getByRole("button", { name: "添加组件" }));
+    const dialog = screen.getByRole("dialog", { name: "添加看板组件" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "工作区组件" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /近期调查.*可添加/ }));
+    expect(within(dialog).getByRole("button", { name: /调查与提醒.*已添加/ }).disabled).toBe(true);
+    expect(within(dialog).getByRole("button", { name: /可用指标.*已添加/ }).disabled).toBe(true);
+    fireEvent.click(within(dialog).getByRole("button", { name: "添加组件" }));
+
+    expect(screen.getByRole("heading", { name: "近期调查" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "添加看板组件" })).toBeNull();
+  });
+
+  test("stages a restrained widget accent and size preset with the dashboard layout", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "业务看板" });
+    await waitFor(() => expect(document.querySelector(".dashboard-spinner")).toBeNull());
+    const toolbar = screen.getByRole("region", { name: "看板工具栏" });
+
+    fireEvent.click(within(toolbar).getByRole("button", { name: "编辑布局" }));
+    fireEvent.click(screen.getByRole("button", { name: "设置产量趋势组件外观" }));
+    const dialog = screen.getByRole("dialog", { name: "组件外观与尺寸" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /图表类型：面积图/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "强调色：紫灰" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /重点.*扩大为主要内容/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "完成" }));
+
+    const trendWidget = screen.getByRole("heading", { name: "产量趋势" }).closest("article");
+    expect(trendWidget.getAttribute("data-accent")).toBe("violet");
+    fireEvent.click(within(toolbar).getByRole("button", { name: "保存布局" }));
+    await waitFor(() => {
+      const put = fetch.mock.calls.findLast(([url, options]) => String(url).includes("/api/dashboard") && options?.method === "PUT");
+      const savedTrend = JSON.parse(put[1].body).widgets.find((item) => item.id === "trend-M-PROD");
+      expect(savedTrend.appearance).toEqual({ accent: "violet", chartType: "area" });
+      expect(savedTrend.layout).toMatchObject({ w: 12, h: 8 });
+    });
+  });
+
   test("opens the personal profile from the account avatar", async () => {
     render(<App />);
-    await screen.findByRole("heading", { name: "今日工作台" });
+    await screen.findByRole("heading", { name: "业务看板" });
 
     expect(screen.queryByRole("button", { name: "我的偏好与记忆" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "打开个人主页" }));
@@ -758,12 +929,41 @@ describe("ForgeSight application routes", () => {
     expect(screen.getByText("钉钉")).toBeTruthy();
     expect(screen.getByText("飞书")).toBeTruthy();
     expect(screen.getByText("邮箱")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "LLM Key 配置" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /配置 LLM Key/ }));
-    expect(screen.getByRole("dialog", { name: "配置 LLM Key" })).toBeTruthy();
+    expect(document.querySelector('[data-provider="dingtalk"] svg')).toBeTruthy();
+    expect(document.querySelector('[data-provider="feishu"] img')).toBeTruthy();
+    expect(document.querySelector('[data-provider="dingtalk"]')?.textContent).toBe("");
+    expect(document.querySelector('[data-provider="feishu"]')?.textContent).toBe("");
+    expect(screen.getByRole("heading", { name: "模型配置" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /管理配置/ }));
+    const dialog = screen.getByRole("dialog", { name: "管理模型配置" });
+    expect(dialog).toBeTruthy();
+    expect(dialog.querySelector('[data-icon="cpu"]')).toBeNull();
     expect(screen.getByText(/LLM_API_KEY=请填入你的服务商密钥/)).toBeTruthy();
+
+    fireEvent.click(dialog.parentElement);
+    expect(screen.getByRole("dialog", { name: "管理模型配置" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "检测模型" }));
+    const detectedModels = await screen.findByRole("listbox", { name: "检测到的模型" });
+    fireEvent.click(within(detectedModels).getByRole("option", { name: "deepseek-reasoner" }));
+    expect(screen.getByLabelText("模型名称").value).toBe("deepseek-reasoner");
+
+    const protocolSelect = screen.getByLabelText("API 协议");
+    fireEvent.change(protocolSelect, { target: { value: "anthropic_messages" } });
+    await waitFor(() => expect(protocolSelect.value).toBe("anthropic_messages"));
+    expect(await screen.findByLabelText("认证方式")).toBeTruthy();
+    expect(screen.getByText(/直连 Anthropic 时自动使用 x-api-key/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Qwen 测试/ }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/model-settings/llm"),
+      expect.objectContaining({ method: "PATCH", body: expect.stringContaining('"profileId":"qwen"') }),
+    ));
+    expect(screen.getByRole("dialog", { name: "管理模型配置" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "切换为当前" })).toBeNull();
+
     fireEvent.click(screen.getByRole("button", { name: "完成" }));
-    expect(screen.queryByRole("dialog", { name: "配置 LLM Key" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "管理模型配置" })).toBeNull();
   });
 
   test("navigates to a directly addressable analysis page", async () => {
@@ -774,6 +974,48 @@ describe("ForgeSight application routes", () => {
     );
   });
 
+  test("renames a conversation and supports compact bulk management", async () => {
+    render(<App />);
+    const main = await screen.findByRole("main");
+    fireEvent.click(await within(main).findByRole("button", { name: "发起分析" }, { timeout: 5000 }));
+    await screen.findByRole("button", { name: "制造业务问析" });
+
+    fireEvent.click(screen.getByRole("button", { name: "会话操作：制造业务问析" }));
+    fireEvent.click(screen.getByRole("button", { name: "重命名" }));
+    const nameInput = screen.getByLabelText("会话名称");
+    fireEvent.change(nameInput, { target: { value: "六月质量复盘" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存会话名称" }));
+    expect(await screen.findByRole("button", { name: "六月质量复盘" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "整理" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择会话：六月质量复盘" }));
+    expect(screen.getByText("已选 1 项")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "批量删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "六月质量复盘" })).toBeNull());
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/analysis/sessions/bulk-delete"),
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ sessionIds: ["ses-real"] }) }),
+    );
+  });
+
+  test("switches the per-run model directly from the analysis composer", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "发起分析" }));
+    await screen.findByText("DeepSeek 生产");
+
+    const trigger = screen.getByRole("button", { name: "选择本次分析模型" });
+    expect(trigger.querySelector('[data-icon="cpu"]')).toBeNull();
+    fireEvent.click(trigger);
+
+    const picker = screen.getByRole("listbox", { name: "选择本次分析模型" });
+    fireEvent.click(within(picker).getByRole("option", { name: /Qwen 测试/ }));
+    expect(window.sessionStorage.getItem("forgesight:active-model-profile-id")).toBe("qwen");
+    expect(screen.queryByRole("listbox", { name: "选择本次分析模型" })).toBeNull();
+    expect(screen.getByText("Qwen 测试")).toBeTruthy();
+  });
+
   test("opens smart analysis without creating an empty recent investigation", async () => {
     render(<App />);
 
@@ -782,6 +1024,7 @@ describe("ForgeSight application routes", () => {
     expect(
       await screen.findByRole("heading", { name: "从一个问题开始，进入你的数据现场" }),
     ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "分析证据链" })).toBeNull();
 
     const emptySessionCreates = fetch.mock.calls.filter(([url, options]) => (
       String(url).endsWith("/api/analysis/sessions")
@@ -839,6 +1082,8 @@ describe("ForgeSight application routes", () => {
   test("keeps the sidebar toggle anchored to one slot before and after collapsing", async () => {
     render(<App />);
 
+    await screen.findByRole("heading", { name: "产量趋势" });
+    await waitFor(() => expect(document.querySelector(".dashboard-spinner")).toBeNull());
     const collapse = await screen.findByRole("button", { name: "折叠侧边栏" });
     expect(collapse.className).toContain("sidebar-shell__toggle");
 
@@ -1138,6 +1383,8 @@ describe("ForgeSight application routes", () => {
   test("toggles dark mode from the sidebar user section", async () => {
     render(<App />);
 
+    await screen.findByRole("heading", { name: "产量趋势" });
+    await waitFor(() => expect(document.querySelector(".dashboard-spinner")).toBeNull());
     expect(document.documentElement.getAttribute("data-theme")).not.toBe(
       "dark",
     );
@@ -1321,7 +1568,7 @@ describe("用户注册登录（渐进式认证）", () => {
     ).toBe("zhangsan");
     // 等待业务工作台真正渲染（AppShell 挂载），而非 LoginPage 上的「当前已登录」提示文本
     expect(
-      await screen.findByRole("heading", { name: "今日工作台" }),
+      await screen.findByRole("heading", { name: "业务看板" }),
     ).toBeTruthy();
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(
@@ -1394,7 +1641,7 @@ describe("用户注册登录（渐进式认证）", () => {
       expect(window.location.pathname).toBe("/workspace/overview"),
     );
     expect(
-      await screen.findByRole("heading", { name: "今日工作台" }),
+      await screen.findByRole("heading", { name: "业务看板" }),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "业务" })).toBeNull();
     expect(screen.queryByRole("button", { name: "管理" })).toBeNull();

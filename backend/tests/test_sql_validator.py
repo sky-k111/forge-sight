@@ -97,3 +97,32 @@ def test_locked_select_is_rejected():
     result = validate_sql("SELECT * FROM mes_process_output FOR UPDATE", TABLES)
     assert not result.ok
     assert "锁" in result.reason
+
+
+def test_mysql_strict_group_by_checks_each_select_scope_independently():
+    sql = """
+    WITH latest AS (
+      SELECT product_id, MAX(snapshot_date) AS snapshot_date
+      FROM inventory
+      GROUP BY product_id
+    )
+    SELECT p.product_code, p.product_name, l.snapshot_date
+    FROM latest l JOIN product p ON p.product_id = l.product_id
+    """
+    result = validate_dialect_compatibility(sql, "mysql")
+    assert result.ok
+
+
+def test_mysql_strict_group_by_still_rejects_partial_projection():
+    sql = "SELECT product_id, product_name, SUM(qty) FROM inventory GROUP BY product_id"
+    result = validate_dialect_compatibility(sql, "mysql")
+    assert not result.ok
+    assert "only_full_group_by" in result.reason
+
+
+def test_mysql_unsigned_arithmetic_error_is_classified_as_repairable_query():
+    from sqlalchemy.exc import OperationalError
+    from app.gateway.executor import _execution_error_category
+
+    error = OperationalError("SELECT available_qty - safety_stock_qty", {}, Exception(1690, "unsigned out of range"))
+    assert _execution_error_category(error) == "query_invalid"

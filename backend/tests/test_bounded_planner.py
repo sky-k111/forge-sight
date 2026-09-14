@@ -99,6 +99,27 @@ def test_model_plan_invalid_output_degrades_to_valid_registered_plan():
     assert all(step.arguments.get("task", {}).get("id") for step in delegated)
 
 
+def test_model_cannot_select_a_registered_but_unroutable_delegated_capability():
+    registry = build_default_registry()
+    state = {
+        "run_id": "run-unroutable",
+        "user_question": "对比 L02 和 L03 产量",
+        "analysis_question": "对比 L02 和 L03 产量",
+        "request_segments": [{"kind": "analysis", "text": "对比 L02 和 L03 产量"}],
+        "conversation_context": [],
+    }
+    model_plan = """{"goal":"对比产量","assumptions":[],"steps":[{"id":"s1","capability":"analysis.inspect_context","purpose":"读取上下文","arguments":{},"dependsOn":[],"successCriteria":["完成"],"onFailure":"stop_with_limitations"}],"stopConditions":["完成"],"budget":{}}"""
+
+    plan, source, reason = build_plan(
+        state, registry.names(), lambda *_args: model_plan,
+        capability_descriptors=registry.descriptors(),
+    )
+
+    assert source == "deterministic_fallback"
+    assert reason == "ValueError"
+    assert all(step.capability != "analysis.inspect_context" for step in plan.steps)
+
+
 def test_registry_exposes_business_capabilities_not_raw_sql_or_shell():
     registry = build_default_registry()
     names = registry.names()

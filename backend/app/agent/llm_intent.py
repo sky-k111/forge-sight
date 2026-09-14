@@ -91,7 +91,7 @@ def _time_from_constraint(tc: dict[str, Any] | None) -> TimeRange | None:
             mode=TimeMode.RECENT,
             grain=grain or "day",
             amount=int(tc["amount"]) if tc.get("amount") else None,
-            unit=str(tc.get("unit") or ""),
+            unit=str(tc.get("unit") or "day"),
             label=str(tc.get("label") or ""),
             reference="data_horizon",
         )
@@ -123,6 +123,93 @@ def _chart_from_token(rc: str | None) -> Chart | None:
     if rc in allowed:
         return Chart(type=rc)  # type: ignore[arg-type]
     return None
+
+
+_EXPLICIT_CHART_TERMS: dict[str, tuple[str, ...]] = {
+    "bar": ("柱状图", "条形图"),
+    "line": ("折线图", "趋势图", "曲线图"),
+    "donut": ("饼状图", "饼图", "环形图"),
+    "scatter": ("散点图",),
+    "heatmap": ("热力图", "热度图", "矩阵图"),
+}
+_MULTI_VIEW_MARKERS = ("分别输出", "分别生成", "分别展示", "同时输出", "同时生成", "同时展示")
+
+
+def _explicit_multi_chart_types(question: str) -> list[str]:
+    """Read only the closed chart vocabulary after an explicit multi-view marker.
+
+    This is output-contract validation, not business-language parsing: the model
+    still owns metrics, dimensions and time semantics.  The deterministic layer
+    only prevents an explicitly requested second rendering from disappearing or
+    being attached to an earlier analysis step.
+    """
+    positions = [question.find(marker) for marker in _MULTI_VIEW_MARKERS if marker in question]
+    if not positions:
+        return []
+    suffix = question[min(positions):]
+    hits: list[tuple[int, str]] = []
+    for chart_type, terms in _EXPLICIT_CHART_TERMS.items():
+        chart_positions = [suffix.find(term) for term in terms if term in suffix]
+        if chart_positions:
+            hits.append((min(chart_positions), chart_type))
+    return [chart_type for _, chart_type in sorted(hits)] if len(hits) >= 2 else []
+
+
+def _reconcile_explicit_multi_chart_steps(intent: AgentIntent, question: str) -> AgentIntent:
+    requested = _explicit_multi_chart_types(question)
+    if not requested or not intent.stepsHint:
+        return intent
+    business_indexes = [
+        index for index, step in enumerate(intent.stepsHint)
+        if step.kind.value in {"analysis", "investigation"}
+    ]
+    if not business_indexes:
+        return intent
+
+    # In natural sequential requests, "分别输出 A 和 B" modifies the nearest
+    # preceding business result.  The parser preserves source order, so the last
+    # business step before trailing utility/conversation steps is authoritative.
+    target_index = business_indexes[-1]
+    target = intent.stepsHint[target_index]
+
+    def scope_signature(step: StepIntent) -> str:
+        # Rendering-specific aggregation (for example ``sum`` for a bar and
+        # ``share`` for a donut) must not make two views of the same business
+        # result look like different scopes.
+        payload = {
+            "kind": step.kind.value,
+            "metrics": sorted({metric.id or metric.semantic for metric in step.metrics}),
+            "dimensions": sorted(
+                (dimension.semantic, dimension.grain or "") for dimension in step.dimensions
+            ),
+            "time": step.time.model_dump(mode="json") if step.time else None,
+            "comparison": step.comparison.model_dump(mode="json") if step.comparison else None,
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    signature = scope_signature(target)
+    equivalent_indexes = [
+        index for index in business_indexes
+        if scope_signature(intent.stepsHint[index]) == signature
+    ]
+    delivered = {
+        intent.stepsHint[index].chart.type
+        for index in equivalent_indexes
+        if intent.stepsHint[index].chart is not None
+    }
+    missing = [chart_type for chart_type in requested if chart_type not in delivered]
+    if not missing:
+        return intent
+
+    steps = list(intent.stepsHint)
+    insert_at = max(equivalent_indexes) + 1
+    for chart_type in missing:
+        steps.insert(
+            insert_at,
+            target.model_copy(deep=True, update={"chart": Chart(type=chart_type)}),
+        )
+        insert_at += 1
+    return intent.model_copy(update={"stepsHint": steps})
 
 
 def _fallback_kind(question: str, conversation_context: list[dict[str, str]] | None) -> IntentKind:
@@ -245,10 +332,12 @@ _INTENT_SYSTEM = (
     "- dimensions: 数组，每项含 semantic(产线/产品/工序/车间/班次/缺陷类型/状态/时间) 与可选 "
     "grain(day | week | month | quarter | year，仅时间维度)\n"
     "- time: 对象，含 mode(absolute | relative | current | recent | comparison | none)，grain，"
-    "start/end(ISO8601 字符串，可空)，amount/unit(如最近7天)，reference(now | data_horizon | prev_period)，"
+    "start/end(ISO8601 字符串，可空且 end 永远是不包含的右边界)，amount/unit(unit 只能为 day | week | month | quarter | year)，reference(now | data_horizon | prev_period)，"
     "comparisons(对比周期数组，每项同 time 结构)，label(人类可读)\n"
     "- chart: 对象，含 type(auto | bar | line | donut | scatter | heatmap | table | combo)，"
     "x/y/series(维度或指标名)，orient(auto | vertical | horizontal)，secondary(双轴次指标)\n"
+    "即使用户没有直接说图名，也要按分析语义填写 chart.type：趋势=line、分类比较=bar、构成占比=donut；"
+    "只有确实无法选择时才用 auto。\n"
     "- comparison: 对象，含 basis(对比描述)，periods(对比周期数组)，topDiffK(如「差异最大两个工序」=2)，"
     "by(对比后下钻维度)\n"
     "- modeling: 仅 kind=modeling 时给，含 task(回归/二分类/多分类/聚类/异常检测)，target，features，horizon\n"
@@ -256,11 +345,15 @@ _INTENT_SYSTEM = (
     "- clarify: 仅 kind=clarify 时给，数组，每项含 id/label/question/options/allowCustom\n"
     "- confidence: 0~1 理解把握\n"
     "- reasons: 简短数组，说明为什么这样理解（供审计）\n"
-    "- stepsHint: 若问题是复合/多步，数组，每项含 kind/metrics/dimensions/time/chart/comparison\n"
+    "- stepsHint: 若问题是复合/多步，数组，每项含 kind/metrics/dimensions/time/chart/comparison。"
+    "当前时间、数据源范围等系统能力必须标为 utility，不得标为 conversation\n"
+    "复合请求必须按独立指标、时间范围和图表拆成可验收 stepsHint；输出前逐项核对原问题，任何比较都必须在同一步的 comparison.periods 中保留全部比较对象。\n"
     "- targetResultId: 多结果追问所指向的 previousAnalysis.results[].resultId；新问题留空\n"
     "时间基准规则：用户说今天/本周/本月/上周/上个月等自然日历时间，且没有明确说‘截至最新数据’时，"
     "reference 必须是 now；只有用户明确要求按数据最新日期、数据截至日期计算时才用 data_horizon。"
     "用户给出明确 ISO 起止日期时用 absolute，必须原样保留 start/end。\n"
+    "最近7天必须表示为 mode=recent,amount=7,unit=day，不能表示为 relative 或 previous_month。"
+    "裸月份如‘6月份’用 mode=absolute,grain=month,label=6月份；不确定年份时不要编造 start/end，日历层会统一计算。\n"
     "判定边界（重要）：\n"
     "- 只有当用户明确要查询/对比企业生产、质量、设备、库存等业务数据，且问题里带真实业务指标或维度"
     "（产量/良率/不良/产线/工序/设备/库存/工单/物料/合格/缺陷/停机/报警/产能…）时，kind 才取 analysis。\n"
@@ -313,6 +406,7 @@ def resolve_intent(
             from app.agent.request_context import merge_intent
             previous = next((item.get("analysisContext") for item in reversed(conversation_context or []) if item.get("analysisContext")), None)
             intent = merge_intent(intent, previous)
+            intent = _reconcile_explicit_multi_chart_steps(intent, question)
             return intent.model_copy(update={"producer": "llm", "question": question, "failure": None}), "llm", None
         except Exception as exc:  # noqa: BLE001 - 非法/失败必须安全降级
             format_error = isinstance(exc, (ValueError, TypeError))

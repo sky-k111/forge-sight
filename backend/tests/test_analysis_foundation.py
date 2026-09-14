@@ -70,6 +70,30 @@ def test_delete_session_hides_it_without_destroying_audit_history(analysis_sessi
         service.create_run(created["id"], "删除后不能继续提问")
 
 
+def test_session_title_can_be_renamed_and_stays_stable_across_follow_up_questions(analysis_session):
+    created = service.create_session("未命名分析", 1, "u-rename")
+    service.create_run(created["id"], "先看一下六月良率", "idem-rename-1")
+
+    renamed = service.rename_session(created["id"], "  六月质量复盘  ", "u-rename")
+    service.create_run(created["id"], "再按产线拆开", "idem-rename-2")
+
+    assert renamed["displayTitle"] == "六月质量复盘"
+    assert service.list_sessions("u-rename")[0]["displayTitle"] == "六月质量复盘"
+
+
+def test_bulk_delete_sessions_keeps_audit_runs_but_hides_all_selected_sessions(analysis_session):
+    first = service.create_session("会话一", 1, "u-bulk")
+    second = service.create_session("会话二", 1, "u-bulk")
+    run_id = service.create_run(first["id"], "查询六月产量", "idem-bulk")["runId"]
+
+    result = service.delete_sessions([first["id"], second["id"]], "u-bulk")
+
+    assert result["deletedCount"] == 2
+    assert result["deletedIds"] == [first["id"], second["id"]]
+    assert service.list_sessions("u-bulk") == []
+    assert service.get_run(run_id)["question"] == "查询六月产量"
+
+
 def test_llm_attempt_usage_price_snapshot_and_retry_totals(analysis_session):
     created = service.create_session("设备分析", 1, "u-1")
     run_id = service.create_run(created["id"], "分析设备停机", "idem-usage")["runId"]

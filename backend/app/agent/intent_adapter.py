@@ -39,19 +39,30 @@ def _extract_month(label: str) -> int | None:
     return None
 
 
+def _comparison_period_dict(period: TimeRange) -> dict[str, Any]:
+    """Serialize one comparison member without losing relative semantics."""
+    data: dict[str, Any] = {
+        "kind": period.mode.value,
+        "label": period.label or "",
+        "reference": period.reference,
+        "timeGrain": period.grain or "day",
+    }
+    if period.amount is not None:
+        data["amount"] = period.amount
+    if period.unit is not None:
+        data["unit"] = period.unit
+    if period.start:
+        data["startInclusive"] = period.start
+    if period.end:
+        data["endExclusive"] = period.end
+    return data
+
+
 def _time_constraint_from_range(r: TimeRange | None) -> dict[str, Any] | None:
     if r is None:
         return None
     label = r.label or ""
     grain = r.grain or "day"
-
-    def period_dict(p: TimeRange) -> dict[str, Any]:
-        d: dict[str, Any] = {"label": p.label or ""}
-        if p.start:
-            d["startInclusive"] = p.start
-        if p.end:
-            d["endExclusive"] = p.end
-        return d
 
     if r.mode == TimeMode.COMPARISON:
         # 对比型（如「5月 vs 6月」）：裸月份可由 time_resolution 锚定到数据
@@ -62,7 +73,7 @@ def _time_constraint_from_range(r: TimeRange | None) -> dict[str, Any] | None:
             "label": label,
             "timeGrain": grain,
             "reference": r.reference,
-            "periods": [period_dict(m) for m in members],
+            "periods": [_comparison_period_dict(m) for m in members],
         }
     if r.mode == TimeMode.ABSOLUTE:
         # 优先按 label 里的「N 月」锚定数据地平线，而不是无条件使用 LLM 猜的绝对日期
@@ -71,15 +82,24 @@ def _time_constraint_from_range(r: TimeRange | None) -> dict[str, Any] | None:
         if month is not None and r.reference != "now":
             return {"kind": "specific_month", "month": month, "label": label, "timeGrain": grain, "reference": "data_horizon"}
         if r.start or r.end:
-            return {"kind": "absolute", "label": label, "timeGrain": grain, "reference": r.reference, "periods": [period_dict(r)]}
+            return {"kind": "absolute", "label": label, "timeGrain": grain, "reference": r.reference, "periods": [_comparison_period_dict(r)]}
         return {"kind": "absolute", "label": label, "timeGrain": grain, "reference": r.reference}
     if r.mode == TimeMode.CURRENT:
         kind = {"month": "current_month", "week": "current_week", "quarter": "current_quarter", "year": "current_year"}.get(grain, "current_month")
-        return {"kind": kind, "label": label, "timeGrain": grain, "reference": "now"}
+        reference = "data_horizon" if any(token in label for token in ("最新", "数据截止", "截至数据")) else "now"
+        return {"kind": kind, "label": label, "timeGrain": grain, "reference": reference}
     if r.mode == TimeMode.RECENT:
         return {"kind": "recent", "label": label, "amount": r.amount, "unit": r.unit, "timeGrain": grain, "reference": r.reference}
     if r.mode == TimeMode.RELATIVE:
-        kind = {"week": "previous_week", "month": "previous_month", "quarter": "previous_quarter", "year": "previous_year"}.get(grain, "previous_month")
+        kinds = {"week": "previous_week", "month": "previous_month", "quarter": "previous_quarter", "year": "previous_year"}
+        kind = kinds.get(grain)
+        if kind is None:
+            # A relative day plus an amount is a rolling range, not a month.
+            # Preserve the accepted intent instead of silently changing it.
+            if grain == "day" and r.amount:
+                return {"kind": "recent", "label": label, "amount": r.amount,
+                        "unit": r.unit or "day", "timeGrain": grain, "reference": r.reference}
+            return None
         return {"kind": kind, "label": label, "timeGrain": grain, "reference": r.reference}
     return None
 
@@ -105,8 +125,15 @@ def _comparison_periods(intent: AgentIntent) -> list[TimeRange]:
     periods: list[TimeRange] = []
     if intent.comparison is not None:
         periods = list(intent.comparison.periods)
-    if not periods and intent.time is not None and intent.time.mode == TimeMode.COMPARISON:
-        periods = list(intent.time.comparisons)
+    if intent.time is not None:
+        if intent.time.mode == TimeMode.COMPARISON:
+            if not periods:
+                periods = list(intent.time.comparisons)
+        elif intent.comparison is not None:
+            # Providers often encode the primary side in ``time`` and only the
+            # counterpart(s) in ``comparison.periods``.  Both are accepted facts;
+            # omitting the primary side silently turns a comparison into one range.
+            periods = [intent.time, *periods]
     seen: set[str] = set()
     out: list[TimeRange] = []
     for p in periods:
@@ -117,6 +144,15 @@ def _comparison_periods(intent: AgentIntent) -> list[TimeRange]:
         # 裸周期由后续时间解析锚定；显式 start/end 属于用户的绝对约束，不能覆盖。
         out.append(p)
     return out
+
+
+def _needs_categorical_period_bucket(periods: list[TimeRange]) -> bool:
+    """Whether comparison members cannot share one honest calendar bucket."""
+    if len(periods) < 2:
+        return False
+    modes = {period.mode for period in periods}
+    grains = {period.grain for period in periods if period.grain}
+    return TimeMode.RECENT in modes or len(modes) > 1 or len(grains) > 1
 
 
 def _metric_compound_pieces(q: str) -> list[str]:
@@ -193,19 +229,52 @@ def _resolve_tc(time_range, q: str) -> dict[str, Any] | None:
     return _det_tc(q)
 
 
+def _step_question(step) -> str:
+    """Render one compound step as an isolated, answerable question."""
+    metrics = "、".join(item.semantic for item in step.metrics if item.semantic) or "业务指标"
+    dimensions = []
+    for item in step.dimensions:
+        # A heterogeneous period comparison is grouped by the accepted period
+        # labels (for example "最近有7天" vs "6月第一周"), not by the
+        # source time grain.  Rendering "按日" here falsely promises daily rows.
+        if step.comparison and item.semantic == "时间":
+            continue
+        if item.semantic == "时间" and item.grain:
+            dimensions.append({"day": "按日", "week": "按周", "month": "按月",
+                               "quarter": "按季度", "year": "按年"}.get(item.grain, "按时间"))
+        elif item.semantic:
+            dimensions.append(f"按{item.semantic}")
+    time_label = str((step.time.label if step.time else "") or "").strip()
+    comparison = str((step.comparison.basis if step.comparison else "") or "").strip()
+    action = f"比较{comparison}" if comparison else "查询"
+    body = " ".join(part for part in (action, time_label, "、".join(dimensions), metrics) if part).strip()
+    if step.chart and step.chart.type not in {"auto", "table"}:
+        labels = {"line": "折线图", "bar": "柱状图", "donut": "饼图", "scatter": "散点图",
+                  "heatmap": "热力图", "combo": "组合图"}
+        body += f"，输出{labels.get(step.chart.type, step.chart.type)}"
+    return body
+
+
 def intent_to_tasks(intent: AgentIntent, *, question: str | None = None) -> list[dict[str, Any]]:
     """把 AgentIntent 翻译成下游受治理子图能直接消费的 AnalysisTask 列表。"""
     q = question or intent.question
     if intent.stepsHint:
         tasks = []
-        for index, step in enumerate(intent.stepsHint):
+        analysis_steps = [
+            step for step in intent.stepsHint
+            if step.kind.value in {"analysis", "investigation"}
+        ]
+        for index, step in enumerate(analysis_steps):
+            subquestion = _step_question(step) or q
             child = AgentIntent.model_validate({**intent.model_dump(),
                 **step.model_dump(), "stepsHint": [], "relation": "new",
-                "question": q, "comparison": step.comparison,
+                "question": subquestion, "comparison": step.comparison,
             })
-            for task in intent_to_tasks(child, question=q):
+            for task in intent_to_tasks(child, question=subquestion):
                 task["order"] = len(tasks) + 1
                 task["requirementId"] = f"R{index + 1}"
+                task["originalQuestion"] = q
+                task["understanding"] = [subquestion]
                 tasks.append(task)
         return tasks
     if intent.relation != "new":
@@ -247,11 +316,15 @@ def intent_to_tasks(intent: AgentIntent, *, question: str | None = None) -> list
     if periods:
         task = _task(0, {"kind": "comparison", "label": intent.comparison.basis if intent.comparison else "周期比较",
                          "timeGrain": (intent.time.grain if intent.time else None) or "month", "reference": periods[0].reference,
-                         "periods": [{"label": p.label, "reference": p.reference,
-                                      **({"startInclusive": p.start} if p.start else {}),
-                                      **({"endExclusive": p.end} if p.end else {})} for p in periods]}, "single", [])
-        if not any(_time_dimish(d) for d in task["groupBy"]):
-            task["groupBy"].append("月份")
+                         "periods": [_comparison_period_dict(p) for p in periods]}, "single", [])
+        if _needs_categorical_period_bucket(periods):
+            # Heterogeneous windows are grouped by the accepted period members
+            # themselves.  A shared day/week/month bucket would distort them.
+            task["groupBy"] = [d for d in task["groupBy"] if not _time_dimish(d)]
+            task["groupBy"].insert(0, "比较周期")
+        elif not any(_time_dimish(d) for d in task["groupBy"]):
+            grain = (intent.time.grain if intent.time else None) or periods[0].grain or "month"
+            task["groupBy"].append(_GRAIN_TOKEN.get(grain, "月份"))
         return [task]
 
     if intent.producer == "llm":

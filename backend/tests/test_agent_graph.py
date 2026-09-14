@@ -12,7 +12,7 @@ from app.agent.graph import (
     _task_constraint_validation,
     build_analysis_graph,
 )
-from app.agent.intent import build_intent_plan
+from app.agent.intent import build_intent_plan, has_write_intent
 from app.db.models import AuditLog
 from app.gateway.cost_guard import ExplainCheckResult
 from app.gateway.executor import ExecutionResult
@@ -284,6 +284,37 @@ def test_month_comparison_validation_requires_both_explicit_periods():
     assert "未覆盖完整双周期边界" in wrong_reason
     assert complete_ok is True
     assert complete_score == 100
+
+
+def test_category_line_chart_does_not_require_a_time_axis():
+    task = {
+        "requestedChart": "line", "groupBy": ["产线"],
+        "timeConstraint": {"kind": "absolute", "label": "2026年7月", "periods": [
+            {"startInclusive": "2026-07-01", "endExclusive": "2026-08-01"},
+        ]},
+        "dimensionBindings": [{"semantic": "产线", "field": "line_id", "grain": None, "status": "bound"}],
+    }
+    context = {"tables": [{"name": "fact", "fields": [
+        {"name": "stat_date", "semanticName": "统计日期"},
+        {"name": "line_id", "semanticName": "产线"},
+    ]}], "metrics": [{"physicalTimeField": "stat_date"}], "source": {"type": "mysql"}}
+    sql = ("SELECT line_id AS 产线, SUM(qty) AS 产量 FROM fact "
+           "WHERE stat_date >= '2026-07-01' AND stat_date < '2026-08-01' GROUP BY line_id")
+    ok, _, reason, _ = _task_constraint_validation(sql, task, context)
+    assert ok is True, reason
+
+
+def test_deterministic_clock_utility_cannot_be_downgraded_by_llm_intent():
+    calls = []
+    deps = _deps(generate_text=lambda *_args: calls.append("llm") or "不应调用")
+    graph = build_analysis_graph(deps, checkpointer=InMemorySaver())
+    result = graph.invoke({
+        "session_id": "ses-clock-authority", "run_id": "run-clock-authority", "source_id": 1,
+        "user_question": "现在几点了？", "retry_count": 0, "attempted_sqls": [],
+        "agent_intent": {"kind": "conversation", "question": "现在几点了？", "producer": "llm"},
+    }, config={"configurable": {"thread_id": "run-clock-authority"}})
+    assert "Asia/Shanghai" in result["direct_response"]
+    assert calls == []
 
 
 def test_smalltalk_finishes_without_retrieval_sql_or_model_calls():
@@ -736,6 +767,66 @@ def test_mixed_conversation_and_analysis_executes_only_analysis_segment():
     assert result["execution"]["row_count"] == 1
 
 
+def test_mixed_clock_and_structured_analysis_does_not_short_circuit_business_work():
+    graph = build_analysis_graph(_deps(), checkpointer=InMemorySaver())
+    result = graph.invoke(
+        {
+            "session_id": "ses-clock-analysis",
+            "run_id": "run-clock-analysis",
+            "source_id": 1,
+            "user_question": "分析工序良率，并且告诉我现在几点了",
+            "agent_intent": {
+                "kind": "analysis", "question": "分析工序良率，并且告诉我现在几点了",
+                "producer": "llm", "metrics": [{"semantic": "工序良率", "aggregation": "rate"}],
+                "stepsHint": [
+                    {"kind": "analysis", "metrics": [{"semantic": "工序良率", "aggregation": "rate"}]},
+                    {"kind": "utility"},
+                ],
+            },
+            "planner_enabled": False,
+            "retry_count": 0,
+            "attempted_sqls": [],
+        },
+        config={"configurable": {"thread_id": "run-clock-analysis"}},
+    )
+
+    assert result["intent_kind"] == "mixed"
+    assert result["analysis_question"]
+    assert len(result["tasks"]) == 1
+    assert "Asia/Shanghai" in result["direct_response"]
+    assert result.get("semantic_context")
+
+
+def test_intent_provider_failure_is_not_hidden_by_clock_utility():
+    graph = build_analysis_graph(_deps(), checkpointer=InMemorySaver())
+    failure = {
+        "code": "INTENT_SERVICE_UNAVAILABLE",
+        "retryable": True,
+        "userSafeMessage": "分析服务暂时不可用，请稍后重试。",
+    }
+    result = graph.invoke(
+        {
+            "session_id": "ses-clock-provider-failure",
+            "run_id": "run-clock-provider-failure",
+            "source_id": 1,
+            "user_question": "分析最近7天良率，并告诉我现在几点",
+            "agent_intent": {
+                "kind": "clarify",
+                "question": "分析最近7天良率，并告诉我现在几点",
+                "producer": "fallback",
+                "failure": failure,
+            },
+            "retry_count": 0,
+            "attempted_sqls": [],
+        },
+        config={"configurable": {"thread_id": "run-clock-provider-failure"}},
+    )
+
+    assert result["intent_kind"] == "clarify"
+    assert result["utility_question"] == ""
+    assert result["error"] == failure
+
+
 def test_duplicate_failed_sql_stops_retry():
     graph = build_analysis_graph(
         _deps(validate=lambda _sql, _allowed: SqlCheckResult(ok=False, reason="字段不存在")),
@@ -957,6 +1048,14 @@ def test_write_intent_is_blocked_before_llm(analysis_session):
         assert audit.result == "已拦截"
 
 
+def test_analysis_revision_is_not_mistaken_for_a_database_write():
+    assert has_write_intent("刚才这个改成工序不良率") is False
+    assert has_write_intent("把图表调整为折线图") is False
+    assert has_write_intent("把6月份的生产记录删掉再统计") is True
+    assert has_write_intent("修改生产记录里的合格数量") is True
+    assert has_write_intent("UPDATE mes_process_output SET good_qty = 0") is True
+
+
 def test_compound_question_is_split_into_traceable_tasks(analysis_session):
     created = service.create_session("复合问题测试", 1, "u-multi")
     run_id = service.create_run(
@@ -971,6 +1070,27 @@ def test_compound_question_is_split_into_traceable_tasks(analysis_session):
     assert len(snapshot["tasks"]) == 2
     assert [item["analysisType"] for item in snapshot["tasks"]] == ["trend", "ranking"]
     assert all(item["status"] == "succeeded" for item in snapshot["tasks"])
+
+
+def test_mixed_clock_response_is_persisted_before_business_graph_steps(analysis_session):
+    created = service.create_session("即时系统能力测试", 1, "u-instant-utility")
+    run_id = service.create_run(
+        created["id"],
+        "分析最近7天工序良率，并告诉我现在几点",
+        "instant-utility-idem",
+    )["runId"]
+
+    runner.execute_run(run_id, checkpointer=InMemorySaver(), dependencies=_deps())
+
+    snapshot = service.get_run(run_id)
+    utility = next(item for item in snapshot["artifacts"] if item["type"] == "utility-response")
+    assert "Asia/Shanghai" in utility["content"]["text"]
+    events = service.list_events(run_id, include_admin=True)
+    artifact_seq = next(item["seq"] for item in events if item["type"] == "artifact.created"
+                        and item["payload"].get("type") == "utility-response")
+    route_seq = next(item["seq"] for item in events if item["type"] == "step.started")
+    assert artifact_seq < route_seq
+    assert snapshot["status"] == "succeeded"
 
 
 def test_long_conversation_history_does_not_overflow_retrieval_question():
@@ -1042,6 +1162,44 @@ def test_real_follow_up_keeps_bounded_user_history_for_retrieval():
     assert result["error"] is None
     assert "前序问题：查看设备停机时长" in retrieval_questions[0]
     assert "当前问题：" in retrieval_questions[0]
+
+
+def test_retrieval_uses_structured_business_terms_missing_from_colloquial_question():
+    retrieval_questions = []
+    base = _deps()
+    graph = build_analysis_graph(
+        GraphDependencies(
+            retrieve_context=lambda question, _source_id: retrieval_questions.append(question) or _context(),
+            generate_text=base.generate_text,
+            validate_sql=base.validate_sql,
+            execute_sql=base.execute_sql,
+        ),
+        checkpointer=InMemorySaver(),
+    )
+
+    result = graph.invoke(
+        {
+            "session_id": "ses-colloquial",
+            "run_id": "run-colloquial",
+            "source_id": 1,
+            "user_question": "老周，帮我瞅一眼6月份哪条线做得最多",
+            "agent_intent": {
+                "kind": "analysis",
+                "question": "老周，帮我瞅一眼6月份哪条线做得最多",
+                "producer": "llm",
+                "metrics": [{"semantic": "产量"}],
+                "dimensions": [{"semantic": "产线"}],
+            },
+            "retry_count": 0,
+            "attempted_sqls": [],
+        },
+        config={"configurable": {"thread_id": "run-colloquial"}},
+    )
+
+    # The synthetic context intentionally does not contain these semantics; this
+    # unit only verifies what is sent to retrieval before contract validation.
+    assert result["error"]["code"] == "INTENT_CLARIFY"
+    assert any("已解析业务语义：产量、产线" in question for question in retrieval_questions)
 
 
 def test_task_constraint_gate_repairs_missing_month_filter_and_wrong_dimension():
@@ -1168,6 +1326,50 @@ def test_clarification_resumes_same_run_and_checkpoint_can_branch(analysis_sessi
     assert len(adjusted_session["messages"]) == 1
     assert adjusted_session["messages"][0]["metadata"]["branchAdjustment"]["metric"] == "最终合格率"
     assert adjusted_session["branchContext"]["adjustments"]["groupBy"] == "产线"
+
+
+def test_exact_structured_metric_resolves_retrieval_candidates_without_interrupt():
+    ambiguous = _context()
+    ambiguous["metrics"] = [
+        {"id": "M-005", "name": "工序不良率", "physicalFormula": "SUM(defect_qty)/SUM(input_qty)"},
+        {"id": "M-007", "name": "抽检不良率", "physicalFormula": "SUM(defect_qty)/SUM(sample_qty)"},
+    ]
+    ambiguous["tables"][0]["fields"] = [
+        {"name": "defect_qty", "semanticName": "不良数量"},
+        {"name": "input_qty", "semanticName": "投入数量"},
+        {"name": "process_name", "semanticName": "工序名称"},
+    ]
+    ambiguous["coverage"] = {"status": "needs_clarification"}
+    deps = _deps(
+        generate_text=lambda _state, step, *_args: (
+            "SELECT process_name, SUM(defect_qty)/SUM(input_qty) AS rate "
+            "FROM mes_process_output GROUP BY process_name"
+            if step == "query.generate" else "已按工序不良率完成分析。"
+        )
+    )
+    deps = GraphDependencies(
+        retrieve_context=lambda *_args: deepcopy(ambiguous),
+        generate_text=deps.generate_text,
+        validate_sql=deps.validate_sql,
+        execute_sql=lambda *_args: ExecutionResult(
+            ok=True, columns=["process_name", "rate"], rows=[["装配", 0.03]], row_count=1,
+            tables=["mes_process_output"], checks=["只读通过"],
+        ),
+    )
+    graph = build_analysis_graph(deps, checkpointer=InMemorySaver())
+    intent = {
+        "kind": "analysis", "question": "刚才这个改成工序不良率", "producer": "llm",
+        "metrics": [{"semantic": "工序不良率"}], "dimensions": [{"semantic": "工序"}],
+    }
+
+    result = graph.invoke({
+        "session_id": "ses-exact-metric", "run_id": "run-exact-metric", "source_id": 1,
+        "user_question": intent["question"], "agent_intent": intent,
+        "planner_enabled": False, "retry_count": 0, "attempted_sqls": [],
+    }, config={"configurable": {"thread_id": "run-exact-metric"}})
+
+    assert not result.get("waiting_user")
+    assert result["metric_resolution"]["metricId"] == "M-005"
 
 
 # ---- 建模提案链路（analysisType=modeling → propose_modeling 确定性节点） ----

@@ -35,6 +35,7 @@ from app.agent.intent import (
 )
 from app.agent.dialogue import has_previous_result as _has_previous_result
 from app.agent.llm_intent import resolve_intent
+from app.agent.system_utility import build_system_utility_response, is_system_utility_request
 from app.config import settings
 from app.db.models import (
     AnalysisArtifact,
@@ -189,13 +190,38 @@ def _llm_error_is_transient(exc: Exception) -> bool:
     if any(tag in msg for tag in ("AuthenticationError", "PermissionDeniedError", "BadRequestError")):
         return False
     lowered = msg.lower()
-    return "返回空内容" in msg or "调用失败" in msg or "timeout" in lowered or "timed out" in lowered
+    return (
+        "返回空内容" in msg
+        or "调用失败" in msg
+        or "调用超时" in msg
+        or "无法连接" in msg
+        or "请求过于频繁" in msg
+        or "暂时不可用" in msg
+        or "timeout" in lowered
+        or "timed out" in lowered
+    )
 
 
 def _tracked_generate(state: dict, step_key: str, system: str, user: str) -> str:
     task_id = (state.get("task") or {}).get("id")
+    model_profile_id = state.get("model_profile_id")
+    model_runtime = None
+    if model_profile_id:
+        try:
+            from app.api.model_settings import resolve_runtime_profile
+
+            model_runtime = resolve_runtime_profile(str(model_profile_id))
+        except (KeyError, ValueError) as exc:
+            raise LLMError("所选模型配置已失效，请重新选择") from exc
+    model_name = str((model_runtime or {}).get("model") or settings.llm_model)
+    provider_name = str((model_runtime or {}).get("protocol") or "openai_compatible").replace("_", "-")
     max_tokens = {
         "intent.route": 500,
+        # AgentIntent may contain several independently deliverable steps.  Reasoning
+        # models count their hidden reasoning against max_tokens, so the old 2400
+        # default could leave only a few hundred tokens for the JSON and truncate it.
+        "intent.parse": 6000,
+        "intent.repair": 6000,
         "conversation.reply": 600,
         "result.explain": 1200,
     }.get(step_key, 2400)
@@ -219,23 +245,29 @@ def _tracked_generate(state: dict, step_key: str, system: str, user: str) -> str
         )
         call_id = usage.start_call(
             state["run_id"],
-            provider="openai-compatible",
-            model=settings.llm_model,
+            provider=provider_name,
+            model=model_name,
             step_key=step_key,
             task_id=task_id,
             retry_of_call_id=retry_of,
+            model_profile_id=str(model_profile_id) if model_profile_id else None,
         )
         started = time.perf_counter()
         try:
-            response = provider.chat_completion(
-                system,
-                user,
-                temperature=0.1,
-                max_tokens=max_tokens,
-                timeout_seconds=min(float(settings.llm_timeout_seconds), remaining) if remaining is not None else None,
+            completion_options = {
+                "temperature": 0.1,
+                "max_tokens": max_tokens,
+                "timeout_seconds": min(float(settings.llm_timeout_seconds), remaining) if remaining is not None else None,
                 **({"structured": True} if step_key in {
                     "intent.parse", "intent.repair", "planner.build", "planner.evaluate", "visual.contract"
                 } else {}),
+            }
+            if model_runtime is not None:
+                completion_options["runtime"] = model_runtime
+            response = provider.chat_completion(
+                system,
+                user,
+                **completion_options,
             )
         except Exception as exc:  # noqa: BLE001
             usage.finish_call(
@@ -592,6 +624,15 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
         observation_content = (update.get("observations") or [None])[-1]
         if node in {"record_business_observation", "record_delegated_observation"} and observation_content:
             observation_content = dict(observation_content)
+            # Planner 路径不经过 advance_task，因此必须在观察落库时收口
+            # AnalysisTask 状态。否则 Run 已成功、产物也已交付，但侧边栏
+            # 仍会永久显示“运行中”。
+            if task_id:
+                task_row = session.query(AnalysisTask).filter_by(id=task_id).first()
+                if task_row:
+                    observation_status = str(observation_content.get("status") or "failed")
+                    task_row.status = "succeeded" if observation_status == "succeeded" else "failed"
+                    task_row.finished_at = datetime.now()
             artifact_query = session.query(AnalysisArtifact.id).filter_by(run_id=run.id)
             if task_id:
                 artifact_query = artifact_query.filter_by(task_id=task_id)
@@ -1001,6 +1042,7 @@ def execute_inline_conversation(
             "session_id": run.session_id,
             "run_id": run.id,
             "source_id": run.source_id,
+            "model_profile_id": ((run.budget_snapshot_json or {}).get("llm") or {}).get("profileId"),
             "skill_enhancement_enabled": bool(run.skill_enhancement_enabled),
             "skill_context": {},
             "user_question": message.content,
@@ -1137,6 +1179,7 @@ def execute_inline_report_request(run_id: str, template_id: str | None = None) -
             "session_id": run.session_id,
             "run_id": run.id,
             "source_id": run.source_id,
+            "model_profile_id": ((run.budget_snapshot_json or {}).get("llm") or {}).get("profileId"),
             "user_question": message.content,
             "conversation_context": [],
             "retry_count": 0,
@@ -1209,6 +1252,7 @@ def execute_inline_route(run_id: str) -> dict:
             "session_id": run.session_id,
             "run_id": run.id,
             "source_id": run.source_id,
+            "model_profile_id": ((run.budget_snapshot_json or {}).get("llm") or {}).get("profileId"),
             "user_question": message.content,
             "conversation_context": context,
             "retry_count": 0,
@@ -1435,6 +1479,7 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
             "runtime_started_monotonic": active_started_at,
             "runtime_duration_limit": duration_limit,
             "source_id": run.source_id,
+            "model_profile_id": ((run.budget_snapshot_json or {}).get("llm") or {}).get("profileId"),
             "tenant_id": frozen_access.get("tenantId") or (business_session.tenant_id if business_session else "tenant-default"),
             "role": frozen_access.get("role") or "business",
             "capability_scopes": list(frozen_access.get("capabilityScopes") or [
@@ -1496,6 +1541,24 @@ def execute_run(run_id: str, checkpointer=None, dependencies: GraphDependencies 
         # 避免 worker 在 `idle in transaction` 中阻塞后续认领，即使进程中途被杀也不会留下
         # 僵死事务挡住新 worker（配合 Postgres idle_in_transaction_session_timeout 兜底）。
         session.commit()
+        # 系统能力不需要等待意图模型和数据库查询。对复合请求先冻结并
+        # 落库这份确定性回答，SSE 收到 artifact.created 后即可立即展示；
+        # 后续 LangGraph 复用同一文本，避免跨分钟时即时气泡与最终记录不一致。
+        if not is_resume and not has_checkpoint and is_system_utility_request(message.content):
+            utility_response = build_system_utility_response(message.content, run.source_id)
+            initial["utility_response"] = utility_response
+            existing_utility = session.query(AnalysisArtifact.id).filter_by(
+                run_id=run.id, type="utility-response"
+            ).first()
+            if existing_utility is None:
+                _artifact(
+                    session,
+                    run,
+                    None,
+                    "utility-response",
+                    {"kind": "system", "text": utility_response},
+                )
+                session.commit()
         # 写意图在意图解析之前拦截：删除/更新等写入问法不进 LLM，由 intent_guard 一键阻断。
         from app.agent.intent import has_write_intent
         has_write_terms = has_write_intent(message.content)

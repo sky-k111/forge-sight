@@ -5,6 +5,7 @@ export { TrendLineChart } from "./TrendLineChart";
 export { RankBarChart } from "./RankBarChart";
 export { HorizontalRankChart } from "./HorizontalRankChart";
 export { ShareDonutChart } from "./ShareDonutChart";
+export { CategoryTreemapChart } from "./CategoryTreemapChart";
 export { CorrelationScatterChart } from "./CorrelationScatterChart";
 export { ComboMetricChart } from "./ComboMetricChart";
 export { MatrixHeatmapChart } from "./MatrixHeatmapChart";

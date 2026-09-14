@@ -52,7 +52,7 @@ from app.agent.state import AnalysisState
 from app.agent.time_resolution import resolve_time_constraint
 from app.agent.query_compiler import compile_query
 from app.agent.validators import validate_intent
-from app.agent.system_utility import build_system_utility_response
+from app.agent.system_utility import build_system_utility_response, is_system_utility_request
 from app.config import settings
 from app.gateway.executor import ExecutionResult
 from app.gateway.connectors import get_adapter
@@ -683,6 +683,17 @@ def _inferred_query(raw: str, question: str) -> tuple[str, dict[str, Any]]:
 
 
 def _requires_period_comparison(task: dict[str, Any]) -> bool:
+    if str(task.get("analysisType") or "") in {"comparison", "compare"}:
+        return True
+    if str((task.get("timeConstraint") or {}).get("kind") or "") == "comparison":
+        return True
+    if (task.get("semanticIntent") or {}).get("comparison"):
+        return True
+    # Structured intent is authoritative.  A stray comparison word in prose
+    # must not manufacture a delivery requirement that the planner did not
+    # accept.  Keyword inference remains only for pre-contract legacy callers.
+    if task.get("semanticIntent"):
+        return False
     question = str(task.get("normalizedQuestion") or task.get("originalQuestion") or "")
     paired_periods = (
         (("本月", "这个月"), ("上月", "上个月")),
@@ -713,12 +724,20 @@ def _result_completeness_assessment(state: AnalysisState) -> tuple[int, list[str
     if not _requires_period_comparison(task):
         return 100, [], None
 
-    columns = [str(item or "").lower() for item in execution.get("columns", [])]
+    raw_columns = [str(item or "") for item in execution.get("columns", [])]
+    columns = [item.lower() for item in raw_columns]
     rows = execution.get("rows", []) or []
     if not rows:
         return 20, ["比较任务没有返回任何周期数据，无法完成比较。"], 55
 
-    # Wide results may put current/previous values in two columns on one row.
+    result_schema = (state.get("metric_resolution") or {}).get("resultSchema") or []
+    time_keys = {str(item.get("key") or "").lower() for item in result_schema if item.get("role") == "time"}
+    if time_keys:
+        time_indexes = [index for index, column in enumerate(columns) if column in time_keys]
+    else:
+        time_indexes = []
+
+    # Compatibility for legacy wide results without resultSchema.
     has_current_column = any(
         re.search(r"(?:^|_)(?:current|this)(?:_|$)|本月|本期|当前", column)
         for column in columns
@@ -730,11 +749,12 @@ def _result_completeness_assessment(state: AnalysisState) -> tuple[int, list[str
     if has_current_column and has_previous_column:
         return 100, [], None
 
-    time_indexes = [
-        index
-        for index, column in enumerate(columns)
-        if re.search(r"month|date|period|year|week|quarter|月份|日期|周期|年度|周|季度", column)
-    ]
+    if not time_indexes and not result_schema:
+        time_indexes = [
+            index
+            for index, column in enumerate(columns)
+            if re.search(r"month|date|period|year|week|quarter|月份|日期|周期|年度|周|季度", column)
+        ]
     periods = {
         str(row[index])
         for row in rows
@@ -962,16 +982,14 @@ def _task_constraint_validation(
     if requested_chart == "line":
         select_clause = normalized.split(" from ", 1)[0]
         has_time_axis = any(field.lower() in select_clause for field in sql_time_fields)
-        if time_fields and not has_time_axis:
+        time_axis_requested = any(
+            item.get("grain") for item in (task.get("dimensionBindings") or [])
+        )
+        if time_axis_requested and time_fields and not has_time_axis:
             failures.append("折线图结果缺少日期/时间横轴字段")
-        if time_constraint and time_fields and "group by" not in normalized:
+        if time_axis_requested and time_constraint and time_fields and "group by" not in normalized:
             failures.append("折线图时间序列缺少按日期或时间粒度聚合")
         checks.append("展示方式：折线图")
-
-    if requested_chart == "line" and time_constraint and "产品" not in group_by:
-        group_clause = normalized.split(" group by ", 1)[1].split(" order by ", 1)[0] if " group by " in normalized else ""
-        if re.search(r"\b(?:product_name|product_code|product_id)\b", group_clause):
-            failures.append("用户未要求按产品拆分，SQL 不应额外增加产品分组")
 
     if group_by:
         from app.agent.query_requirements import dimension_outputs
@@ -1149,7 +1167,37 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         unified = state.get("agent_intent")
         if unified and not has_write_intent(state["user_question"]):
             intent = AgentIntent.model_validate(unified)
+            # Provider/format failures take precedence over deterministic side
+            # utilities.  A compound request such as "分析…并告诉我几点"
+            # must not be reported as a successful utility-only run merely because
+            # intent parsing failed before its business steps were recovered.
+            if intent.producer == "fallback" and intent.failure:
+                failure = intent.failure
+                return {
+                    "analysis_question": "",
+                    "utility_question": "",
+                    "intent_kind": "clarify",
+                    "direct_response": failure["userSafeMessage"],
+                    "request_segments": [
+                        {"kind": "unknown", "text": state["user_question"], "index": 0}
+                    ],
+                    "blocked": False,
+                    "error": failure,
+                }
             kind = intent.kind.value
+            step_kinds = {step.kind.value for step in intent.stepsHint}
+            has_analysis_work = kind in {"analysis", "investigation", "report", "modeling"} or bool(
+                step_kinds & {"analysis", "investigation", "report", "modeling"}
+            )
+            # A deterministic utility capability is allowed to accompany a business
+            # request, but must never replace it.  Previously any occurrence of
+            # "几点/当前时间" overwrote the accepted LLM intent with ``utility``
+            # and terminated the graph before a single analysis task was created.
+            has_utility_work = is_system_utility_request(state["user_question"]) or "utility" in step_kinds
+            if has_utility_work and has_analysis_work:
+                kind = "mixed"
+            elif has_utility_work and not has_analysis_work:
+                kind = "utility"
             if kind == "clarify":
                 if intent.producer == "fallback":
                     failure = intent.failure or {"code": "INTENT_OUTPUT_INVALID", "userSafeMessage": "分析请求解析失败，请重试。", "retryable": True}
@@ -1167,10 +1215,13 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                 "agent_intent": unified,
                 "request_requirements": build_requirement_ledger(intent, state["user_question"]),
                 "intent_kind": kind,
-                "analysis_question": state["user_question"] if kind in {"analysis", "investigation", "report", "modeling"} else "",
-                "utility_question": state["user_question"] if kind == "utility" else "",
+                "analysis_question": state["user_question"] if has_analysis_work else "",
+                "utility_question": state["user_question"] if has_utility_work else "",
                 "direct_response": _conversation_reply(state, state["user_question"], conversation_context) if kind == "conversation" else "",
-                "request_segments": [{"kind": kind, "text": state["user_question"], "index": 0}],
+                "request_segments": [
+                    *([{"kind": "analysis", "text": state["user_question"], "index": 0}] if has_analysis_work else []),
+                    *([{"kind": "utility", "text": state["user_question"], "index": 1}] if has_utility_work else []),
+                ] or [{"kind": kind, "text": state["user_question"], "index": 0}],
                 "blocked": False, "error": None,
             }
         # 写/删意图必须先短路，交给 intent_guard 统一阻断为只读保护；否则会被未知路由/模型路由
@@ -1259,11 +1310,14 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                     route["segments"] = route.get("segments") or [{"kind": ik, "text": state["user_question"], "index": 0}]
             elif ik in {"conversation", "utility"}:
                 # LLM 说是对话/系统问题：覆盖正则判定的 analysis，改走对话，不再查库。
-                route["kind"] = "utility" if ik == "utility" else "conversation"
+                deterministic_utility = bool(route.get("utilityQuestion")) or is_system_utility_request(state["user_question"])
+                route["kind"] = "utility" if ik == "utility" or deterministic_utility else "conversation"
                 route["analysisQuestion"] = ""
                 route["segments"] = route.get("segments") or [{"kind": route["kind"], "text": state["user_question"], "index": 0}]
-                if ik == "utility":
+                if route["kind"] == "utility":
                     route["utilityQuestion"] = route.get("utilityQuestion") or state["user_question"]
+                    if deterministic_utility:
+                        route["conversationResponse"] = ""
                 else:
                     route["conversationResponse"] = _conversation_reply(state, state["user_question"], conversation_context) or route["conversationResponse"]
         return {
@@ -1277,13 +1331,12 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         }
 
     def system_utility(state: AnalysisState) -> dict:
-        response = build_system_utility_response(
-            state.get("utility_question", ""),
-            state.get("source_id"),
+        response = str(state.get("utility_response") or "").strip() or build_system_utility_response(
+            state.get("utility_question", ""), state.get("source_id")
         )
         existing = str(state.get("direct_response") or "").strip()
         combined = "\n\n".join(item for item in (existing, response) if item)
-        return {"direct_response": combined}
+        return {"direct_response": combined, "utility_response": response}
 
 
     def intent_guard(state: AnalysisState) -> dict:
@@ -2025,7 +2078,20 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
 
     def retrieve_context(state: AnalysisState) -> dict:
         try:
-            task_question = state.get("task", {}).get("normalizedQuestion") or state["user_question"]
+            task = state.get("task", {})
+            task_question = task.get("normalizedQuestion") or state["user_question"]
+            # The user's colloquial wording is useful for semantic retrieval, but it
+            # may omit the metric/dimension that the structured intent has already
+            # resolved (for example, "哪条线做得最多" -> 产量 + 产线).
+            # Enrich the retrieval query from the accepted contract instead of adding
+            # another phrase-specific synonym rule.
+            semantic_terms = []
+            for item in [task.get("metricHint"), *(task.get("groupBy") or [])]:
+                token = str(item or "").strip()
+                if token and token not in task_question and token not in semantic_terms:
+                    semantic_terms.append(token)
+            if semantic_terms:
+                task_question = f"{task_question}；已解析业务语义：{'、'.join(semantic_terms)}"
             history = (
                 state.get("conversation_context", [])[-6:]
                 if _requires_history_context(task_question)
@@ -2061,6 +2127,39 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         except Exception as exc:  # noqa: BLE001 - 节点必须转结构化错误
             return {"error": {"code": "CONTEXT_RETRIEVAL_FAILED", "message": str(exc)}}
         coverage = context.get("coverage", {})
+        if coverage.get("status") == "needs_clarification":
+            # Retrieval intentionally returns several close candidates.  Before
+            # interrupting the user, let the already accepted structured contract
+            # disambiguate them.  A clarification is still required when the
+            # contract cannot select exactly one published metric.
+            from app.agent.validators import resolve_metric
+            current_task = state.get("task") or {}
+            semantic_intent = current_task.get("semanticIntent") or {}
+            hints = [current_task.get("metricHint")]
+            hints.extend(item.get("semantic") for item in semantic_intent.get("metrics") or [])
+            question_for_resolution = "；".join(
+                str(item or "").strip() for item in (
+                    current_task.get("normalizedQuestion"),
+                    current_task.get("originalQuestion"),
+                    state.get("analysis_question"),
+                ) if str(item or "").strip()
+            )
+            resolved_candidates = []
+            for hint in hints:
+                if not hint:
+                    continue
+                selected = resolve_metric(str(hint), context, question_for_resolution)
+                if selected and all(str(item.get("id")) != str(selected.get("id")) for item in resolved_candidates):
+                    resolved_candidates.append(selected)
+            if len(resolved_candidates) == 1:
+                context["metrics"] = resolved_candidates
+                context["coverage"] = {
+                    **coverage,
+                    "status": "ready",
+                    "resolvedByContract": True,
+                    "metricCount": 1,
+                }
+                coverage = context["coverage"]
         if coverage.get("status") == "needs_clarification":
             metrics = context.get("metrics", [])
             response = interrupt(
@@ -2112,20 +2211,23 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
         resolution = _published_metric_resolution(context)
         if resolution:
             context["metricResolution"] = resolution
-        from app.agent.query_requirements import bind_query_requirements
-        bound_task = bind_query_requirements(state.get("task") or {}, context)
-        # Phase C：语义归 Agent，安全归确定性。这里只做「校验/回填 + 审计标记」，
-        # 不在这里猜用户想什么。校验失败/需澄清 → intent_degraded=True，供下游降级与审计。
+        from app.agent.query_requirements import apply_resolved_intent, bind_query_requirements
+        current_task = state.get("task") or {}
+        # Phase C：语义归 Agent，安全归确定性。先校验当前子任务的语义契约并回填
+        # 已登记 id/物理字段，再建立查询绑定；不能让解析结果只停留在审计字段里。
         intent_validation = None
         intent_degraded = False
         try:
-            _ai = state.get("agent_intent")
+            _ai = current_task.get("semanticIntent") or state.get("agent_intent")
             if _ai:
                 _m = AgentIntent.model_validate(_ai)
                 _v = validate_intent(
                     _m,
                     context,
-                    question=state.get("analysis_question") or state["user_question"],
+                    question="；".join(str(item or "").strip() for item in (
+                        current_task.get("normalizedQuestion"),
+                        current_task.get("originalQuestion"),
+                    ) if str(item or "").strip()) or state.get("analysis_question") or state["user_question"],
                 )
                 intent_validation = {
                     "valid": _v.valid,
@@ -2136,9 +2238,28 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                     "producer": str(_ai.get("producer") or ""),
                 }
                 intent_degraded = (not _v.valid) or _v.ask_clarify
-        except Exception:  # noqa: BLE001 - 校验异常不影响主链路，标记降级即可
+                if not intent_degraded:
+                    current_task = apply_resolved_intent(current_task, _v.resolved)
+        except Exception:  # noqa: BLE001 - 转换为结构化错误，不允许绕过绑定校验
             intent_validation = {"valid": False, "reasonCode": "INTENT_VALIDATE_ERROR", "message": "意图校验异常"}
             intent_degraded = True
+        if intent_degraded:
+            message = str((intent_validation or {}).get("message") or "指标或分析维度无法唯一映射到当前数据源")
+            return {
+                "semantic_context": context,
+                "task": current_task,
+                "metric_resolution": resolution or {},
+                "intent_validation": intent_validation,
+                "intent_degraded": True,
+                "waiting_user": False,
+                "error": {
+                    "code": str((intent_validation or {}).get("reasonCode") or "INTENT_CLARIFY"),
+                    "message": message,
+                    "userSafeMessage": f"{message}，请明确指标或分析维度后重试。",
+                    "retryable": False,
+                },
+            }
+        bound_task = bind_query_requirements(current_task, context)
         return {
             "semantic_context": context,
             "task": bound_task,
@@ -2304,6 +2425,10 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             compiled = compile_query(state["semantic_context"], resolved_task, dialect)
         except Exception as exc:  # noqa: BLE001 - 编译器异常不能导致整条 run 失败
             log.warning("query_compiler fallback: %s", exc)
+        if compiled:
+            comp_sql, comp_meta = compiled
+            if _sql_fingerprint(comp_sql) in state.get("attempted_sqls", []):
+                compiled = None
         if compiled:
             comp_sql, comp_meta = compiled
             _allowed = set(state["semantic_context"].get("executionPolicy", {}).get("allowedTables", []))
@@ -2524,11 +2649,23 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
                 if missing:
                     return {"execution": payload, "error": {"code": "RESULT_CONSTRAINT_MISMATCH", "message": "；".join(missing), "userSafeMessage": "；".join(missing), "retryable": True}}
             return {"execution": payload, "error": None}
-        lowered = (result.error or "").lower()
-        retryable = any(term in lowered for term in ("unknown column", "不存在", "syntax", "语法", "column"))
+        category = str(getattr(result, "error_category", "") or "")
+        if category:
+            retryable = category == "query_invalid"
+        else:
+            # Compatibility with fake/legacy executors that do not classify errors.
+            lowered = (result.error or "").lower()
+            retryable = any(term in lowered for term in ("unknown column", "不存在", "syntax", "语法", "column"))
         return {
             "execution": payload,
-            "error": {"code": "SQL_EXECUTION_FAILED", "message": result.error, "retryable": retryable},
+            "error": {"code": "SQL_EXECUTION_FAILED", "category": category or "legacy_unclassified",
+                      "message": result.error, "retryable": retryable,
+                      "userSafeTitle": "查询执行未完成",
+                      "userSafeMessage": (
+                          "生成的查询与当前数据库不兼容，系统已保留证据，请稍后重试。"
+                          if retryable
+                          else "数据源暂时不可用，请稍后重试。"
+                      )},
         }
 
     def prepare_retry(state: AnalysisState) -> dict:
@@ -2574,6 +2711,8 @@ def build_analysis_graph(deps: GraphDependencies, checkpointer=None):
             "若结果含维度列（月份/周数/产线/产品等），一律使用维度列的值作标签。"
             "关于周期数/类别数只能引用\"结果事实\"中给出的事实与数量；"
             "\"结果事实\"未列出的取值严禁推断或补充（例如不得把 5 周说成 4 周）。"
+            "前端会根据已校验结果独立渲染用户要求的图表；结论中不得声称‘无法渲染图形’、"
+            "‘当前环境只返回数据’或让用户自行绘图；只需解释数值、差异与数据限制。"
             "\"结果预览\"可能因篇幅被截断（仅展示前若干行）；不得因为某行未出现在预览中就断言该周期/类别缺失，"
             "周期/类别总数一律以\"结果事实\"为准。"
         )

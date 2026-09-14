@@ -10,8 +10,6 @@ import {
 } from "../../lib/reportListFilters";
 import {
   Button,
-  Card,
-  EmptyState,
   ErrorNotice,
   Modal,
   PageFrame,
@@ -204,15 +202,15 @@ export default function ReportsPage() {
   const scopeOptions = reportScopeOptions(reports);
 
   return (
-    <PageFrame className="gap-4">
-      <div className="flex flex-wrap items-end justify-between gap-5">
+    <PageFrame className="max-w-[1500px] gap-3">
+      <header className="flex flex-wrap items-end justify-between gap-5 border-b border-line pb-4">
         <div>
-          <span className="section-kicker">WEEKLY INTELLIGENCE</span>
+          <span className="section-kicker">REPORT OPERATIONS</span>
           <h2 className="mt-1 text-[25px] font-semibold tracking-tight text-ink">
             周报中心
           </h2>
-          <p className="mt-2 text-base text-muted">
-            Agent 自动生成并发布，结论、图表、证据和文件保持同一版本。
+          <p className="mt-1.5 text-sm text-muted">
+            管理生成、审核与交付；报告正文、证据和导出文件始终对应同一版本。
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -230,70 +228,41 @@ export default function ReportsPage() {
               ))}
             </select>
           </label>
-          <Button
-            variant="primary"
-            onClick={() => setCreateOpen(true)}
-            disabled={!sourceId}
-          >
-            <Icon name="plus" size={15} />
+          <Button onClick={() => setCreateOpen(true)} disabled={!sourceId}>
             创建报告
           </Button>
+          <Button
+            variant="primary"
+            onClick={() => navigate("/workspace/reports/composer")}
+            disabled={!sourceId}
+          >
+            <Icon name="edit" size={15} />
+            设计周报
+          </Button>
         </div>
-      </div>
+      </header>
 
-      <Card className="grid overflow-hidden md:grid-cols-[1.35fr_0.65fr]">
-        <div className="border-b border-line p-5 md:border-b-0 md:border-r">
-          <div className="flex items-start justify-between gap-5">
-            <div>
-              <span className="text-[11px] font-semibold text-primary">
-                本周期工作台
-              </span>
-              <h3 className="mt-1 text-lg font-semibold tracking-tight text-ink">
-                {attentionCount
-                  ? `${attentionCount} 份周报包含需关注事项`
-                  : "最近周报运行稳定"}
-              </h3>
-              <p className="mt-1.5 max-w-2xl text-body text-muted">
-                先查看本周期最重要变化，再按需进入图表、行动建议与可追溯证据。自动发布版本不会被后续重算覆盖。
-              </p>
-            </div>
-            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-control bg-primary-soft text-primary">
-              <Icon name="report" size={19} />
-            </span>
+      <section className="grid overflow-hidden border-y border-line bg-paper lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="flex flex-wrap items-center gap-y-3 px-4 py-3 lg:border-r lg:border-line">
+          <div className="min-w-[260px] flex-1 pr-5">
+            <span className="text-[10px] font-semibold text-primary">本周期</span>
+            <h3 className="mt-0.5 text-sm font-semibold text-ink">{attentionCount ? `${attentionCount} 份报告需要继续处理` : "报告运行状态正常"}</h3>
+            <p className="mt-0.5 text-[11px] text-muted">发布版本不可被后续重算覆盖，异常和证据可进入详情复核。</p>
           </div>
-          <div className="mt-5 grid grid-cols-3 divide-x divide-line border-t border-line pt-4">
+          <div className="grid min-w-[300px] grid-cols-3 divide-x divide-line">
             <Metric label="生成中" value={runningCount} />
             <Metric label="需关注" value={attentionCount} />
             <Metric label="已发布" value={publishedCount} />
           </div>
         </div>
-        <div className="grid content-between gap-5 bg-surface-2 p-5">
-          <div>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[11px] font-semibold text-faint">
-                自动送达
-              </span>
-              <StatusPill tone="green">站内消息 + 邮箱</StatusPill>
-            </div>
-            <p className="mt-2 text-base font-semibold text-ink">
-              摘要、链接与 PDF 同步送达
-            </p>
-            <p className="mt-1 text-xs leading-relaxed text-muted">
-              邮件保持简洁，完整图表、表格和证据仍在 ForgeSight 内查看。
-            </p>
-          </div>
-          <div className="flex items-center justify-between border-t border-line pt-3 text-xs">
-            <span className="text-muted">
-              {subscriptions.filter((item) => item.enabled).length}{" "}
-              个启用中的订阅
-            </span>
-            <span className="font-medium text-ink">仅推送已发布版本</span>
-          </div>
+        <div className="flex items-center justify-between gap-4 bg-surface-2 px-4 py-3">
+          <div><span className="text-[10px] font-semibold text-faint">自动送达</span><p className="mt-0.5 text-xs font-semibold text-ink">站内摘要、报告链接与 PDF</p><p className="mt-0.5 text-[10px] text-muted">{subscriptions.filter((item) => item.enabled).length} 个启用订阅 · 仅发送已发布版本</p></div>
+          <span className="h-2 w-2 shrink-0 rounded-full bg-teal" aria-label="送达服务正常" />
         </div>
-      </Card>
+      </section>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <Card className="min-w-0 overflow-hidden">
+        <section className="min-w-0 overflow-hidden rounded-section border border-line bg-paper">
           <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3">
             <div className="flex items-center gap-0.5 rounded-control bg-surface-2 p-0.5">
               <FilterTab
@@ -531,18 +500,13 @@ export default function ReportsPage() {
               })}
             </div>
           ) : (
-            <EmptyState
-              title="这里还没有报告"
-              description="创建第一份周期报告，或调整当前筛选条件。"
-            />
+            <div className="grid min-h-44 place-content-center border-t border-line px-6 text-center"><p className="text-sm font-semibold text-ink">这里还没有报告</p><p className="mt-1 text-xs text-muted">设计一份周报，或调整当前筛选条件。</p><button type="button" onClick={() => navigate("/workspace/reports/composer")} className="mt-3 text-xs font-semibold text-primary hover:opacity-75">打开周报设计器 →</button></div>
           )}
-        </Card>
+        </section>
 
-        <Card className="self-start overflow-hidden">
+        <aside className="self-start overflow-hidden rounded-section border border-line bg-paper">
           <div className="border-b border-line px-4 py-3.5">
-            <span className="text-[11px] font-semibold text-primary">
-              TEMPLATE COVERAGE
-            </span>
+            <span className="text-[10px] font-semibold text-primary">模板与覆盖</span>
             <h3 className="mt-1 text-base font-semibold tracking-tight text-ink">
               当前数据源可生成什么
             </h3>
@@ -555,16 +519,7 @@ export default function ReportsPage() {
                 onClick={() => setCreateOpen(template.id)}
                 className="group flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-2"
               >
-                <span
-                  className={cn(
-                    "grid h-8 w-8 shrink-0 place-items-center rounded-control",
-                    template.coverage?.ready
-                      ? "bg-teal-soft text-teal"
-                      : "bg-surface-3 text-faint",
-                  )}
-                >
-                  <Icon name="report" size={15} />
-                </span>
+                <span className={cn("h-2 w-2 shrink-0 rounded-full", template.coverage?.ready ? "bg-teal" : "bg-amber")} />
                 <span className="min-w-0 flex-1">
                   <strong className="block truncate text-xs font-semibold text-ink">
                     {template.name}
@@ -584,7 +539,7 @@ export default function ReportsPage() {
               </button>
             ))}
           </div>
-        </Card>
+        </aside>
       </div>
 
       <ReportCreateWizard

@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field
 
 from sqlalchemy import text
+from sqlalchemy.exc import DataError, OperationalError, ProgrammingError
 
 from app.audit.service import write_audit
 from app.config import settings
@@ -28,6 +29,28 @@ class ExecutionResult:
     tables: list[str] = field(default_factory=list)
     checks: list[str] = field(default_factory=list)
     error: str = ""
+    error_category: str = ""
+
+
+def _execution_error_category(exc: Exception) -> str:
+    if isinstance(exc, ProgrammingError):
+        return "query_invalid"
+    if isinstance(exc, DataError):
+        return "data_invalid"
+    if isinstance(exc, OperationalError):
+        # DB drivers also use OperationalError for statement/runtime defects.
+        # Those are repairable SQL problems, not source outages. In particular,
+        # MySQL 1690 is raised when unsigned quantities are subtracted below zero.
+        original = getattr(exc, "orig", None)
+        args = getattr(original, "args", ()) or getattr(exc, "args", ())
+        try:
+            code = int(args[0])
+        except (TypeError, ValueError, IndexError):
+            code = None
+        if code in {1052, 1054, 1064, 1111, 1146, 1241, 1242, 1292, 1366, 1690}:
+            return "query_invalid"
+        return "database_unavailable"
+    return "database_error"
 
 
 def get_default_source() -> DataSource:
@@ -92,7 +115,7 @@ def execute_readonly(
         write_audit(action=action, resource=",".join(check.tables), result="已记录",
                     detail=f"执行失败：{type(exc).__name__}", user_name=user_name)
         return ExecutionResult(ok=False, tables=check.tables, duration_ms=duration_ms,
-                               error=f"执行失败：{exc}")
+                               error=f"执行失败：{exc}", error_category=_execution_error_category(exc))
 
     duration_ms = int((time.perf_counter() - started) * 1000)
     truncated = len(raw) > settings.sql_max_rows

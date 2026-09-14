@@ -632,6 +632,7 @@ def _serialize_metric(item: dict) -> dict:
         "name": metric.name,
         "topic": metric.topic,
         "definition": metric.definition,
+        "aliases": item["synonyms"],
         "semanticFormula": metric.formula,
         "physicalFormula": binding.physical_formula,
         "filterExpression": binding.filter_expression,

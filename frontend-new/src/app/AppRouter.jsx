@@ -28,6 +28,9 @@ const ModelingPage = lazy(() => import("../pages/business/ModelingPage"));
 const MemoryPage = lazy(() => import("../pages/business/MemoryPage"));
 const ProfilePage = lazy(() => import("../pages/business/ProfilePage"));
 const ReportsPage = lazy(() => import("../pages/business/ReportsPage"));
+const ReportComposerPage = lazy(
+  () => import("../pages/business/ReportComposerPage"),
+);
 const AlertsPage = lazy(() => import("../pages/business/AlertsPage"));
 const AlertDetailPage = lazy(() => import("../pages/business/AlertDetailPage"));
 const ReportDetailPage = lazy(
@@ -166,6 +169,10 @@ export default function AppRouter() {
               <Route path="workspace/memory" element={<MemoryPage />} />
               <Route path="workspace/profile" element={<ProfilePage />} />
               <Route path="workspace/reports" element={<ReportsPage />} />
+              <Route
+                path="workspace/reports/composer"
+                element={<ReportComposerPage />}
+              />
               <Route path="workspace/alerts" element={<AlertsPage />} />
               <Route path="workspace/alerts/:alertId" element={<AlertDetailPage />} />
               <Route

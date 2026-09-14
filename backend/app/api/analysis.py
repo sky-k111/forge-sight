@@ -9,7 +9,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent import service, settings as planner_settings, usage
-from app.agent.contracts import BranchCreate, ClarificationResponse, RunCreate, SessionCreate
+from app.agent.contracts import (
+    BranchCreate,
+    ClarificationResponse,
+    RunCreate,
+    SessionBulkDelete,
+    SessionCreate,
+    SessionRename,
+)
 from app.auth.deps import effective_user_id, optional_user
 from app.db.platform import PlatformSession
 from app.tenancy.service import (
@@ -125,6 +132,35 @@ def get_session(
         raise _not_found(exc) from exc
 
 
+@router.patch("/sessions/{session_id}")
+def rename_session(
+    session_id: str,
+    payload: SessionRename,
+    user: dict | None = Depends(optional_user),
+    context: TenantContext = Depends(tenant_context),
+):
+    try:
+        return service.rename_session(session_id, payload.title, _actor(user), context.tenant_id)
+    except service.AnalysisNotFound as exc:
+        raise _not_found(exc) from exc
+    except service.AnalysisConflict as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sessions/bulk-delete")
+def bulk_delete_sessions(
+    payload: SessionBulkDelete,
+    user: dict | None = Depends(optional_user),
+    context: TenantContext = Depends(tenant_context),
+):
+    try:
+        return service.delete_sessions(payload.sessionIds, _actor(user), context.tenant_id)
+    except service.AnalysisNotFound as exc:
+        raise _not_found(exc) from exc
+    except service.AnalysisConflict as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.delete("/sessions/{session_id}")
 def delete_session(
     session_id: str,
@@ -149,7 +185,13 @@ def create_run(
     # 只有会话归属人可以在会话内继续提问，同租户其他成员不能插入。
     _guard_session(session_id, context, user)
     try:
-        return service.create_run(session_id, payload.question, idempotency_key, context.tenant_id)
+        return service.create_run(
+            session_id,
+            payload.question,
+            idempotency_key,
+            context.tenant_id,
+            model_profile_id=payload.modelProfileId,
+        )
     except service.AnalysisNotFound as exc:
         raise _not_found(exc) from exc
     except service.AnalysisConflict as exc:

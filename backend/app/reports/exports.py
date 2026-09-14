@@ -280,6 +280,18 @@ def _export_chart_specs(report: StructuredWeeklyReport) -> list[ChartSpec]:
     ]
 
 
+def _pdf_chart_accent(spec: ChartSpec):
+    accents = {
+        "ocean": HexColor("#25677A"),
+        "teal": BRAND,
+        "violet": HexColor("#7357C8"),
+        "graphite": HexColor("#58636D"),
+    }
+    if spec.accent in accents:
+        return accents[spec.accent]
+    return AMBER if spec.color_role == "quality" else BRAND
+
+
 def _report_chart(spec: ChartSpec) -> Drawing | Table | None:
     points = spec.points
     if len(points) < 2:
@@ -296,7 +308,7 @@ def _report_chart(spec: ChartSpec) -> Drawing | Table | None:
         chart.innerRadiusFraction = 0.55
         chart.slices.strokeColor = colors.white
         chart.slices.strokeWidth = 1
-        palette = [BRAND, AMBER, HexColor("#7357C8"), HexColor("#2B8A9A"), HexColor("#D95D5D")]
+        palette = [_pdf_chart_accent(spec), AMBER, HexColor("#7357C8"), HexColor("#2B8A9A"), HexColor("#D95D5D")]
         for index in range(len(chart.data)):
             chart.slices[index].fillColor = palette[index % len(palette)]
             chart.slices[index].fontName = _register_fonts()[0]
@@ -385,7 +397,7 @@ def _report_chart(spec: ChartSpec) -> Drawing | Table | None:
         bar.valueAxis.labels.fontName = "Helvetica"
         bar.valueAxis.labels.fontSize = 7
         bar.valueAxis.gridStrokeColor = LINE
-        bar.bars[0].fillColor = BRAND
+        bar.bars[0].fillColor = _pdf_chart_accent(spec)
         bar.bars[0].strokeColor = None
         line = HorizontalLineChart()
         line.x = 270
@@ -431,7 +443,7 @@ def _report_chart(spec: ChartSpec) -> Drawing | Table | None:
         bar.valueAxis.labels.fontName = "Helvetica"
         bar.valueAxis.labels.fontSize = 7
         bar.valueAxis.gridStrokeColor = LINE
-        bar.bars[0].fillColor = AMBER
+        bar.bars[0].fillColor = _pdf_chart_accent(spec)
         bar.bars[0].strokeColor = None
         cumulative = HorizontalLineChart()
         cumulative.x = 270
@@ -456,6 +468,24 @@ def _report_chart(spec: ChartSpec) -> Drawing | Table | None:
         drawing.add(String(38, 162, f"{spec.value_label} ({spec.unit})", fontName=_register_fonts()[0], fontSize=8, fillColor=AMBER))
         drawing.add(String(270, 162, "累计贡献率 (%)", fontName=_register_fonts()[0], fontSize=8, fillColor=BRAND_DARK))
         return drawing
+    if spec.type == "column":
+        chart = VerticalBarChart()
+        chart.x = 55
+        chart.y = 28
+        chart.height = 132
+        chart.width = 390
+        chart.data = [[point.value for point in points[:16]]]
+        chart.categoryAxis.categoryNames = [point.label for point in points[:16]]
+        chart.categoryAxis.labels.fontName = _register_fonts()[0]
+        chart.categoryAxis.labels.fontSize = 7
+        chart.valueAxis.labels.fontName = "Helvetica"
+        chart.valueAxis.labels.fontSize = 7
+        chart.bars[0].fillColor = _pdf_chart_accent(spec)
+        chart.bars[0].strokeColor = None
+        chart.valueAxis.gridStrokeColor = LINE
+        chart.valueAxis.gridStrokeDashArray = (2, 2)
+        drawing.add(chart)
+        return drawing
     if spec.type == "bar":
         chart = HorizontalBarChart()
         chart.x = 80
@@ -468,7 +498,7 @@ def _report_chart(spec: ChartSpec) -> Drawing | Table | None:
         chart.categoryAxis.labels.fontSize = 7
         chart.valueAxis.labels.fontName = "Helvetica"
         chart.valueAxis.labels.fontSize = 7
-        chart.bars[0].fillColor = AMBER if spec.color_role == "quality" else BRAND
+        chart.bars[0].fillColor = _pdf_chart_accent(spec)
         chart.bars[0].strokeColor = None
         chart.valueAxis.gridStrokeColor = LINE
         chart.valueAxis.gridStrokeDashArray = (2, 2)
@@ -498,7 +528,7 @@ def _report_chart(spec: ChartSpec) -> Drawing | Table | None:
     chart.categoryAxis.labels.fontSize = 7
     chart.valueAxis.labels.fontName = "Helvetica"
     chart.valueAxis.labels.fontSize = 7
-    chart.lines[0].strokeColor = BRAND
+    chart.lines[0].strokeColor = _pdf_chart_accent(spec)
     chart.lines[0].strokeWidth = 2.5
     chart.lines[0].symbol = None
     chart.valueAxis.gridStrokeColor = LINE
@@ -757,7 +787,13 @@ def _style_excel_chart(chart, spec: ChartSpec) -> None:
         "inventory": "2B8A9A",
         "neutral": "667085",
     }
-    accent = colors_by_role.get(spec.color_role, "667085")
+    colors_by_accent = {
+        "ocean": "25677A",
+        "teal": "0B6E69",
+        "violet": "7357C8",
+        "graphite": "58636D",
+    }
+    accent = colors_by_accent.get(spec.accent, colors_by_role.get(spec.color_role, "667085"))
     for series in chart.series:
         try:
             series.graphicalProperties.solidFill = accent
@@ -792,6 +828,11 @@ def _native_excel_chart(sheet, spec: ChartSpec, header_row: int, first_row: int,
         chart.set_categories(categories)
     elif spec.type == "line":
         chart = LineChart()
+        chart.add_data(primary, titles_from_data=True)
+        chart.set_categories(categories)
+    elif spec.type == "column":
+        chart = BarChart()
+        chart.type = "col"
         chart.add_data(primary, titles_from_data=True)
         chart.set_categories(categories)
     elif spec.type in {"combo", "pareto"}:

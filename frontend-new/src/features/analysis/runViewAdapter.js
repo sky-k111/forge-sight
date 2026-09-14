@@ -378,10 +378,15 @@ export function adaptAnalysisRun(snapshot) {
   const conclusions = artifacts.filter((item) => item.type === "conclusion" && item.content?.text);
   const finalConclusion = conclusions.at(-1)?.content ?? {};
   const displayConfidence = confidenceWithResultGuard(finalConclusion.confidence, snapshot.tasks, execution);
+  const utilityResponse = [...artifacts].reverse()
+    .find((item) => item.type === "utility-response")?.content?.text?.trim() || null;
   const rawConclusionText = snapshot.assistantMessage?.content
     || conclusions.map((item) => item.content.text).join("\n\n")
     || (snapshot.status === "succeeded" ? "分析已完成，结果与执行证据已保存。" : "正在执行分析任务。 ");
-  const parsedNarrative = parseAnalysisNarrative(rawConclusionText, {
+  const narrativeText = utilityResponse && rawConclusionText.startsWith(utilityResponse)
+    ? rawConclusionText.slice(utilityResponse.length).trim()
+    : rawConclusionText;
+  const parsedNarrative = parseAnalysisNarrative(narrativeText, {
     sectionTitles: snapshot.tasks?.map((task) => task.title) ?? [],
   });
   const narrative = {
@@ -440,6 +445,7 @@ export function adaptAnalysisRun(snapshot) {
       allowCustom: interactionPrompt.allowCustom,
     } : null,
     error: businessError,
+    utilityResponse,
     delivery,
     plan,
     planDetails,

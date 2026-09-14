@@ -7,6 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.reports.composition_contracts import ReportComposition
+
 
 class ReportCreate(BaseModel):
     templateId: str = Field(min_length=1, max_length=40)
@@ -18,6 +20,8 @@ class ReportCreate(BaseModel):
     prompt: str | None = Field(default=None, max_length=2000)
     scope: dict[str, Any] = Field(default_factory=dict)
     emailEnabled: bool = True
+    composition: ReportComposition | None = None
+    tenantId: str | None = Field(default=None, min_length=1, max_length=40, exclude=True)
 
     @model_validator(mode="after")
     def validate_period(self):
@@ -25,6 +29,8 @@ class ReportCreate(BaseModel):
             raise ValueError("periodEnd 必须晚于 periodStart")
         if self.templateId == "tpl-topic-report" and not (self.prompt or "").strip():
             raise ValueError("专题分析报告必须填写分析问题")
+        if self.composition is not None and not self.composition.blocks:
+            raise ValueError("自定义周报至少需要一个内容块")
         return self
 
 

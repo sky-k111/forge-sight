@@ -15,6 +15,8 @@ from app.db.models import Report, ReportVersion
 from app.db.platform import PlatformSession
 from app.delivery.service import enqueue_report_pdf_delivery, serialize_delivery
 from app.reports import service
+from app.reports import composition as composition_service
+from app.reports.composition_contracts import CompositionPreview, CompositionTemplateSave
 from app.reports.contracts import ReportCreate, ReportPublish, ReportReviewAction, SubscriptionCreate
 from app.reports.files import (
     FileAccessDenied,
@@ -22,6 +24,7 @@ from app.reports.files import (
     authorize_report_view,
     resolve_download,
 )
+from app.tenancy.service import TenantContext, tenant_context
 
 router = APIRouter(prefix="/api/v1", tags=["reports"])
 
@@ -58,6 +61,95 @@ def template_coverage(template_id: str, sourceId: int = Query(ge=1)):
         _raise(exc)
 
 
+@router.get("/report-composer/catalog")
+def report_composer_catalog(
+    sourceId: int = Query(ge=1),
+    context: TenantContext = Depends(tenant_context),
+):
+    return composition_service.load_catalog(sourceId, context.tenant_id)
+
+
+@router.get("/report-compositions")
+def list_report_compositions(
+    sourceId: int = Query(ge=1),
+    ownerId: str | None = Query(default=None, max_length=64),
+    user: dict | None = Depends(optional_user),
+    context: TenantContext = Depends(tenant_context),
+):
+    actor = effective_stable_user_id(ownerId, user)
+    return {"items": composition_service.list_personal(sourceId, context.tenant_id, actor)}
+
+
+@router.post("/report-compositions", status_code=status.HTTP_201_CREATED)
+def create_report_composition(
+    payload: CompositionTemplateSave,
+    sourceId: int = Query(ge=1),
+    ownerId: str | None = Query(default=None, max_length=64),
+    user: dict | None = Depends(optional_user),
+    context: TenantContext = Depends(tenant_context),
+):
+    return composition_service.save_personal(
+        sourceId,
+        context.tenant_id,
+        effective_stable_user_id(ownerId, user),
+        payload.composition,
+        version=payload.version,
+    )
+
+
+@router.put("/report-compositions/{template_id}")
+def update_report_composition(
+    template_id: str,
+    payload: CompositionTemplateSave,
+    sourceId: int = Query(ge=1),
+    ownerId: str | None = Query(default=None, max_length=64),
+    user: dict | None = Depends(optional_user),
+    context: TenantContext = Depends(tenant_context),
+):
+    return composition_service.save_personal(
+        sourceId,
+        context.tenant_id,
+        effective_stable_user_id(ownerId, user),
+        payload.composition,
+        template_id=template_id,
+        version=payload.version,
+    )
+
+
+@router.delete("/report-compositions/{template_id}")
+def delete_report_composition(
+    template_id: str,
+    sourceId: int = Query(ge=1),
+    ownerId: str | None = Query(default=None, max_length=64),
+    user: dict | None = Depends(optional_user),
+    context: TenantContext = Depends(tenant_context),
+):
+    composition_service.delete_personal(
+        template_id,
+        sourceId,
+        context.tenant_id,
+        effective_stable_user_id(ownerId, user),
+    )
+    return {"deleted": True}
+
+
+@router.post("/report-compositions/preview")
+def preview_report_composition(
+    payload: CompositionPreview,
+    ownerId: str | None = Query(default=None, max_length=64),
+    user: dict | None = Depends(optional_user),
+    context: TenantContext = Depends(tenant_context),
+):
+    return composition_service.preview(
+        payload.composition,
+        payload.sourceId,
+        context.tenant_id,
+        effective_stable_user_id(ownerId, user),
+        payload.periodStart,
+        payload.periodEnd,
+    )
+
+
 @router.get("/reports")
 def list_reports(
     ownerId: str = Query(default="local-test-user", min_length=1, max_length=64),
@@ -75,11 +167,18 @@ def list_reports(
 
 
 @router.post("/reports", status_code=status.HTTP_202_ACCEPTED)
-def create_report(payload: ReportCreate, user: dict | None = Depends(optional_user)):
+def create_report(
+    payload: ReportCreate,
+    user: dict | None = Depends(optional_user),
+    context: TenantContext = Depends(tenant_context),
+):
     try:
         return service.create_report(
             payload.model_copy(
-                update={"ownerId": effective_stable_user_id(payload.ownerId, user)}
+                update={
+                    "ownerId": effective_stable_user_id(payload.ownerId, user),
+                    "tenantId": context.tenant_id,
+                }
             )
         )
     except Exception as exc:

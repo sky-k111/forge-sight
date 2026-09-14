@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.deepseek.com"
     llm_api_key: str = ""
     llm_model: str = "deepseek-chat"
+    llm_protocol: str = "openai_compatible"
+    llm_auth_mode: str = "auto"
     llm_timeout_seconds: int = 60
     llm_proxy_url: str = ""
     # 瞬时 LLM 失败（空内容/网络/限流）在步骤内做受限重试，降低偶发失败对端到端结果的影响。

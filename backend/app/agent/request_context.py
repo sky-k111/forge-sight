@@ -1,10 +1,25 @@
 """Merge an intent patch into a source-scoped successful analysis snapshot."""
 
 from copy import deepcopy
+from datetime import date, datetime
+from decimal import Decimal
+import json
 from typing import Any
 
 from app.agent.ids import new_id
 from app.agent.intent_contract import AgentIntent, Dimension, IntentKind, Metric, TimeRange
+
+
+def _json_safe_copy(value: Any) -> Any:
+    """Make persisted conversation context safe while retaining numeric roles."""
+    def convert(item: Any) -> Any:
+        if isinstance(item, Decimal):
+            return int(item) if item == item.to_integral_value() else float(item)
+        if isinstance(item, (date, datetime)):
+            return item.isoformat()
+        raise TypeError(f"unsupported context value: {type(item).__name__}")
+
+    return json.loads(json.dumps(value, ensure_ascii=False, default=convert))
 
 
 def _selected_result(intent: AgentIntent, previous: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -47,6 +62,10 @@ def presentation_reuse_task(intent: AgentIntent, previous: dict[str, Any] | None
     if not charts or not all(_chart_can_convert(item, target) for item in charts):
         return None
     prior_task = deepcopy((selected or {}).get("task") or {})
+    metric_hint = None
+    if intent.metrics:
+        metric_hint = intent.metrics[0].semantic
+    metric_hint = metric_hint or ((selected or {}).get("metricResolution") or {}).get("name")
     return {
         **prior_task,
         "id": new_id("task"),
@@ -56,6 +75,7 @@ def presentation_reuse_task(intent: AgentIntent, previous: dict[str, Any] | None
         "originalQuestion": intent.question,
         "normalizedQuestion": intent.question,
         "requestedChart": intent.chart.type,
+        "metricHint": metric_hint,
         "relation": intent.relation,
         "operation": intent.operation,
         "semanticIntent": intent.model_dump(mode="json", by_alias=True),
@@ -161,6 +181,18 @@ def merge_intent(intent: AgentIntent, previous: dict[str, Any] | None) -> AgentI
         result.dimensions = [d for d in old if key(d) not in {key(n) for n in intent.dimensions}]
     elif intent.operation != "replace_dimension" and "dimensions" not in changed:
         result.dimensions = old
+    # The model may return a generic metric token even when the user explicitly
+    # named a governed dimension-qualified metric ("工序不良率" -> "不良率").
+    # Recover only text that is literally present in the current message; this is
+    # a generic specificity rule, not a catalogue-specific alias table.
+    if "metrics" in changed and result.metrics:
+        for metric in result.metrics:
+            semantic = str(metric.semantic or "").strip()
+            for dimension in result.dimensions:
+                qualified = f"{dimension.semantic}{semantic}"
+                if semantic and qualified in intent.question:
+                    metric.semantic = qualified
+                    break
     if intent.operation == "replace_filter":
         new_keys = {f.get("field") or f.get("semantic") for f in intent.filters}
         result.filters = [f for f in prior.get("filters", []) if (f.get("field") or f.get("semantic")) not in new_keys] + intent.filters
@@ -190,9 +222,9 @@ def successful_snapshot(state: dict[str, Any]) -> dict[str, Any] | None:
         results.append({"resultId": result_id, "label": task.get("title") or result_id,
                         "agentIntent": intent, "task": task, "sql": item.get("sql"),
                         "resultColumns": (item.get("execution") or {}).get("columns", []),
-                        "execution": deepcopy(item.get("execution") or {}),
-                        "metricResolution": deepcopy(item.get("metricResolution") or {}),
-                        "interpretation": deepcopy(item.get("interpretation") or {})})
+                        "execution": _json_safe_copy(item.get("execution") or {}),
+                        "metricResolution": _json_safe_copy(item.get("metricResolution") or {}),
+                        "interpretation": _json_safe_copy(item.get("interpretation") or {})})
     last = results[-1]
     return {"version": 2, "runId": state.get("run_id"), "sourceId": state.get("source_id"),
             "results": results, "primaryResultId": last["resultId"],

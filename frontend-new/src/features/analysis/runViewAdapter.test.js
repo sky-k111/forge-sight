@@ -24,6 +24,27 @@ function snapshotWithResult({ question, analysisType = "query", requestedChart =
 }
 
 describe("analysis narrative adapter", () => {
+  test("exposes an immediate utility response separately from the business narrative", () => {
+    const snapshot = snapshotWithResult({
+      question: "分析良率，并告诉我现在几点",
+      columns: ["良率"],
+      rows: [[97.5]],
+    });
+    const instant = "现在是 2026年09月13日 10:30，星期日（Asia/Shanghai）。";
+    snapshot.artifacts.unshift({
+      id: "utility-1",
+      taskId: null,
+      type: "utility-response",
+      content: { kind: "system", text: instant },
+    });
+    snapshot.assistantMessage.content = `${instant}\n\n良率分析已完成。`;
+
+    const run = adaptAnalysisRun(snapshot);
+
+    expect(run.utilityResponse).toBe(instant);
+    expect(run.conclusion.text).toBe("良率分析已完成。");
+  });
+
   test("turns greeting and markdown bullets into a concise summary and findings", () => {
     const result = parseAnalysisNarrative("你好！根据查询结果，**没有找到合格数量的数据**，仅返回了不良数量信息。以下是基于现有数据的简要结论： - **不良数量最高的记录为**：2026-07-15，产品P0007，不良数量636。 - 产品P0014在多个日期中出现较高不良数量。");
 

@@ -3,7 +3,7 @@ export const roleMenus = {
     {
       label: "业务工作台",
       items: [
-        { id: "overview", label: "今日工作台", icon: "overview" },
+        { id: "overview", label: "业务看板", icon: "overview" },
         { id: "analysis", label: "智能分析", icon: "analysis" },
         { id: "modeling", label: "智能建模", icon: "model" },
         { id: "reports", label: "报告与交接", icon: "report" },
@@ -56,8 +56,8 @@ export const roleMenus = {
 export const pageMeta = {
   overview: {
     eyebrow: "业务人员工作区",
-    title: "今日工作台",
-    subtitle: "关注数据状态、继续调查并完成当日分析工作",
+    title: "业务看板",
+    subtitle: "查看真实业务指标，继续调查并组织个人分析视图",
   },
   analysis: {
     eyebrow: "业务人员工作区",

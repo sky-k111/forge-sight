@@ -24,8 +24,17 @@ class SessionCreate(BaseModel):
     userId: str = Field(default="local-test-user", min_length=1, max_length=64)
 
 
+class SessionRename(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class SessionBulkDelete(BaseModel):
+    sessionIds: list[str] = Field(min_length=1, max_length=100)
+
+
 class RunCreate(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
+    modelProfileId: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class ClarificationResponse(BaseModel):

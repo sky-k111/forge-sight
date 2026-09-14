@@ -1251,6 +1251,22 @@ CREATE TABLE IF NOT EXISTS data_source (
 );
 CREATE INDEX IF NOT EXISTS ix_data_source_tenant_id ON data_source (tenant_id);
 
+CREATE TABLE IF NOT EXISTS dashboard_preference (
+	tenant_id VARCHAR(40) NOT NULL,
+	user_id VARCHAR(64) NOT NULL,
+	source_id INTEGER NOT NULL,
+	config_json JSONB NOT NULL,
+	version INTEGER NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+	CONSTRAINT pk_dashboard_preference PRIMARY KEY (tenant_id, user_id, source_id),
+	FOREIGN KEY(tenant_id) REFERENCES tenant (id) ON DELETE CASCADE,
+	FOREIGN KEY(source_id) REFERENCES data_source (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_dashboard_preference_tenant_id ON dashboard_preference (tenant_id);
+CREATE INDEX IF NOT EXISTS ix_dashboard_preference_user_id ON dashboard_preference (user_id);
+CREATE INDEX IF NOT EXISTS ix_dashboard_preference_source_id ON dashboard_preference (source_id);
+
 CREATE TABLE IF NOT EXISTS delivery_attempt (
 	id VARCHAR(40) NOT NULL,
 	delivery_id VARCHAR(40) NOT NULL,

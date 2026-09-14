@@ -6,7 +6,7 @@ import forgeSightLogo from "../../assets/forgesight-logo.png";
 import { pageMeta, roleMenus } from "../../app/navigation";
 import cn from "../../lib/cn";
 import { pageFromPath, roleFromPath, routeByPage } from "../../app/routeConfig";
-import { createSession, deleteSession, listSessions } from "../../api/analysis";
+import { createSession, deleteSession, deleteSessions, listSessions, renameSession } from "../../api/analysis";
 import { fetchMe, logout as apiLogout } from "../../api/auth";
 import { getUnreadCount } from "../../api/messages";
 import { getCurrentTenant, listMyTenants } from "../../api/tenants";
@@ -51,6 +51,12 @@ export default function AppShell() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [tenants, setTenants] = useState(() => cachedUser?.tenants ?? []);
   const [activeTenant, setActiveTenant] = useState(null);
+  const selectedAnalysisSession = (sessions ?? []).find((session) => session.id === activeSessionId) ?? null;
+  const hasAnalysisEvidence = Boolean(
+    page === "analysis"
+    && activeSessionId
+    && (selectedAnalysisSession?.runCount == null || Number(selectedAnalysisSession.runCount) > 0),
+  );
 
 
   useEffect(() => {
@@ -192,7 +198,7 @@ export default function AppShell() {
     window.sessionStorage.removeItem(ANALYSIS_SESSION_KEY);
     window.sessionStorage.removeItem(ANALYSIS_DRAFT_KEY);
     window.sessionStorage.setItem(ANALYSIS_NEW_SESSION_KEY, "1");
-    setEvidenceOpen(true);
+    setEvidenceOpen(false);
     navigate(routeByPage.analysis);
     window.dispatchEvent(new CustomEvent(ANALYSIS_SESSION_SELECTED_EVENT, { detail: { newSession: true } }));
   };
@@ -213,6 +219,33 @@ export default function AppShell() {
       return;
     }
 
+    window.sessionStorage.removeItem(ANALYSIS_SESSION_KEY);
+    if (page === "analysis") navigate(routeByPage.overview);
+  };
+
+  const renameTask = async (sessionId, title) => {
+    const renamed = await renameSession(sessionId, title);
+    setSessions((current) => (current ?? []).map((item) => (
+      item.id === sessionId ? { ...item, title: renamed.title } : item
+    )));
+    return renamed;
+  };
+
+  const deleteTasks = async (sessionIds) => {
+    const ids = new Set(sessionIds);
+    await deleteSessions([...ids]);
+    const remaining = (sessions ?? []).filter((item) => !ids.has(item.id));
+    setSessions(remaining);
+    if (!ids.has(activeSessionId)) return;
+    const next = remaining[0] ?? null;
+    setActiveSessionId(next?.id ?? null);
+    if (next) {
+      window.sessionStorage.setItem(ANALYSIS_SESSION_KEY, next.id);
+      if (page === "analysis") {
+        window.dispatchEvent(new CustomEvent(ANALYSIS_SESSION_SELECTED_EVENT, { detail: { sessionId: next.id } }));
+      }
+      return;
+    }
     window.sessionStorage.removeItem(ANALYSIS_SESSION_KEY);
     if (page === "analysis") navigate(routeByPage.overview);
   };
@@ -248,6 +281,8 @@ export default function AppShell() {
         onCreateTask={createTask}
         onStartAnalysis={startFreshAnalysis}
         onDeleteSession={deleteTask}
+        onDeleteSessions={deleteTasks}
+        onRenameSession={renameTask}
         onToggleDarkMode={() => setDarkMode((value) => !value)}
         onRetrySessions={() => refreshSessions()}
         onLogout={handleLogout}
@@ -279,6 +314,7 @@ export default function AppShell() {
           page={page}
           user={user}
           evidenceOpen={evidenceOpen}
+          hasAnalysisEvidence={hasAnalysisEvidence}
           onOpenNavigation={() => setMobileNavOpen(true)}
           unreadCount={unreadCount}
           onOpenMessages={() => navigate(role === "admin" ? routeByPage["admin-messages"] : routeByPage.messages)}
@@ -298,11 +334,18 @@ export default function AppShell() {
   );
 }
 
-function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessionsError, activeSessionId, onNavigate, onCreateTask, onStartAnalysis, onDeleteSession, onSelectSession, onRetrySessions, onToggleDarkMode, onLogout, onToggle, onResizeStart, onResizeKeyDown, onResizeReset, mobileOpen, expandedItems, onToggleItem }) {
+function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessionsError, activeSessionId, onNavigate, onCreateTask, onStartAnalysis, onDeleteSession, onDeleteSessions, onRenameSession, onSelectSession, onRetrySessions, onToggleDarkMode, onLogout, onToggle, onResizeStart, onResizeKeyDown, onResizeReset, mobileOpen, expandedItems, onToggleItem }) {
   const [searchText, setSearchText] = useState("");
   const [openSessionMenuId, setOpenSessionMenuId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [deletingSessionId, setDeletingSessionId] = useState(null);
+  const [renamingSessionId, setRenamingSessionId] = useState(null);
+  const [renameTitle, setRenameTitle] = useState("");
+  const [savingRenameId, setSavingRenameId] = useState(null);
+  const [manageSessions, setManageSessions] = useState(false);
+  const [selectedSessionIds, setSelectedSessionIds] = useState(() => new Set());
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [sessionMenuError, setSessionMenuError] = useState("");
   const filteredSessions = useMemo(
     () => (sessions ?? []).filter((session) => session.title?.includes(searchText.trim())),
@@ -322,6 +365,80 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
       setSessionMenuError(error.message || "删除失败，请稍后重试");
     } finally {
       setDeletingSessionId(null);
+    }
+  };
+
+  const beginRename = (session) => {
+    setRenamingSessionId(session.id);
+    setRenameTitle(session.title || "");
+    setOpenSessionMenuId(null);
+    setConfirmDeleteId(null);
+    setSessionMenuError("");
+  };
+
+  const saveRename = async (session) => {
+    const title = renameTitle.trim();
+    if (!title || savingRenameId) return;
+    setSavingRenameId(session.id);
+    setSessionMenuError("");
+    try {
+      await onRenameSession(session.id, title);
+      setRenamingSessionId(null);
+      setRenameTitle("");
+    } catch (error) {
+      setSessionMenuError(error.message || "重命名失败，请稍后重试");
+    } finally {
+      setSavingRenameId(null);
+    }
+  };
+
+  const toggleManageSessions = () => {
+    setManageSessions((current) => {
+      const next = !current;
+      if (!next) setSelectedSessionIds(new Set());
+      return next;
+    });
+    setOpenSessionMenuId(null);
+    setConfirmDeleteId(null);
+    setConfirmBulkDelete(false);
+    setRenamingSessionId(null);
+    setSessionMenuError("");
+  };
+
+  const toggleSessionSelection = (sessionId) => {
+    setSelectedSessionIds((current) => {
+      const next = new Set(current);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+    setConfirmBulkDelete(false);
+  };
+
+  const toggleAllVisibleSessions = () => {
+    const visibleIds = filteredSessions.map((item) => item.id);
+    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedSessionIds.has(id));
+    setSelectedSessionIds((current) => {
+      const next = new Set(current);
+      visibleIds.forEach((id) => allSelected ? next.delete(id) : next.add(id));
+      return next;
+    });
+    setConfirmBulkDelete(false);
+  };
+
+  const removeSelectedSessions = async () => {
+    if (!selectedSessionIds.size || bulkDeleting) return;
+    setBulkDeleting(true);
+    setSessionMenuError("");
+    try {
+      await onDeleteSessions([...selectedSessionIds]);
+      setSelectedSessionIds(new Set());
+      setConfirmBulkDelete(false);
+      setManageSessions(false);
+    } catch (error) {
+      setSessionMenuError(error.message || "批量删除失败，请稍后重试");
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -409,7 +526,23 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
             )}
           </div>
           <div className="flex min-h-0 flex-1 flex-col border-t border-line px-2 pb-2.5">
-            {!collapsed && <div className="px-2 pb-1.5 pt-2.5 text-[11px] font-semibold text-muted">最近调查</div>}
+            {!collapsed && (
+              <div className="flex min-h-10 items-center justify-between gap-2 px-2 pt-1.5">
+                <span className="text-[11px] font-semibold text-muted">最近调查</span>
+                {Boolean(sessions?.length) && (
+                  <div className="flex items-center gap-1">
+                    {manageSessions && (
+                      <button type="button" onClick={toggleAllVisibleSessions} className="cursor-pointer rounded-tag px-1.5 py-1 text-[10px] text-faint transition-colors hover:bg-surface hover:text-ink">
+                        {filteredSessions.length > 0 && filteredSessions.every((item) => selectedSessionIds.has(item.id)) ? "取消全选" : "全选"}
+                      </button>
+                    )}
+                    <button type="button" onClick={toggleManageSessions} aria-pressed={manageSessions} className="cursor-pointer rounded-tag px-1.5 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-surface hover:text-ink">
+                      {manageSessions ? "完成" : "整理"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             <div className={cn("flex min-h-0 flex-1 flex-col gap-1 overflow-auto px-0.5 pb-1.5", collapsed && "pt-2")}>
               {sessions === null && [1, 2, 3].map((item) => <i key={item} className="h-8 shrink-0 animate-pulse rounded-control bg-surface-3" />)}
               {sessions !== null && sessionsError && !collapsed && (
@@ -425,50 +558,74 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
                 const menuOpen = openSessionMenuId === session.id;
                 const confirming = confirmDeleteId === session.id;
                 const deleting = deletingSessionId === session.id;
+                const editing = renamingSessionId === session.id;
+                const selected = selectedSessionIds.has(session.id);
                 return (
-                  <div key={session.id}>
+                  <div key={session.id} className="relative">
                     <div
                       className={cn(
-                        "flex items-center gap-2 rounded-control p-2 transition-colors",
+                        "flex min-h-9 items-center gap-2 rounded-control px-2 py-1.5 transition-colors",
                         collapsed && "justify-center p-1.5",
-                        activeSessionId === session.id ? "bg-surface text-ink shadow-card" : "text-muted hover:bg-surface-3",
+                        selected ? "bg-primary-soft text-ink" : activeSessionId === session.id ? "bg-surface text-ink shadow-card" : "text-muted hover:bg-surface-3",
                       )}
                     >
-                      <Icon name="message" size={16} />
+                      {manageSessions && !collapsed ? (
+                        <button type="button" role="checkbox" aria-checked={selected} aria-label={`选择会话：${session.title}`} onClick={() => toggleSessionSelection(session.id)} className={cn("grid h-4 w-4 shrink-0 cursor-pointer place-items-center rounded-[4px] border transition-colors", selected ? "border-primary bg-primary text-white" : "border-line-strong bg-surface hover:border-primary/60")}>
+                          {selected && <Icon name="check" size={11} strokeWidth={2.4} />}
+                        </button>
+                      ) : <Icon name="message" size={16} />}
                       {!collapsed && (
-                        <>
-                          <button type="button" className="min-w-0 flex-1 cursor-pointer truncate text-left text-xs" onClick={() => onSelectSession(session)}>
-                            {session.title}
-                          </button>
-                          <button
-                            type="button"
-                            aria-label={`会话操作：${session.title}`}
-                            aria-expanded={menuOpen}
-                            onClick={() => {
-                              setOpenSessionMenuId((current) => current === session.id ? null : session.id);
-                              setConfirmDeleteId(null);
-                              setSessionMenuError("");
-                            }}
-                            className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-tag text-faint transition-colors hover:bg-surface-3 hover:text-ink"
-                          >
-                            <Icon name="more" size={14} />
-                          </button>
-                        </>
+                        editing ? (
+                          <div className="flex min-w-0 flex-1 items-center gap-1">
+                            <input
+                              autoFocus
+                              value={renameTitle}
+                              maxLength={200}
+                              aria-label="会话名称"
+                              onChange={(event) => setRenameTitle(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") { event.preventDefault(); saveRename(session); }
+                                if (event.key === "Escape") { setRenamingSessionId(null); setSessionMenuError(""); }
+                              }}
+                              className="h-7 min-w-0 flex-1 rounded-tag border border-primary/45 bg-surface px-2 text-xs text-ink outline-none focus:ring-2 focus:ring-primary/15"
+                            />
+                            <button type="button" aria-label="保存会话名称" disabled={!renameTitle.trim() || savingRenameId === session.id} onClick={() => saveRename(session)} className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-tag text-primary hover:bg-surface disabled:cursor-not-allowed disabled:opacity-40"><Icon name="check" size={13} /></button>
+                            <button type="button" aria-label="取消重命名" onClick={() => { setRenamingSessionId(null); setSessionMenuError(""); }} className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-tag text-faint hover:bg-surface hover:text-ink"><Icon name="close" size={13} /></button>
+                          </div>
+                        ) : (
+                          <>
+                            <button type="button" className="min-w-0 flex-1 cursor-pointer truncate text-left text-xs" onClick={() => manageSessions ? toggleSessionSelection(session.id) : onSelectSession(session)}>
+                              {session.title}
+                            </button>
+                            {!manageSessions && (
+                              <button
+                                type="button"
+                                aria-label={`会话操作：${session.title}`}
+                                aria-expanded={menuOpen}
+                                onClick={() => {
+                                  setOpenSessionMenuId((current) => current === session.id ? null : session.id);
+                                  setConfirmDeleteId(null);
+                                  setSessionMenuError("");
+                                }}
+                                className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-tag text-faint transition-colors hover:bg-surface-3 hover:text-ink"
+                              >
+                                <Icon name="more" size={14} />
+                              </button>
+                            )}
+                          </>
+                        )
                       )}
                     </div>
                     {menuOpen && !collapsed && (
-                      <div className="mx-1.5 mt-1 rounded-control border border-line bg-surface p-1.5 shadow-card">
+                      <div className="absolute right-1 top-9 z-30 w-36 rounded-control border border-line bg-surface p-1.5 shadow-card-hover">
                         {!confirming ? (
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteId(session.id)}
-                            className="flex w-full cursor-pointer items-center gap-2 rounded-tag px-2 py-1.5 text-left text-[11px] text-red transition-colors hover:bg-red-soft"
-                          >
-                            <Icon name="trash" size={13} />删除对话
-                          </button>
+                          <>
+                            <button type="button" onClick={() => beginRename(session)} className="flex w-full cursor-pointer items-center gap-2 rounded-tag px-2 py-1.5 text-left text-[11px] text-ink-2 transition-colors hover:bg-surface-2"><Icon name="edit" size={13} />重命名</button>
+                            <button type="button" onClick={() => setConfirmDeleteId(session.id)} className="flex w-full cursor-pointer items-center gap-2 rounded-tag px-2 py-1.5 text-left text-[11px] text-red transition-colors hover:bg-red-soft"><Icon name="trash" size={13} />删除</button>
+                          </>
                         ) : (
                           <div className="px-1 py-1">
-                            <p className="whitespace-normal text-[10px] leading-4 text-muted">删除后将从列表隐藏，审计记录仍会保留。</p>
+                            <p className="whitespace-normal text-[10px] leading-4 text-muted">确定删除？审计记录仍会保留。</p>
                             <div className="mt-2 flex justify-end gap-1.5">
                               <button
                                 type="button"
@@ -484,10 +641,9 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
                                 onClick={() => removeSession(session)}
                                 className="h-7 cursor-pointer rounded-tag bg-red px-2.5 text-[10px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
                               >
-                                {deleting ? "删除中" : "确认删除"}
+                                {deleting ? "删除中" : "删除"}
                               </button>
                             </div>
-                            {sessionMenuError && <p className="mt-1.5 whitespace-normal text-[10px] text-red">{sessionMenuError}</p>}
                           </div>
                         )}
                       </div>
@@ -495,8 +651,27 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
                   </div>
                 );
               })}
+              {sessionMenuError && !collapsed && <p role="alert" className="px-2 py-1 text-[10px] leading-4 text-red">{sessionMenuError}</p>}
               {sessions !== null && !sessionsError && !filteredSessions.length && !collapsed && (
                 <div className="px-2 py-2.5 text-[11px] text-faint">没有匹配的分析会话</div>
+              )}
+              {manageSessions && selectedSessionIds.size > 0 && !collapsed && (
+                <div className="sticky bottom-0 mt-auto rounded-control border border-line bg-surface p-2 shadow-card">
+                  {!confirmBulkDelete ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-muted">已选 {selectedSessionIds.size} 项</span>
+                      <button type="button" onClick={() => setConfirmBulkDelete(true)} className="cursor-pointer rounded-tag px-2 py-1 text-[10px] font-semibold text-red hover:bg-red-soft">批量删除</button>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="text-[10px] text-muted">删除这 {selectedSessionIds.size} 个会话？</p>
+                      <div className="mt-1.5 flex justify-end gap-1">
+                        <button type="button" disabled={bulkDeleting} onClick={() => setConfirmBulkDelete(false)} className="h-6 cursor-pointer rounded-tag px-2 text-[10px] text-muted hover:bg-surface-2 disabled:opacity-50">取消</button>
+                        <button type="button" disabled={bulkDeleting} onClick={removeSelectedSessions} className="h-6 cursor-pointer rounded-tag bg-red px-2 text-[10px] font-semibold text-white disabled:cursor-wait disabled:opacity-60">{bulkDeleting ? "删除中" : "确认删除"}</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -669,7 +844,7 @@ function QueueItem({ dotClass, title, caption, count, onClick }) {
   );
 }
 
-function Topbar({ page, user, evidenceOpen, unreadCount, onToggleEvidence, onOpenNavigation, onOpenMessages, onOpenProfile, activeTenant, tenants, onTenantChange }) {
+function Topbar({ page, user, evidenceOpen, hasAnalysisEvidence, unreadCount, onToggleEvidence, onOpenNavigation, onOpenMessages, onOpenProfile, activeTenant, tenants, onTenantChange }) {
   const meta = pageMeta[page] ?? pageMeta.overview;
 
   return (
@@ -680,7 +855,7 @@ function Topbar({ page, user, evidenceOpen, unreadCount, onToggleEvidence, onOpe
       </div>
       <div className="flex min-w-0 items-center gap-1.5 md:gap-3">
         <TenantSwitcher activeTenant={activeTenant} tenants={tenants} onChange={onTenantChange} />
-        {page === "analysis" && (
+        {page === "analysis" && hasAnalysisEvidence && (
           <Button
             variant="secondary"
             aria-expanded={evidenceOpen}
@@ -734,7 +909,7 @@ function TenantSwitcher({ activeTenant, tenants, onChange }) {
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="group flex h-9 max-w-[230px] cursor-pointer items-center gap-2 rounded-control border border-line bg-surface px-2.5 text-left transition-colors hover:border-line-strong hover:bg-surface-2"
+        className="group flex h-9 max-w-[230px] cursor-pointer items-center gap-2 rounded-control px-2.5 text-left transition-colors hover:bg-surface-2"
       >
         <span className="grid h-6 w-6 shrink-0 place-items-center rounded-tag bg-primary-soft text-primary"><Icon name="database" size={13} /></span>
         <span className="min-w-0 flex-1">

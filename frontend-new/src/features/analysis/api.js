@@ -1,4 +1,4 @@
-import { apiUrl, httpDelete, httpGet, httpPost, httpRequest } from "../../api/_http";
+import { apiUrl, httpDelete, httpGet, httpPatch, httpPost, httpRequest } from "../../api/_http";
 import { currentUserId, getToken } from "../../lib/auth";
 
 export function createAnalysisSession({ title, sourceId, userId = currentUserId() }) {
@@ -17,11 +17,19 @@ export function deleteAnalysisSession(sessionId, userId = currentUserId()) {
   return httpDelete(`/api/analysis/sessions/${sessionId}?userId=${encodeURIComponent(userId)}`);
 }
 
-export function submitAnalysisRun(sessionId, question, idempotencyKey = crypto.randomUUID()) {
+export function renameAnalysisSession(sessionId, title) {
+  return httpPatch(`/api/analysis/sessions/${sessionId}`, { title });
+}
+
+export function deleteAnalysisSessions(sessionIds) {
+  return httpPost("/api/analysis/sessions/bulk-delete", { sessionIds });
+}
+
+export function submitAnalysisRun(sessionId, question, idempotencyKey = crypto.randomUUID(), modelProfileId = null) {
   return httpRequest(`/api/analysis/sessions/${sessionId}/runs`, {
     method: "POST",
     headers: { "Idempotency-Key": idempotencyKey },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, ...(modelProfileId ? { modelProfileId } : {}) }),
   });
 }
 

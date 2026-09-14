@@ -2,12 +2,13 @@ import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { seriesColors } from "./chartTheme";
 import { ChartTooltip } from "./ChartTooltip";
 
-export function ShareDonutChart({ data, height = 220, unit = "", centerTitle, centerValue }) {
+export function ShareDonutChart({ data, height = 220, unit = "", centerTitle, centerValue, variant = "donut" }) {
+  const donut = variant !== "pie";
   return (
     <div className="relative">
       <ResponsiveContainer width="100%" height={height}>
         <PieChart>
-          <Pie data={data} dataKey="value" nameKey="name" innerRadius="62%" outerRadius="86%" paddingAngle={2} strokeWidth={0}>
+          <Pie data={data} dataKey="value" nameKey="name" innerRadius={donut ? "62%" : 0} outerRadius="86%" paddingAngle={donut ? 2 : 1} strokeWidth={0}>
             {data.map((entry, index) => (
               <Cell key={entry.name} fill={entry.color ?? seriesColors[index % seriesColors.length]} />
             ))}
@@ -15,7 +16,7 @@ export function ShareDonutChart({ data, height = 220, unit = "", centerTitle, ce
           <Tooltip content={<ChartTooltip unit={unit} />} />
         </PieChart>
       </ResponsiveContainer>
-      {centerValue != null && (
+      {donut && centerValue != null && (
         <div className="pointer-events-none absolute inset-0 grid place-content-center text-center">
           <strong className="font-mono text-lg font-semibold tracking-tight text-ink">{centerValue}</strong>
           {centerTitle && <span className="mt-0.5 text-[11px] text-faint">{centerTitle}</span>}

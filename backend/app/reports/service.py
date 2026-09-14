@@ -34,6 +34,7 @@ from app.db.models import (
 from app.db.platform import PlatformSession
 from app.reports import feishu
 from app.reports.repository import publish_version
+from app.tenancy.service import DEFAULT_TENANT_ID
 
 
 class ReportNotFound(KeyError):
@@ -139,16 +140,44 @@ def get_template_coverage(template_id: str, source_id: int, session_factory=Plat
         }
 
 
-def create_report(payload, session_factory=PlatformSession) -> dict:
+def create_report(payload, session_factory=PlatformSession, tenant_id: str | None = None) -> dict:
     """创建报告身份和草稿版本，再提交一个真实 Agent 多任务 Run。"""
+    tenant_id = tenant_id or getattr(payload, "tenantId", None)
     with session_factory() as session:
         template = session.query(ReportTemplate).filter_by(id=payload.templateId, enabled=True).first()
-        source = session.query(DataSource).filter_by(id=payload.sourceId).first()
+        source_query = session.query(DataSource).filter_by(id=payload.sourceId)
+        if tenant_id is not None:
+            source_query = source_query.filter(DataSource.tenant_id == tenant_id)
+        source = source_query.first()
         if template is None:
             raise ReportNotFound(f"报告模板 {payload.templateId} 不存在")
         if source is None:
             raise ReportNotFound(f"数据源 {payload.sourceId} 不存在")
+        sections_definition = list(template.sections_json or [])
         coverage = _coverage(session, template, source.id)
+        if payload.composition:
+            from app.dashboard.service import _context
+            from app.reports.composition import validate_against_context
+
+            metric_by_id = validate_against_context(
+                payload.composition,
+                _context(session, source, tenant_id or source.tenant_id or DEFAULT_TENANT_ID),
+            )
+            sections_definition = [
+                _composition_section(block, metric_by_id[block.metricId])
+                for block in payload.composition.blocks
+            ]
+            coverage = {
+                "score": 100,
+                "available": len(sections_definition),
+                "required": len(sections_definition),
+                "missingMetrics": [],
+                "ready": True,
+                "sections": [
+                    {"code": item["code"], "title": item["title"], "score": 100, "missingMetrics": []}
+                    for item in sections_definition
+                ],
+            }
         if not coverage["ready"]:
             missing = "、".join(coverage["missingMetrics"])
             raise ReportConflict(
@@ -161,7 +190,7 @@ def create_report(payload, session_factory=PlatformSession) -> dict:
             template_id=template.id,
             source_id=source.id,
             report_type=template.report_type,
-            topic=template.topic,
+            topic="自定义" if payload.composition else template.topic,
             status="queued",
             owner_id=payload.ownerId,
             period_start=payload.periodStart,
@@ -171,6 +200,7 @@ def create_report(payload, session_factory=PlatformSession) -> dict:
                 "prompt": (payload.prompt or "").strip(),
                 "emailEnabled": payload.emailEnabled,
                 "templateCoverage": coverage,
+                **({"compositionSnapshot": payload.composition.model_dump(mode="json")} if payload.composition else {}),
             },
         )
         version = ReportVersion(
@@ -179,11 +209,15 @@ def create_report(payload, session_factory=PlatformSession) -> dict:
             version=1,
             status="generating",
             content_json={"templateId": template.id, "sections": []},
-            data_snapshot_json={"sourceId": source.id, "coverage": coverage},
+            data_snapshot_json={
+                "sourceId": source.id,
+                "coverage": coverage,
+                **({"compositionSnapshot": payload.composition.model_dump(mode="json")} if payload.composition else {}),
+            },
         )
         report.current_version_id = version.id
         session.add_all([report, version])
-        for order, item in enumerate(template.sections_json or [], start=1):
+        for order, item in enumerate(sections_definition, start=1):
             session.add(
                 ReportSection(
                     id=new_id("rps"),
@@ -193,16 +227,22 @@ def create_report(payload, session_factory=PlatformSession) -> dict:
                     title=item["title"],
                     section_order=order,
                     status="pending",
-                    content_json={"question": _section_question(item, payload.prompt)},
+                    content_json={
+                        "question": _section_question(item, payload.prompt),
+                        **({"presentation": item["presentation"]} if item.get("presentation") else {}),
+                    },
                 )
             )
         session.commit()
         report_id = report.id
-        question = _build_agent_question(report, template, payload.prompt)
+        question = _build_agent_question(report, template, payload.prompt, sections_definition)
 
     try:
-        analysis_session = analysis_service.create_session(
-            f"报告生成 · {title}", payload.sourceId, payload.ownerId
+        session_args = (f"报告生成 · {title}", payload.sourceId, payload.ownerId)
+        analysis_session = (
+            analysis_service.create_session(*session_args, tenant_id=tenant_id)
+            if tenant_id is not None
+            else analysis_service.create_session(*session_args)
         )
         accepted = analysis_service.create_run(
             analysis_session["id"],
@@ -376,11 +416,18 @@ def compose_report_from_evidence(
     return result
 
 
-def _build_agent_question(report: Report, template: ReportTemplate, prompt: str | None) -> str:
+def _build_agent_question(
+    report: Report,
+    template: ReportTemplate,
+    prompt: str | None,
+    sections: list[dict] | None = None,
+) -> str:
     period_start = report.period_start.strftime("%Y-%m-%d")
     period_end = report.period_end.strftime("%Y-%m-%d")
     questions = []
-    for index, section in enumerate(template.sections_json or [], start=1):
+    for index, section in enumerate(
+        sections if sections is not None else (template.sections_json or []), start=1
+    ):
         question = _section_question(section, prompt)
         questions.append(
             f"{index}. {question}。统计范围固定为 {period_start} 至 {period_end}，"
@@ -391,6 +438,28 @@ def _build_agent_question(report: Report, template: ReportTemplate, prompt: str 
         "每一项必须拆成独立任务，所有数值只能来自当前数据源，结论需披露口径、数据不足和临时推导：\n"
         + "\n".join(questions)
     )
+
+
+def _composition_section(block, metric: dict) -> dict:
+    dimension = block.dimension or ""
+    if block.kind == "kpi":
+        question = f"汇总统计周期内的{metric['name']}"
+        if block.compare:
+            question += "，并与紧邻的等长上一周期比较"
+    elif block.kind == "trend":
+        grain = {"day": "日", "week": "周", "month": "月"}[block.grain]
+        question = f"按{grain}展示统计周期内的{metric['name']}趋势"
+    else:
+        question = f"按{dimension}汇总统计周期内的{metric['name']}，展示前 {block.topN} 项"
+    question += f"；展示方式固定为{block.chart}，不要替换指标或维度"
+    return {
+        "code": block.id,
+        "title": block.title,
+        "metrics": [metric["name"]],
+        "dimensions": [dimension] if dimension else [],
+        "question": question,
+        "presentation": block.model_dump(mode="json"),
+    }
 
 
 def _section_question(section: dict, prompt: str | None) -> str:
@@ -607,6 +676,7 @@ def _finalize_report(session, report: Report, run: AnalysisRun) -> None:
         section.summary = conclusion.get("text") or ""
         section.confidence = score
         section.artifact_ids_json = [item.id for item in artifacts]
+        presentation = (section.content_json or {}).get("presentation")
         section.content_json = {
             "question": task.normalized_question,
             "result": result,
@@ -619,6 +689,7 @@ def _finalize_report(session, report: Report, run: AnalysisRun) -> None:
             },
             "confidence": confidence,
             "metricResolution": conclusion.get("metricResolution") or sql.get("metricResolution"),
+            **({"presentation": presentation} if presentation else {}),
         }
         if section.status == "succeeded":
             succeeded += 1

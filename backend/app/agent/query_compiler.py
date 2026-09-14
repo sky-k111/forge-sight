@@ -128,6 +128,28 @@ def _period_filter(metric: dict[str, Any], periods: list[dict[str, Any]], dialec
     return "(" + " OR ".join(clauses) + ")" if clauses else None
 
 
+def _period_bucket(metric: dict[str, Any], periods: list[dict[str, Any]], dialect: str) -> str | None:
+    """Render accepted comparison members as one stable categorical dimension."""
+    tfield = metric.get("physicalTimeField")
+    if not tfield or len(periods) < 2:
+        return None
+    adapter = get_adapter(dialect)
+    quoted = adapter.quote_identifier(tfield)
+    cases: list[str] = []
+    for index, period in enumerate(periods, 1):
+        start = period.get("startInclusive")
+        end = period.get("endExclusive")
+        if not start or not end:
+            return None
+        label = str(period.get("label") or f"比较周期{index}").replace("'", "''")
+        start_sql = str(start).replace("'", "''")
+        end_sql = str(end).replace("'", "''")
+        cases.append(
+            f"WHEN f.{quoted} >= '{start_sql}' AND f.{quoted} < '{end_sql}' THEN '{label}'"
+        )
+    return "CASE " + " ".join(cases) + " END"
+
+
 def _sql_literal(value: Any) -> str:
     """Render values, never identifiers, for the governed filter subset."""
     if value is None:
@@ -173,6 +195,8 @@ def _time_group(dialect: str, metric: dict[str, Any], grain: str) -> str | None:
 
 def _is_time_dim(dim: str) -> bool:
     lowered = str(dim or "").lower()
+    if lowered == "比较周期":
+        return False
     return any(t in lowered for t in (
         "日期", "时间", "天", "日", "星期", "月份", "月", "周", "季度", "季", "年",
         "date", "time", "day", "weekday", "week", "month", "quarter", "year",
@@ -207,7 +231,10 @@ def compile_query(
     metrics = (semantic_context or {}).get("metrics") or []
     qtext = str((task or {}).get("normalizedQuestion") or (task or {}).get("originalQuestion") or "")
     contract = (task or {}).get("queryBinding") or {}
-    metric = contract.get("metric") or _pick_metric(metrics, qtext, (task or {}).get("metricHint") or None)
+    structured = bool((task or {}).get("semanticIntent"))
+    metric = contract.get("metric")
+    if not metric and not structured:
+        metric = _pick_metric(metrics, qtext, (task or {}).get("metricHint") or None)
     if not metric:
         return None
     dialect = (dialect or (semantic_context or {}).get("source", {}).get("type") or "mysql").lower()
@@ -261,6 +288,13 @@ def compile_query(
     dim_cols: list[str] = []
     dim_raw: list[str] = []
     for dim in group_by:
+        if dim == "比较周期":
+            col = _period_bucket(metric, periods, dialect)
+            if not col:
+                return None
+            dim_cols.append(col)
+            dim_raw.append(dim)
+            continue
         if _is_time_dim(dim):
             time_metric = dict(metric)
             if (bindings.get(str(dim)) or {}).get("field"):
@@ -276,7 +310,9 @@ def compile_query(
         binding = bindings.get(str(dim)) or {}
         if binding.get("status") == "unresolved_join":
             return None
-        col = binding.get("field") or _resolve_dimension(dim, fact, dialect)
+        col = binding.get("field")
+        if not col and not structured:
+            col = _resolve_dimension(dim, fact, dialect)
         if not col:
             return None
         alias = str(binding.get("alias") or "f")
@@ -288,12 +324,14 @@ def compile_query(
     limit: int | None = task.get("topN")
     order: str | None = None
     out_hint = "chart"
-    if "rank" in atype or "top" in atype or "排行" in atype or (not task.get("semanticIntent") and "前" in q):
+    if "rank" in atype or (not structured and ("top" in atype or "排行" in atype or "前" in q)):
         order = "DESC"
-        m = re.search(r"前\s*(\d+)", q)
-        if m:
+        m = re.search(r"前\s*(\d+)", q) if not structured else None
+        if m and not limit:
             limit = int(m.group(1))
         if not dim_raw:
+            if structured:
+                return None
             # ranking implies a dimension: pick the most salient dim in the question
             fallback = next((d for d in ("产品", "产线", "工序", "车间", "缺陷类型") if d in q), None)
             if fallback:
@@ -308,9 +346,9 @@ def compile_query(
             if col:
                 dim_cols = [col]
                 dim_raw = ["时间"]
-    elif "占比" in q or "share" in atype or "比例" in q:
+    elif "share" in atype or (not structured and ("占比" in q or "比例" in q)):
         order = "DESC"
-    elif "compare" in atype or "对比" in atype or "相比" in q:
+    elif "compare" in atype or "comparison" in atype or (not structured and ("对比" in q or "相比" in q)):
         order = "DESC"
 
     select_parts: list[str] = []
@@ -403,4 +441,6 @@ def compile_intent(
     tasks = intent_to_tasks(model)
     if not tasks:
         return None
-    return compile_query(semantic_context, tasks[0], dialect=dialect)
+    from app.agent.query_requirements import bind_query_requirements
+    bound = bind_query_requirements(tasks[0], semantic_context)
+    return compile_query(semantic_context, bound, dialect=dialect)

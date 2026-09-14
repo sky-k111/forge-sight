@@ -1000,6 +1000,53 @@ def _structured_charts(
                 chart_type = "bar"
                 description = f"按{category_label}对{value_label}进行降序比较。"
 
+        # A personal composition is a frozen presentation contract.  Automatic
+        # inference remains the fallback for legacy templates, but it must not
+        # silently replace a compatible chart explicitly chosen by the user.
+        presentation = content.get("presentation") or {}
+        requested_chart = str(presentation.get("chart") or "")
+        requested_kind = str(presentation.get("kind") or "")
+        requested_top_n = max(2, min(int(presentation.get("topN") or 12), 40))
+        if requested_kind == "trend" and temporal and requested_chart in {"line", "area", "column"}:
+            chart_type = requested_chart
+            points = [
+                {
+                    "label": str(row[category_index]),
+                    "value": _numeric_value(row[value_index]),
+                }
+                for row in usable_rows[-min(requested_top_n, 60):]
+            ]
+            secondary_value_label = None
+            secondary_unit = None
+            description = f"按{category_label}展示{value_label}，采用用户选定的图表形式。"
+        elif requested_kind == "breakdown" and not temporal and requested_chart in {"bar", "donut", "pareto"}:
+            ranked_rows = sorted(
+                usable_rows,
+                key=lambda row: _numeric_value(row[value_index]) or 0,
+                reverse=True,
+            )[:requested_top_n]
+            points = [
+                {
+                    "label": str(row[category_index]),
+                    "value": _numeric_value(row[value_index]),
+                }
+                for row in ranked_rows
+            ]
+            chart_type = requested_chart
+            secondary_value_label = None
+            secondary_unit = None
+            if requested_chart == "pareto":
+                total = sum(max(float(item["value"] or 0), 0) for item in points)
+                cumulative = 0.0
+                for item in points:
+                    cumulative += max(float(item["value"] or 0), 0)
+                    item["secondaryValue"] = round(cumulative / total * 100, 2) if total else 0.0
+                description = f"按{category_label}定位{value_label}的主要贡献项。"
+            elif requested_chart == "donut":
+                description = f"展示不同{category_label}的{value_label}构成。"
+            else:
+                description = f"按{category_label}对{value_label}进行降序比较。"
+
         base_key = str(getattr(section, "code", "") or f"chart-{section_index + 1}")
         key = base_key
         suffix = 2
@@ -1019,6 +1066,12 @@ def _structured_charts(
                 "evidenceArtifactIds": evidence,
                 "colorRole": _chart_color_role(section),
             }
+        if presentation:
+            chart.update({
+                "width": presentation.get("width", "half"),
+                "height": presentation.get("height", "standard"),
+                "accent": presentation.get("accent", "default"),
+            })
         if secondary_value_label:
             chart["secondaryValueLabel"] = secondary_value_label
         if secondary_unit:

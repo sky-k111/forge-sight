@@ -1,0 +1,85 @@
+.fixture-app {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  background: var(--color-surface);
+}
+.fixture-banner {
+  flex: none;
+  padding: 5px 16px;
+  background: var(--color-amber-soft);
+  color: var(--color-amber);
+  font-size: 11px;
+  text-align: center;
+}
+.fixture-layout {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+.fixture-sidebar {
+  width: 252px;
+  flex: none;
+  border-right: 1px solid var(--color-line);
+  padding: 20px 18px;
+}
+.fixture-sidebar img {
+  width: 32px;
+  height: 32px;
+  display: inline-block;
+  margin-right: 10px;
+  vertical-align: middle;
+}
+.fixture-sidebar p {
+  margin: 24px 0 12px;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+.fixture-sidebar a {
+  display: block;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-control);
+  color: var(--color-primary);
+}
+.fixture-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.fixture-topbar {
+  display: flex;
+  height: 64px;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--color-line);
+  padding: 0 24px;
+}
+.fixture-topbar h1 {
+  font-size: 17px;
+  font-weight: 600;
+}
+.fixture-topbar span {
+  color: var(--color-muted);
+  font-size: 11px;
+}
+.fixture-scroll {
+  min-height: 0;
+  overflow: auto;
+  flex: 1;
+}
+.fixture-analysis {
+  padding: 40px;
+}
+@media (max-width: 760px) {
+  .fixture-sidebar {
+    display: none;
+  }
+  .fixture-topbar {
+    height: 52px;
+    padding-inline: 14px;
+  }
+}

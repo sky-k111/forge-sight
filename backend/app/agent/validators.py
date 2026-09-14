@@ -40,17 +40,36 @@ def resolve_dimension_field(
     semantic: str,
     semantic_context: dict[str, Any] | None,
 ) -> str | None:
-    """把语义维度（产线/工序…）解析成事实表里的物理列名。找不到返回 None。"""
+    """把语义维度解析成唯一物理列名；跨表重名或找不到均返回 None。"""
     if not semantic:
         return None
-    lowered = semantic.lower()
-    for table in _fact_tables(semantic_context):
+    lowered = semantic.strip().lower()
+    ranked: list[tuple[int, str]] = []
+    # Dimension labels often resolve to a display field ("工序" -> "工序名称")
+    # while some sources only expose an id/code. Rank those generic metadata
+    # roles instead of maintaining a product-specific keyword table.
+    for table in (semantic_context or {}).get("tables") or []:
         for f in table.get("fields") or []:
             name = str(f.get("name") or "")
-            sem = str(f.get("semanticName") or "")
-            if name and (lowered in name.lower() or (sem and (lowered in sem.lower() or sem in lowered)) or name.lower() in lowered):
-                return name
-    return None
+            sem = str(f.get("semanticName") or f.get("cnName") or "").strip()
+            name_lower = name.lower()
+            sem_lower = sem.lower()
+            if not name or not sem or lowered not in sem_lower and lowered != name_lower:
+                continue
+            exact = lowered in {name_lower, sem_lower}
+            score = 1000 if exact else 700 - abs(len(sem_lower) - len(lowered))
+            display_tokens = ("名称", "name", "label", "描述", "description")
+            identity_tokens = (" id", "_id", "编码", "code", "序号", "sequence", " seq")
+            if not exact and any(token in sem_lower or token in name_lower for token in display_tokens):
+                score += 120
+            if not exact and any(token in sem_lower or token in name_lower for token in identity_tokens):
+                score -= 40
+            ranked.append((score, name))
+    if not ranked:
+        return None
+    best_score = max(item[0] for item in ranked)
+    best_names = list(dict.fromkeys(name for score, name in ranked if score == best_score))
+    return best_names[0] if len(best_names) == 1 else None
 
 
 def resolve_metric(
@@ -64,23 +83,54 @@ def resolve_metric(
     cands = [m for m in metrics if m.get("physicalFormula")]
     if not cands:
         return None
-    q = (question or "").lower()
-    # 优先：semantic 命中指标名/定义/别名
-    for m in cands:
-        hay = " ".join(str(m.get(k) or "") for k in ("name", "definition", "semanticFormula", "aliases"))
-        if metric_semantic and metric_semantic.lower() in hay.lower():
-            return m
-    # 退而求其次：关键词打分
-    best, best_score = None, 0
-    for m in cands:
-        text = " ".join(str(m.get(k) or "") for k in ("name", "definition", "semanticFormula"))
-        score = sum(1 for w in str(metric_semantic).split() if w and w.lower() in text.lower())
-        if q:
-            keys = m.get("matchedTerms") or (m.get("name") or "").split()
-            score += sum(1 for t in keys if t and str(t).lower() in q)
-        if score > best_score:
-            best, best_score = m, score
-    return best if best_score > 0 else None
+    needle = str(metric_semantic or "").strip().lower()
+    if not needle:
+        return None
+    question_text = str(question or "").strip().lower()
+    # The accepted user text outranks a broader model paraphrase.  If the user
+    # literally named one published metric (or alias), choose the longest unique
+    # mention before fuzzy-resolving the model token.  This lets a governed rule
+    # such as "低于安全库存" win over an LLM's generic "库存量".
+    mentioned: list[tuple[int, dict[str, Any]]] = []
+    for metric in cands:
+        aliases = metric.get("aliases") or metric.get("synonyms") or []
+        if isinstance(aliases, str):
+            aliases = [part.strip() for part in aliases.split(",")]
+        terms = [str(metric.get("name") or "").strip().lower(),
+                 *(str(alias).strip().lower() for alias in aliases)]
+        hits = [term for term in terms if term and term in question_text]
+        if hits:
+            mentioned.append((max(len(term) for term in hits), metric))
+    if mentioned:
+        longest = max(score for score, _ in mentioned)
+        winners = [metric for score, metric in mentioned if score == longest]
+        if len(winners) == 1:
+            return winners[0]
+    ranked: list[tuple[int, dict[str, Any]]] = []
+    for metric in cands:
+        name = str(metric.get("name") or "").strip().lower()
+        aliases = metric.get("aliases") or metric.get("synonyms") or []
+        if isinstance(aliases, str):
+            aliases = [part.strip() for part in aliases.split(",")]
+        terms = [name, *(str(alias).strip().lower() for alias in aliases if str(alias).strip())]
+        score = 0
+        if needle == name:
+            score = 1000
+        elif needle in terms[1:]:
+            score = 900
+        else:
+            containers = [term for term in terms if needle in term]
+            if containers:
+                score = 700 - min(len(term) - len(needle) for term in containers)
+        if not score:
+            continue
+        if question_text and name and name in question_text:
+            score += 100
+        ranked.append((score, metric))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return ranked[0][1] if len(ranked) == 1 or ranked[0][0] > ranked[1][0] else None
 
 
 def validate_intent(
@@ -115,10 +165,15 @@ def validate_intent(
     for met in intent.metrics:
         if not met.semantic:
             continue
-        resolved = resolve_metric(met.semantic, ctx, question)
+        resolved = next((item for item in ctx.get("metrics") or []
+                         if met.id and str(item.get("id")) == str(met.id)), None)
+        resolved = resolved or resolve_metric(met.semantic, ctx, question)
         if resolved is None:
             metric_clarify.append(f"指标「{met.semantic}」")
-        metrics.append(met.model_copy(update={"id": str(resolved.get("id") or "")}) if resolved else met)
+        metrics.append(met.model_copy(update={
+            "id": str(resolved.get("id") or ""),
+            "semantic": str(resolved.get("name") or met.semantic),
+        }) if resolved else met)
 
     time_clarify = ""
     if intent.time is not None and intent.time.mode.value in {"absolute", "comparison", "recent"}:

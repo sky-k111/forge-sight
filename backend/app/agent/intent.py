@@ -338,22 +338,36 @@ def should_downgrade_to_conversation(
     return True
 
 
-# 写意图词：命中即说明想改动/删除数据。分析工作流里的 intent_guard 会据此阻断，变成只读安全提示。
-_WRITE_TERMS = (
-    "删除", "删掉", "删去", "删了", "清除", "清空", "清零", "重置", "覆盖", "抹掉", "作废",
-    "修改", "改成", "改为", "改写", "调整", "设置成", "写入", "插入", "新增记录", "新增一条", "建表", "删表",
-    "更新数据", "更新指标", "更新表", "更新库", "更新字段",
-    "delete ", "update ", "insert ", "drop ", "alter ", "truncate ", "create table",
+# 强写操作在任何语境下都应阻断。“改/调整/更新”不能放在这里：
+# 它们也是多轮分析中切换指标、维度或图表的正常说法。
+_STRONG_WRITE_TERMS = (
+    "删除", "删掉", "删去", "删了", "清空", "抹掉", "作废",
+    "写入", "插入", "新增记录", "新增一条", "建表", "删表",
+)
+
+_MUTATION_OBJECT = (
+    r"(?:原始)?数据|生产记录|业务记录|数据库|数据表|表结构|"
+    r"字段(?:值)?|数据行|指标(?:定义|口径)|业务口径"
 )
 
 
 def has_write_intent(text: str) -> bool:
     """是否包含明确的写/删意图（如“删除某记录”“更新指标”）。"""
-    low = str(text or "").lower()
-    # Presentation/analysis edits are not database mutations. Explicit SQL and
-    # record/table writes still go through the read-only safety gate.
-    low = re.sub(r"(?:修改|更新|调整|改成|改为)(?:一下)?(?:分析)?(?:时间范围|时间|条件|分组|维度|图表|展示方式|柱状图|折线图)", "", low)
-    return any(term in low for term in _WRITE_TERMS)
+    low = re.sub(r"\s+", " ", str(text or "").lower()).strip()
+    if not low:
+        return False
+    if any(term in low for term in _STRONG_WRITE_TERMS):
+        return True
+    # SQL 写关键字按词边界识别，避免普通英文单词子串误命中。
+    if re.search(r"\b(?:delete|update|insert|drop|alter|truncate|merge)\b|\bcreate\s+table\b", low):
+        return True
+    mutation_verb = r"(?:修改|更新|改写|调整|设置|改成|改为|覆盖|重置|清除|清零)"
+    # 同时命中“变更动作 + 可持久化对象”才视为写意图。这会允许
+    # “改成工序不良率”和“调整为折线图”，但仍阻断“修改生产记录”。
+    return bool(
+        re.search(rf"{mutation_verb}.{{0,16}}(?:{_MUTATION_OBJECT})", low)
+        or re.search(rf"(?:{_MUTATION_OBJECT}).{{0,16}}{mutation_verb}", low)
+    )
 
 
 def split_request_segments(question: str) -> list[str]:

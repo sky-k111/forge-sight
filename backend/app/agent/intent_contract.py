@@ -93,7 +93,7 @@ class TimeRange(BaseModel):
     start: str | None = None            # ISO 8601 起始（含）
     end: str | None = None              # ISO 8601 结束（不含）
     amount: int | None = None
-    unit: str | None = None             # 天/周/月/季度/年
+    unit: Literal["day", "week", "month", "quarter", "year"] | None = None
     reference: Literal["now", "data_horizon", "prev_period"] = "data_horizon"
     comparisons: list["TimeRange"] = []  # 对比周期，如 [5月, 6月]
     label: str = ""                      # 人类可读 label，供结论/证据披露
@@ -107,6 +107,15 @@ class TimeRange(BaseModel):
                 v["reference"] = "data_horizon"
             if v.get("label") is None:
                 v["label"] = ""
+            raw_unit = str(v.get("unit") or "").strip().lower()
+            if raw_unit:
+                v["unit"] = {
+                    "days": "day", "天": "day", "日": "day",
+                    "weeks": "week", "周": "week", "星期": "week",
+                    "months": "month", "月": "month", "个月": "month",
+                    "quarters": "quarter", "季度": "quarter", "季": "quarter",
+                    "years": "year", "年": "year",
+                }.get(raw_unit, raw_unit)
         return v
 
     @field_validator("comparisons", mode="before")
@@ -118,6 +127,14 @@ class TimeRange(BaseModel):
         if not isinstance(v, list):
             return v
         return [_coerce_time_range(item) for item in v]
+
+    @model_validator(mode="after")
+    def _validate_time_shape(self):
+        if self.mode == TimeMode.RECENT and (not self.amount or self.amount < 1 or not self.unit):
+            raise ValueError("recent time requires a positive amount and canonical unit")
+        if self.start and self.end and self.start >= self.end:
+            raise ValueError("time start must be earlier than endExclusive")
+        return self
 
 
 class Dimension(BaseModel):

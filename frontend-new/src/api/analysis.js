@@ -2,7 +2,9 @@ import { listSources } from "./datasources";
 import {
   createAnalysisSession,
   deleteAnalysisSession,
+  deleteAnalysisSessions,
   listAnalysisSessions,
+  renameAnalysisSession,
 } from "../features/analysis/api";
 import { currentUserId } from "../lib/auth";
 
@@ -52,4 +54,13 @@ export async function createSession({
 
 export function deleteSession(sessionId, userId = USER_ID()) {
   return deleteAnalysisSession(sessionId, userId);
+}
+
+export async function renameSession(sessionId, title) {
+  const renamed = await renameAnalysisSession(sessionId, title);
+  return { ...renamed, id: renamed.sessionId, title: renamed.displayTitle || renamed.title };
+}
+
+export function deleteSessions(sessionIds) {
+  return deleteAnalysisSessions(sessionIds);
 }

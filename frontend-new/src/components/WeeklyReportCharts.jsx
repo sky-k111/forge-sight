@@ -3,6 +3,7 @@ import {
   CorrelationScatterChart,
   HorizontalRankChart,
   MatrixHeatmapChart,
+  RankBarChart,
   ShareDonutChart,
   TrendLineChart,
 } from "./charts";
@@ -10,6 +11,7 @@ import {
 const TYPE_LABELS = {
   line: "趋势折线",
   area: "趋势面积",
+  column: "趋势柱形",
   bar: "横向排行",
   pareto: "帕累托分析",
   donut: "构成占比",
@@ -17,6 +19,13 @@ const TYPE_LABELS = {
   scatter: "相关性散点",
   combo: "双指标组合",
 };
+const ACCENT_COLORS = {
+  ocean: "#25677a",
+  teal: "var(--color-teal)",
+  violet: "var(--color-violet)",
+  graphite: "#58636d",
+};
+const CHART_HEIGHTS = { compact: 220, standard: 280, focus: 360 };
 const ROLE_COLORS = {
   production: "var(--color-primary)",
   quality: "var(--color-amber)",
@@ -39,7 +48,7 @@ export function WeeklyReportCharts({ charts = [], sourceName = "业务数据源"
 function ChartArticle({ chart, sourceName }) {
   const evidenceCount = chart.evidenceArtifactIds?.length ?? 0;
   return (
-    <article className="flex min-w-0 flex-col rounded-section border border-line bg-paper p-4 shadow-[0_12px_34px_rgb(24_35_41_/5%)] transition-shadow hover:shadow-[0_16px_42px_rgb(24_35_41_/8%)] sm:p-5">
+    <article className={`flex min-w-0 flex-col rounded-section border border-line bg-paper p-4 shadow-[0_12px_34px_rgb(24_35_41_/5%)] transition-shadow hover:shadow-[0_16px_42px_rgb(24_35_41_/8%)] sm:p-5 ${chart.width === "full" ? "xl:col-span-2" : ""}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="section-kicker">{TYPE_LABELS[chart.type] ?? "数据图表"}</p>
@@ -66,10 +75,14 @@ function ChartArticle({ chart, sourceName }) {
 }
 
 function ChartVisual({ chart }) {
-  const color = ROLE_COLORS[chart.colorRole] ?? ROLE_COLORS.neutral;
+  const color = ACCENT_COLORS[chart.accent] ?? ROLE_COLORS[chart.colorRole] ?? ROLE_COLORS.neutral;
+  const height = CHART_HEIGHTS[chart.height] ?? CHART_HEIGHTS.standard;
   const data = chart.points ?? [];
+  if (chart.type === "column") {
+    return <RankBarChart data={data} xKey="label" bars={[{ key: "value", name: chart.valueLabel, color }]} unit={chart.unit} height={height} />;
+  }
   if (chart.type === "bar") {
-    return <HorizontalRankChart data={data} unit={chart.unit} color={color} />;
+    return <HorizontalRankChart data={data} unit={chart.unit} color={color} height={height} />;
   }
   if (chart.type === "pareto") {
     return (
@@ -80,7 +93,7 @@ function ChartVisual({ chart }) {
         lines={[{ key: "secondaryValue", name: "累计贡献率", color: "var(--color-red)" }]}
         leftUnit={chart.unit}
         rightUnit="%"
-        height={280}
+        height={height}
       />
     );
   }
@@ -92,7 +105,7 @@ function ChartVisual({ chart }) {
         unit={chart.unit}
         centerTitle="合计"
         centerValue={formatValue(total, chart.unit)}
-        height={280}
+        height={height}
       />
     );
   }
@@ -120,7 +133,7 @@ function ChartVisual({ chart }) {
         yName={chart.secondaryValueLabel}
         xUnit={chart.unit}
         yUnit={chart.secondaryUnit}
-        height={280}
+        height={height}
       />
     );
   }
@@ -133,7 +146,7 @@ function ChartVisual({ chart }) {
         lines={[{ key: "secondaryValue", name: chart.secondaryValueLabel, color: "var(--color-red)" }]}
         leftUnit={chart.unit}
         rightUnit={chart.secondaryUnit}
-        height={280}
+        height={height}
       />
     );
   }
@@ -144,7 +157,7 @@ function ChartVisual({ chart }) {
       series={[{ key: "value", name: chart.valueLabel, color }]}
       unit={chart.unit}
       area={chart.type === "area"}
-      height={280}
+      height={height}
     />
   );
 }

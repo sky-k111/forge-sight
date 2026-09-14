@@ -10,7 +10,7 @@ function flattenMenu(role) {
 describe("role-aware navigation", () => {
   it("organizes the business workspace around daily work and intelligent analysis", () => {
     const items = flattenMenu("business");
-    expect(items.find((item) => item.id === "overview")?.label).toBe("今日工作台");
+    expect(items.find((item) => item.id === "overview")?.label).toBe("业务看板");
     expect(items.find((item) => item.id === "analysis")?.label).toBe("智能分析");
     expect(items.find((item) => item.id === "analysis")?.children).toBeUndefined();
     expect(items.find((item) => item.id === "modeling")?.label).toBe("智能建模");

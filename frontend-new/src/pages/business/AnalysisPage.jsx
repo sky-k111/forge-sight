@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useOutletContext } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
 import Icon from "../../components/ui/Icon";
 import forgeSightLogo from "../../assets/forgesight-logo.png";
 import cn from "../../lib/cn";
@@ -8,6 +8,7 @@ import { ChartLegend, ComboMetricChart, CorrelationScatterChart, MatrixHeatmapCh
 import { listSources } from "../../api/datasources";
 import { createModelingTask } from "../../api/modeling";
 import { submitSkillFeedback } from "../../api/skills";
+import { getLlmSettings } from "../../api/modelSettings";
 import {
   createAnalysisBranch,
   createAnalysisSession,
@@ -36,6 +37,7 @@ const MODELING_DRAFT_KEY = "forgesight:modeling-draft";
 const ANALYSIS_SESSION_KEY = "forgesight:analysis-session-id";
 const ANALYSIS_NEW_SESSION_KEY = "forgesight:analysis-new-session";
 const ANALYSIS_SESSION_SELECTED_EVENT = "forgesight:analysis-session-selected";
+const ACTIVE_MODEL_PROFILE_KEY = "forgesight:active-model-profile-id";
 
 function chartTypeLabel(chart) {
   return {
@@ -54,10 +56,13 @@ function chartLegendItems(chart) {
       .map((item) => ({ label: item.name, color: item.color }));
 }
 
+function modelProtocolLabel(protocol) {
+  return protocol === "anthropic_messages" ? "Anthropic Messages" : "OpenAI Chat Completions";
+}
+
 
 export default function AnalysisPage() {
   const { evidenceOpen, setEvidenceOpen, navigatePage, refreshSessions } = useOutletContext();
-  const navigate = useNavigate();
   const [messages, setMessages] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [pending, setPending] = useState(false);
@@ -79,6 +84,9 @@ export default function AnalysisPage() {
   const [activeSource, setActiveSource] = useState(null);
   const [availableSources, setAvailableSources] = useState([]);
   const [scopeOpen, setScopeOpen] = useState(false);
+  const [modelProfiles, setModelProfiles] = useState([]);
+  const [selectedModelProfileId, setSelectedModelProfileId] = useState(null);
+  const [modelOpen, setModelOpen] = useState(false);
   const scrollRef = useRef(null);
   const composerRef = useRef(null);
   const subscriptionsRef = useRef(new Map());
@@ -90,6 +98,7 @@ export default function AnalysisPage() {
 
   const evidenceMaxWidth = Math.max(EVIDENCE_PANEL_MIN_WIDTH, viewportWidth - 252 - 480);
   const effectiveEvidenceWidth = Math.min(evidenceWidth, evidenceMaxWidth);
+  const selectedModelProfile = modelProfiles.find((item) => item.id === selectedModelProfileId) ?? modelProfiles[0] ?? null;
 
   const beginEvidenceResize = (event) => {
     if (event.button !== 0) return;
@@ -116,6 +125,25 @@ export default function AnalysisPage() {
     const updateViewport = () => setViewportWidth(window.innerWidth);
     window.addEventListener("resize", updateViewport);
     return () => window.removeEventListener("resize", updateViewport);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    getLlmSettings().then((value) => {
+      if (cancelled) return;
+      const profiles = Array.isArray(value?.profiles) ? value.profiles.filter((item) => item.configured) : [];
+      const stored = window.sessionStorage?.getItem(ACTIVE_MODEL_PROFILE_KEY);
+      const selected = profiles.find((item) => item.id === stored)
+        ?? profiles.find((item) => item.id === value?.activeProfileId || item.active)
+        ?? profiles[0]
+        ?? null;
+      setModelProfiles(profiles);
+      setSelectedModelProfileId(selected?.id ?? null);
+      if (selected?.id) window.sessionStorage?.setItem(ACTIVE_MODEL_PROFILE_KEY, selected.id);
+    }).catch(() => {
+      // Analysis remains usable with the server default when settings are unavailable.
+    });
+    return () => { cancelled = true; };
   }, []);
 
   const scrollToBottom = () => {
@@ -296,7 +324,18 @@ export default function AnalysisPage() {
       refreshTimers.clear();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(scrollToBottom, [messages, pending]);
+  useEffect(() => {
+    if (messages?.length || pending) {
+      scrollToBottom();
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      const node = scrollRef.current;
+      if (!node) return;
+      if (typeof node.scrollTo === "function") node.scrollTo({ top: 0, behavior: "auto" });
+      else node.scrollTop = 0;
+    });
+  }, [messages, pending]);
 
   const acceptRun = async (accepted, text, session = activeSession) => {
     if (!session) return;
@@ -346,27 +385,27 @@ export default function AnalysisPage() {
         window.sessionStorage.setItem(ANALYSIS_SESSION_KEY, session.id);
         refreshSessions?.(session.id);
       }
-      const accepted = await submitAnalysisRun(session.id, text, idempotencyKey);
+      const accepted = await submitAnalysisRun(session.id, text, idempotencyKey, selectedModelProfileId);
       await acceptRun(accepted, text, session);
     } catch {
       // 失败时保留问题文字与幂等键，便于用同一 key 重试而不产生重复 run。
-      setMessages((current) => [...current, { id: `error-${Date.now()}`, role: "assistant", failed: true, retry: { text, idempotencyKey } }]);
+      setMessages((current) => [...current, { id: `error-${Date.now()}`, role: "assistant", failed: true, retry: { text, idempotencyKey, modelProfileId: selectedModelProfileId } }]);
     } finally {
       setPending(false);
     }
   };
 
   const retryFailed = async (message) => {
-    const { text, idempotencyKey } = message.retry ?? {};
+    const { text, idempotencyKey, modelProfileId } = message.retry ?? {};
     if (!text || !idempotencyKey || pending || busy || !activeSession) return;
     setBranchNotice("");
     setPending(true);
     setMessages((current) => current.filter((item) => item.id !== message.id));
     try {
-      const accepted = await submitAnalysisRun(activeSession.id, text, idempotencyKey);
+      const accepted = await submitAnalysisRun(activeSession.id, text, idempotencyKey, modelProfileId);
       await acceptRun(accepted, text);
     } catch {
-      setMessages((current) => [...current, { id: `error-${Date.now()}`, role: "assistant", failed: true, retry: { text, idempotencyKey } }]);
+      setMessages((current) => [...current, { id: `error-${Date.now()}`, role: "assistant", failed: true, retry: { text, idempotencyKey, modelProfileId } }]);
     } finally {
       setPending(false);
     }
@@ -506,15 +545,7 @@ export default function AnalysisPage() {
               />
             )}
             {messages == null ? <ConversationSkeleton /> : messages.length === 0 ? (
-              <AnalysisEmptyState
-                onPrompt={(prompt) => {
-                  setQuery(prompt);
-                  window.requestAnimationFrame(() => composerRef.current?.focus());
-                }}
-                onNavigateModeling={() => navigatePage("modeling")}
-                onNavigateReports={() => navigatePage("reports")}
-                onNavigateProfile={() => navigate("/workspace/profile")}
-              />
+              <AnalysisEmptyState />
             ) : (
               <div className="analysis-conversation-state">
                 {messages.map((message) => {
@@ -562,14 +593,11 @@ export default function AnalysisPage() {
                   <BranchComparisonCard context={branchContext} originRun={originRun} currentRun={currentBranchRun} />
                 )}
                 {pending && (
-                  <div className="mt-8 border-l-2 border-primary/35 pl-3">
-                    <div className="flex items-center gap-2 text-xs text-muted">
-                      <span className="flex items-center gap-1">
-                        {[0, 1, 2].map((dot) => (
-                          <span key={dot} className="h-1.5 w-1.5 animate-pulse rounded-full bg-faint" style={{ animationDelay: `${dot * 160}ms` }} />
-                        ))}
-                      </span>
-                      正在理解问题并匹配业务知识…
+                  <div className="mt-8 flex items-center gap-3" role="status" aria-live="polite">
+                    <AnalysisActivityMark />
+                    <div>
+                      <strong className="block text-xs font-semibold text-ink">ForgeSight 正在分析</strong>
+                      <span className="mt-0.5 block text-[11px] text-muted">正在理解问题并匹配业务知识…</span>
                     </div>
                   </div>
                 )}
@@ -590,14 +618,17 @@ export default function AnalysisPage() {
               </div>
             )}
             {showExamples && (
-              <div className="absolute bottom-full left-0 z-10 mb-2.5 flex gap-2">
+              <div className="absolute bottom-full left-0 z-10 mb-2.5 flex max-w-full gap-2 overflow-x-auto pb-px">
                 {examples.map((example) => (
                   <button
                     type="button"
                     key={example}
-                    onClick={() => submit(example)}
+                    onClick={() => {
+                      setQuery(example);
+                      window.requestAnimationFrame(() => composerRef.current?.focus());
+                    }}
                     disabled={pending || busy || messages == null}
-                    className="shrink-0 cursor-pointer rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 shadow-[0_4px_12px_rgb(24_34_45/6%)] transition-colors hover:border-line-strong hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-55"
+                    className="analysis-example-chip shrink-0 cursor-pointer rounded-full border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 transition-colors hover:border-line-strong hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-55"
                   >
                     {example}
                   </button>
@@ -605,10 +636,12 @@ export default function AnalysisPage() {
               </div>
             )}
             <form
-              className="rounded-panel border border-line bg-surface p-3 shadow-card transition focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/15"
+              className="analysis-composer rounded-panel border border-line bg-surface p-3 transition focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/12"
               onSubmit={(event) => { event.preventDefault(); submit(); }}
             >
               <textarea
+                id="analysis-question"
+                aria-label="描述要确认的业务问题"
                 ref={composerRef}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
@@ -620,21 +653,23 @@ export default function AnalysisPage() {
                 }}
                 placeholder="用业务语言描述你想分析的问题…"
                 rows={2}
-                className="w-full resize-none border-0 bg-transparent text-body text-ink outline-none placeholder:text-faint"
+                className="analysis-composer__input w-full resize-none border-0 bg-transparent text-body text-ink outline-none placeholder:text-faint"
               />
-              <div className="flex items-center justify-between pt-1.5">
-                <div className="flex items-center gap-2.5">
+              <div className="analysis-composer__footer flex items-center justify-between pt-1.5">
+                <div className="analysis-composer__scope flex items-center gap-2.5">
                   <div className="relative">
                     <button
                       type="button"
                       aria-label="选择分析数据范围"
                       aria-haspopup="listbox"
                       aria-expanded={scopeOpen}
-                      onClick={() => setScopeOpen((value) => !value)}
-                      className="flex cursor-pointer items-center gap-1 rounded-control px-1.5 py-1 text-xs text-muted transition-colors hover:bg-surface-3 hover:text-ink"
+                      onClick={() => { setModelOpen(false); setScopeOpen((value) => !value); }}
+                      className="analysis-composer__scope-trigger flex cursor-pointer items-center gap-1.5 rounded-control px-1.5 py-1 text-xs text-muted transition-colors hover:bg-surface-3 hover:text-ink"
                     >
-                      <Icon name="plus" size={16} />
-                      {activeSource?.name ?? "选择数据范围"}
+                      <Icon name="database" size={14} className="shrink-0" />
+                      <span className="analysis-composer__source-name truncate" title={activeSource?.name ?? "选择数据范围"}>
+                        {activeSource?.name ?? "选择数据范围"}
+                      </span>
                       <Icon name="chevron" size={12} className={cn("transition-transform", scopeOpen && "rotate-180")} />
                     </button>
                     {scopeOpen && (
@@ -666,16 +701,70 @@ export default function AnalysisPage() {
                       </div>
                     )}
                   </div>
-                  <span className="text-[11px] text-faint">企业业务语义已启用</span>
+                  <span className="analysis-composer__governance inline-flex items-center gap-1.5 text-[11px] text-faint"><i aria-hidden="true" />企业口径</span>
                 </div>
-                <button
-                  type="submit"
-                  disabled={pending || busy || messages == null || !query.trim()}
-                  aria-label="开始分析"
-                  className="grid h-8 w-8 cursor-pointer place-items-center rounded-control bg-ink text-white transition-colors hover:bg-ink-2 disabled:cursor-not-allowed disabled:opacity-55"
-                >
-                  <Icon name={pending || busy ? "refresh" : "send"} size={17} />
-                </button>
+                <div className="analysis-composer__actions flex items-center gap-1.5">
+                  <div className="relative">
+                    <button
+                      type="button"
+                      aria-label="选择本次分析模型"
+                      aria-haspopup="listbox"
+                      aria-expanded={modelOpen}
+                      onClick={() => { setScopeOpen(false); setModelOpen((value) => !value); }}
+                      className="analysis-composer__model-trigger flex max-w-[210px] cursor-pointer items-center gap-2 rounded-control px-2 py-1.5 text-xs text-ink-2 transition-colors hover:bg-surface-2"
+                    >
+                      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", selectedModelProfile ? "bg-green" : "bg-line-strong")} aria-hidden="true" />
+                      <span className="truncate">{selectedModelProfile?.name || selectedModelProfile?.model || "默认模型"}</span>
+                      <Icon name="chevron" size={12} className={cn("shrink-0 transition-transform", modelOpen && "rotate-180")} />
+                    </button>
+                    {modelOpen && (
+                      <div
+                        role="listbox"
+                        aria-label="选择本次分析模型"
+                        className="absolute bottom-full right-0 z-20 mb-2 min-w-[280px] rounded-card border border-line bg-surface p-1.5 shadow-card-hover"
+                      >
+                        <div className="border-b border-line px-2 py-2">
+                          <strong className="block text-xs font-semibold text-ink">选择本次分析模型</strong>
+                          <span className="mt-0.5 block text-[10px] text-faint">只影响本次发起的分析</span>
+                        </div>
+                        {modelProfiles.length ? modelProfiles.map((profile) => (
+                          <button
+                            key={profile.id}
+                            type="button"
+                            role="option"
+                            aria-selected={profile.id === selectedModelProfile?.id}
+                            onClick={() => {
+                              setSelectedModelProfileId(profile.id);
+                              window.sessionStorage?.setItem(ACTIVE_MODEL_PROFILE_KEY, profile.id);
+                              setModelOpen(false);
+                            }}
+                            className={cn(
+                              "mt-1 flex w-full cursor-pointer items-center gap-2 rounded-control px-2.5 py-2.5 text-left transition-colors",
+                              profile.id === selectedModelProfile?.id ? "bg-primary-soft text-ink" : "text-muted hover:bg-surface-2 hover:text-ink",
+                            )}
+                          >
+                            <span className="min-w-0 flex-1">
+                              <strong className="block truncate text-xs">{profile.name || profile.model}</strong>
+                              <span className="block truncate text-[10px] text-faint">{profile.model} · {modelProtocolLabel(profile.protocol)}</span>
+                            </span>
+                            {profile.id === selectedModelProfile?.id && <Icon name="check" size={14} className="shrink-0 text-primary" />}
+                          </button>
+                        )) : (
+                          <p className="px-2 py-2 text-xs text-muted">使用服务端默认模型</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={pending || busy || messages == null || !query.trim()}
+                    aria-label="开始分析"
+                    aria-busy={pending || busy}
+                    className="analysis-composer__send grid h-8 w-8 cursor-pointer place-items-center rounded-full bg-ink text-white transition-colors hover:bg-ink-2 disabled:cursor-not-allowed disabled:opacity-55"
+                  >
+                    <Icon name={pending || busy ? "refresh" : "send"} size={17} className={pending || busy ? "animate-spin motion-reduce:animate-none" : ""} />
+                  </button>
+                </div>
               </div>
             </form>
           </div>
@@ -897,21 +986,27 @@ function UserMessage({ text }) {
 function AssistantRunMessage({ run, animate, onComplete, onOpenEvidence, onClarify, onFollowUp, onOpenModeling, clarifySubmitting = false, clarifyError = null }) {
   const hasEvidence = Boolean(run.plan?.length || run.artifacts?.length || run.checkpoints?.length);
   const openEvidence = hasEvidence ? () => onOpenEvidence(run) : null;
-  if (run.status === "blocked") return <BlockedCard error={run.error} onOpenEvidence={openEvidence} />;
-  if (run.status === "clarifying" && run.clarification) return <ClarifyCard clarification={run.clarification} onSelect={onClarify} submitting={clarifySubmitting} error={clarifyError} />;
+  const withUtilityResponse = (content) => (
+    <>
+      {run.utilityResponse && <AssistantConversationMessage text={run.utilityResponse} />}
+      {content}
+    </>
+  );
+  if (run.status === "blocked") return withUtilityResponse(<BlockedCard error={run.error} onOpenEvidence={openEvidence} />);
+  if (run.status === "clarifying" && run.clarification) return withUtilityResponse(<ClarifyCard clarification={run.clarification} onSelect={onClarify} submitting={clarifySubmitting} error={clarifyError} />);
   if (run.status === "failed" && run.error?.code === "PARTIAL_DELIVERY" && run.delivery?.delivered?.length) {
-    return <AnalysisResult run={run} onOpenEvidence={openEvidence} onFollowUp={onFollowUp} />;
+    return withUtilityResponse(<AnalysisResult run={run} onOpenEvidence={openEvidence} onFollowUp={onFollowUp} />);
   }
-  if (run.status === "failed" || run.status === "cancelled") return <FailedRunCard run={run} onOpenEvidence={openEvidence} />;
-  if (run.status === "modeling-proposal" && run.proposal) return <ModelingProposalCard proposal={run.proposal} delivery={run.delivery} runId={run.id} onOpenModeling={onOpenModeling} />;
+  if (run.status === "failed" || run.status === "cancelled") return withUtilityResponse(<FailedRunCard run={run} onOpenEvidence={openEvidence} />);
+  if (run.status === "modeling-proposal" && run.proposal) return withUtilityResponse(<ModelingProposalCard proposal={run.proposal} delivery={run.delivery} runId={run.id} onOpenModeling={onOpenModeling} />);
   // 澄清/建模提案在缺少 interaction/proposal 数据（如占位快照或异常快照）时按“运行中”兜底，避免空数据卡片抛错。
   if (["queued", "running", "retrying", "clarifying", "modeling-proposal"].includes(run.status)) {
     const livePlan = run.plan?.length ? run.plan : [{ id: "accepted", label: "正在理解业务问题", caption: "任务已进入可靠执行队列" }];
     const completed = livePlan.filter((step) => step.status === "succeeded").length;
-    return <RunningAnalysis completed={Math.min(completed, livePlan.length - 1)} plan={livePlan} />;
+    return withUtilityResponse(<RunningAnalysis completed={Math.min(completed, livePlan.length - 1)} plan={livePlan} />);
   }
   if (run.result?.kind === "conversation") return <AssistantConversationMessage text={run.conclusion.text} />;
-  return <RunFlow run={run} animate={animate} onComplete={onComplete} onOpenEvidence={onOpenEvidence} onFollowUp={onFollowUp} />;
+  return withUtilityResponse(<RunFlow run={run} animate={animate} onComplete={onComplete} onOpenEvidence={onOpenEvidence} onFollowUp={onFollowUp} />);
 }
 
 function AssistantConversationMessage({ text }) {
@@ -1194,50 +1289,7 @@ function ProposalField({ label, value, mono = false }) {
   return <div className="min-w-0 bg-surface p-2.5"><span className="block text-[10px] text-faint">{label}</span><strong className={cn("mt-1 block text-[11px] font-semibold leading-relaxed text-ink", mono && "font-mono")}>{value}</strong></div>;
 }
 
-function AnalysisEmptyState({ onPrompt, onNavigateModeling, onNavigateReports, onNavigateProfile }) {
-  const guides = [
-    {
-      id: "analysis",
-      icon: "analysis",
-      tone: "blue",
-      eyebrow: "START WITH A QUESTION",
-      title: "分析引导",
-      description: "从产量、质量或设备问题开始",
-      action: "试问一个问题",
-      onClick: () => onPrompt("统计每条产线最近 7 天的产量趋势"),
-    },
-    {
-      id: "modeling",
-      icon: "model",
-      tone: "violet",
-      eyebrow: "FIND THE NEXT SIGNAL",
-      title: "建模引导",
-      description: "识别风险因素，生成可复核方案",
-      action: "查看建模工作台",
-      onClick: onNavigateModeling,
-    },
-    {
-      id: "report",
-      icon: "report",
-      tone: "amber",
-      eyebrow: "SHARE WHAT IS VERIFIED",
-      title: "周报引导",
-      description: "把已验证结论整理成周报与交接",
-      action: "查看周报与交接",
-      onClick: onNavigateReports,
-    },
-    {
-      id: "binding",
-      icon: "link",
-      tone: "teal",
-      eyebrow: "KEEP THE TEAM IN SYNC",
-      title: "飞书 / 钉钉绑定",
-      description: "接收分析提醒和报告投递",
-      action: "去绑定账号",
-      onClick: onNavigateProfile,
-    },
-  ];
-
+function AnalysisEmptyState() {
   return (
     <section className="analysis-empty-state" aria-labelledby="analysis-empty-title">
       <div className="analysis-empty-hero">
@@ -1252,20 +1304,11 @@ function AnalysisEmptyState({ onPrompt, onNavigateModeling, onNavigateReports, o
           <p>用业务语言描述现场疑问，ForgeSight 会把方向、证据和下一步整理在一起。</p>
         </div>
       </div>
-      <div className="analysis-guide-grid">
-        {guides.map((guide) => (
-          <button type="button" key={guide.id} className={`analysis-guide-card analysis-guide-card--${guide.tone}`} onClick={guide.onClick}>
-            <span className="analysis-guide-card__icon"><Icon name={guide.icon} size={17} /></span>
-            <span className="analysis-guide-card__body">
-              <span className="analysis-guide-card__eyebrow">{guide.eyebrow}</span>
-              <strong>{guide.title}</strong>
-              <span>{guide.description}</span>
-            </span>
-            <span className="analysis-guide-card__action">{guide.action}<Icon name="arrow" size={13} /></span>
-          </button>
-        ))}
+      <div className="analysis-empty-capabilities" aria-label="智能问析能力">
+        <span><Icon name="shield" size={13} />企业口径</span>
+        <span><Icon name="database" size={13} />只读查询</span>
+        <span><Icon name="panel" size={13} />结果可追溯</span>
       </div>
-      <p className="analysis-empty-hint"><span className="analysis-empty-hint__dot" />也可以直接在下方输入问题，先从一个具体现场开始。</p>
     </section>
   );
 }
@@ -1293,17 +1336,24 @@ function ConversationSkeleton() {
   );
 }
 
+function AnalysisActivityMark() {
+  return (
+    <span className="relative grid h-6 w-6 shrink-0 place-items-center" aria-hidden="true">
+      <span className="absolute inset-0 rounded-full border border-primary/20" />
+      <span className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-r-primary/40 border-t-primary motion-reduce:animate-none" />
+      <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+    </span>
+  );
+}
+
 function RunningAnalysis({ completed, plan }) {
   const current = plan[Math.min(completed, plan.length - 1)];
   return (
-    <Card className="motion-soft-rise mt-1.5 p-4">
+    <Card className="motion-soft-rise mt-1.5 p-4" role="status" aria-live="polite" aria-label="分析进行中">
       <div className="flex items-center gap-3">
-        <div className="flex shrink-0 items-center gap-1">
-          {[0, 1, 2].map((dot) => (
-            <span key={dot} className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" style={{ animationDelay: `${dot * 160}ms` }} />
-          ))}
-        </div>
+        <AnalysisActivityMark />
         <div className="min-w-0 flex-1">
+          <span className="block text-[10px] font-semibold text-primary">分析进行中</span>
           <strong className="block text-body font-semibold text-ink">{current?.label ?? "正在准备分析"}</strong>
           <p className="mt-0.5 text-xs text-muted">{current?.caption ?? "正在读取业务上下文"}</p>
         </div>

@@ -38,6 +38,23 @@ def test_replace_and_presentation_do_not_drop_unmentioned_fields():
     assert merged.dimensions[0].grain == "month"
 
 
+def test_metric_revision_preserves_explicit_dimension_qualified_name():
+    prior = {"runId": "r-old", "agentIntent": AgentIntent.model_validate({
+        "kind": "analysis", "question": "各工序不良数量",
+        "metrics": [{"semantic": "不良数量"}], "dimensions": [{"semantic": "工序"}],
+    }).model_dump(mode="json")}
+    intent = AgentIntent.model_validate({
+        "kind": "analysis", "question": "刚才这个改成工序不良率",
+        "relation": "refine_previous", "operation": "query", "changedFields": ["metrics"],
+        "metrics": [{"semantic": "不良率"}],
+    })
+
+    merged = merge_intent(intent, prior)
+
+    assert merged.metrics[0].semantic == "工序不良率"
+    assert merged.dimensions[0].semantic == "工序"
+
+
 CTX = {"source": {"type": "mysql"}, "tables": [{"name": "fact", "fields": [{"name": "workshop_id", "semanticName": "车间"}]}]}
 TASK = {"groupBy": ["车间"]}
 
@@ -94,6 +111,25 @@ def test_success_snapshot_keeps_each_result_semantics():
     assert snapshot["results"][0]["agentIntent"]["metrics"][0]["semantic"] == "良率"
     assert snapshot["results"][1]["agentIntent"]["metrics"][0]["semantic"] == "产量"
     assert snapshot["agentIntent"] == snapshot["results"][1]["agentIntent"]
+
+
+def test_success_snapshot_is_json_serializable_with_database_types():
+    import json
+    from datetime import date, datetime
+    from decimal import Decimal
+
+    snapshot = successful_snapshot({
+        "run_id": "run-decimal", "source_id": 1,
+        "agent_intent": {"kind": "analysis", "question": "产量"},
+        "task_results": [{
+            "task": {"requirementId": "R1"},
+            "execution": {"columns": ["日期", "产量"], "rows": [[date(2026, 6, 1), Decimal("12.50")]]},
+            "interpretation": {"generatedAt": datetime(2026, 6, 1, 8, 0)},
+        }],
+    })
+    encoded = json.dumps(snapshot, ensure_ascii=False)
+    assert "2026-06-01" in encoded
+    assert "12.5" in encoded
 
 
 def test_presentation_followup_reuses_selected_result_without_changing_data():

@@ -1,18 +1,69 @@
 """Check requested dimensions against SQL projections and returned columns."""
 
+import re
+
 import sqlglot
 from sqlglot import exp
 from sqlglot.optimizer.scope import build_scope
 from typing import Any
 
 from app.agent.query_compiler import _DIM_KEYWORDS, _dim_time_grain, _is_time_dim, _pick_metric
-from app.agent.validators import resolve_dimension_field
+from app.agent.validators import resolve_dimension_field, resolve_metric
+
+
+def _select_metric(task, context):
+    """Bind the accepted semantic metric; never reinterpret structured intent from prose."""
+    candidates = [item for item in context.get("metrics", []) if item.get("physicalFormula")]
+    semantic_intent = task.get("semanticIntent") or {}
+    requested = list(semantic_intent.get("metrics") or [])
+    existing = (task.get("queryBinding") or {}).get("metric") or {}
+    requested_id = existing.get("id") or (requested[0].get("id") if requested else None)
+    if requested_id:
+        return next((item for item in candidates if str(item.get("id")) == str(requested_id)), {})
+
+    requested_name = (
+        (requested[0].get("semantic") if requested else None)
+        or task.get("metricHint")
+    )
+    if requested_name:
+        resolved = resolve_metric(
+            str(requested_name),
+            {"metrics": candidates},
+            str(task.get("normalizedQuestion") or task.get("originalQuestion") or ""),
+        )
+        if resolved:
+            return resolved
+    if len(candidates) == 1:
+        return candidates[0]
+    # Legacy/fallback intents have no accepted semantic contract yet. Keep the
+    # old lexical picker only at that compatibility boundary.
+    if not semantic_intent:
+        qtext = str(task.get("normalizedQuestion") or task.get("originalQuestion") or "")
+        return _pick_metric(candidates, qtext, task.get("metricHint")) or {}
+    return {}
+
+
+def apply_resolved_intent(task: dict[str, Any], resolved: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge deterministic validator output into the current task contract.
+
+    Validation is task-local: compound requests carry a different semantic
+    contract for each child task.  Keeping this merge explicit prevents a
+    successfully resolved metric id / physical dimension code from existing
+    only in audit metadata while the compiler keeps using stale input.
+    """
+    semantic = dict(task.get("semanticIntent") or {})
+    if not semantic or not resolved:
+        return dict(task)
+    if "metrics" in resolved:
+        semantic["metrics"] = list(resolved.get("metrics") or [])
+    if "dimensions" in resolved:
+        semantic["dimensions"] = list(resolved.get("dimensions") or [])
+    return {**task, "semanticIntent": semantic}
 
 
 def bind_query_requirements(task, context):
     """Resolve semantic dimensions once; compiler and validator consume this binding."""
-    qtext = str(task.get("normalizedQuestion") or task.get("originalQuestion") or "")
-    metric = _pick_metric(context.get("metrics", []), qtext, task.get("metricHint")) or {}
+    metric = _select_metric(task, context)
     metric_tables = set(metric.get("sourceTables") or [])
     tables = list(context.get("tables") or [])
 
@@ -49,7 +100,7 @@ def bind_query_requirements(task, context):
             return table_name(fact), "bound"
         return None, "ambiguous" if matches else "unresolved"
 
-    def resolve_semantic_field(value):
+    def resolve_semantic_field(value, *, exact_only=False):
         """Resolve a filter/dimension label without assuming it lives on the fact table."""
         needle = str(value or "").strip().lower()
         if not needle:
@@ -64,12 +115,50 @@ def bind_query_requirements(task, context):
                     exact.append((table, name))
                 elif semantic and (needle in semantic.lower() or semantic.lower() in needle):
                     fuzzy.append((table, name))
-        candidates = exact or fuzzy
+        candidates = exact if exact_only else (exact or fuzzy)
         if len(candidates) == 1:
             return candidates[0][1]
         fact_match = next((name for table, name in candidates if table is fact), None)
         return fact_match
 
+    def value_shape(value):
+        """Describe an example value without embedding business-specific IDs."""
+        shaped = []
+        for char in str(value or "").strip():
+            if char.isascii() and char.isalpha():
+                shaped.append("A")
+            elif char.isdigit():
+                shaped.append("9")
+            elif "\u4e00" <= char <= "\u9fff":
+                shaped.append("字")
+            else:
+                shaped.append(char)
+        return "".join(shaped)
+
+    def resolve_filter_field(semantic, value):
+        """Choose ID/code/name columns from metadata samples and the filter value."""
+        needle = str(semantic or "").strip().lower()
+        candidates = []
+        for table in tables:
+            for item in table.get("fields") or []:
+                name = str(item.get("name") or "")
+                label = str(item.get("semanticName") or item.get("cnName") or "")
+                if not name or not label or (needle not in label.lower() and needle != name.lower()):
+                    continue
+                score = 100 if needle in {name.lower(), label.lower()} else 50
+                sample = item.get("sampleValue")
+                if sample not in (None, "") and value_shape(sample) == value_shape(value):
+                    score += 200
+                if item.get("isPrimary"):
+                    score += 10
+                candidates.append((score, table, name))
+        if not candidates:
+            return None
+        best = max(item[0] for item in candidates)
+        winners = [(table, name) for score, table, name in candidates if score == best]
+        return winners[0][1] if len(winners) == 1 else None
+
+    fact_name = table_name(fact) if fact else None
     bound = []
     semantic_dimensions = {}
     for item in ((task.get("semanticIntent") or {}).get("dimensions") or []):
@@ -77,13 +166,21 @@ def bind_query_requirements(task, context):
             if key:
                 semantic_dimensions[str(key)] = item
     for dimension in task.get("groupBy") or []:
-        if _is_time_dim(dimension):
+        if dimension == "比较周期":
+            # Virtual dimension rendered from the accepted comparison periods.
+            # It is backed by the metric's time field but has no calendar grain.
+            field = metric.get("physicalTimeField")
+            grain = None
+            table, status = locate_field(field, prefer_fact=True)
+        elif _is_time_dim(dimension):
             field = metric.get("physicalTimeField")
             grain = _dim_time_grain(dimension) or (task.get("timeConstraint") or {}).get("timeGrain") or "day"
             table, status = locate_field(field, prefer_fact=True)
         else:
             spec = semantic_dimensions.get(str(dimension)) or {}
-            field = spec.get("code") or resolve_dimension_field(str(dimension), context)
+            field = spec.get("code") or resolve_semantic_field(str(dimension), exact_only=True)
+            if not field and not task.get("semanticIntent"):
+                field = resolve_dimension_field(str(dimension), context)
             grain = None
             table, status = locate_field(field, prefer_fact=True)
         bound.append({"semantic": dimension, "field": field, "table": table, "grain": grain,
@@ -91,8 +188,45 @@ def bind_query_requirements(task, context):
     filter_bound = []
     for condition in task.get("filters") or []:
         semantic = str(condition.get("semantic") or condition.get("field") or "")
+        metric_aliases = metric.get("aliases") or []
+        if isinstance(metric_aliases, str):
+            metric_aliases = [metric_aliases]
+        metric_rule_text = " ".join(str(value or "") for value in (
+            metric.get("name"), metric.get("definition"), metric.get("semanticFormula"),
+            *metric_aliases,
+        ))
+        expected_value = condition.get("value")
+        operator = str(condition.get("operator") or "eq").lower()
+        formula = str(metric.get("physicalFormula") or metric.get("semanticFormula") or "")
+        operator_symbol = {"lt": "<", "lte": "<=", "gt": ">", "gte": ">="}.get(operator)
+        # A published Boolean/business-rule metric already owns its predicate.
+        # Mark an LLM-restated comparison as satisfied by that formula rather than
+        # binding the prose ("库存 < 安全库存") to an arbitrary column.
+        def normalize_rule_term(value):
+            return re.sub(r"[\s_\-量数值]", "", str(value or "").lower())
+
+        semantic_norm = normalize_rule_term(semantic)
+        rule_norm = normalize_rule_term(metric_rule_text)
+        satisfied_by_metric = bool(
+            operator_symbol
+            and operator_symbol in formula
+            and semantic_norm and semantic_norm in rule_norm
+            and isinstance(expected_value, str) and expected_value in metric_rule_text
+        )
+        if satisfied_by_metric:
+            filter_bound.append({
+                **condition,
+                "semantic": semantic,
+                "field": None,
+                "table": fact_name,
+                "status": "metric_formula",
+                "satisfiedByMetric": metric.get("id") or metric.get("name"),
+            })
+            continue
         spec = semantic_dimensions.get(semantic) or {}
-        field = spec.get("code") or resolve_semantic_field(semantic) or resolve_dimension_field(semantic, context)
+        field = resolve_filter_field(semantic, condition.get("value")) or spec.get("code") or resolve_semantic_field(semantic, exact_only=True)
+        if not field and not task.get("semanticIntent"):
+            field = resolve_semantic_field(semantic) or resolve_dimension_field(semantic, context)
         table, status = locate_field(field, prefer_fact=True)
         filter_bound.append({
             **condition,
@@ -101,7 +235,6 @@ def bind_query_requirements(task, context):
             "table": table,
             "status": status if field else "unresolved",
         })
-    fact_name = table_name(fact) if fact else None
     graph: dict[str, list[dict[str, Any]]] = {}
     for relation in context.get("relations") or []:
         from_table = canonical_table(relation.get("fromQualifiedTable") or relation.get("fromTable"))
@@ -292,12 +425,13 @@ def dimension_outputs(sql, task, context):
             fields.add(str(binding["field"]).lower())
         elif _is_time_dim(dimension):
             fields |= {m["physicalTimeField"].lower() for m in context.get("metrics", []) if m.get("physicalTimeField")}
-        for table in context.get("tables", []):
-            for field in table.get("fields", []):
-                name = str(field.get("name") or "")
-                semantic = str(field.get("semanticName") or "")
-                if name and any(k.lower() in (name + " " + semantic).lower() for k in keywords):
-                    fields.add(name.lower())
+        if not fields:  # legacy validation only; a bound contract is authoritative
+            for table in context.get("tables", []):
+                for field in table.get("fields", []):
+                    name = str(field.get("name") or "")
+                    semantic = str(field.get("semanticName") or "")
+                    if name and any(k.lower() in (name + " " + semantic).lower() for k in keywords):
+                        fields.add(name.lower())
         if not fields:
             failures.append(f"当前数据源没有可绑定的{dimension}字段")
             continue
@@ -342,6 +476,46 @@ def query_contract_failures(sql, task, context):
     failures = []
     where = root.args.get("where")
 
+    # Reject every unrequested physical grouping generically. This replaces
+    # one-off guards such as “do not add product_name to a line chart”.
+    requested_bindings = task.get("dimensionBindings") or []
+    allowed_group_fields = {
+        str(item.get("field") or "").lower() for item in requested_bindings if item.get("field")
+    }
+    # A requested conformed dimension may be represented by several descriptive
+    # attributes from the same joined dimension table (ID/code/name/model).  They
+    # do not introduce a new analytical grouping grain.  Keep rejecting extra
+    # fields from the fact table or unrelated dimensions.
+    fact_table = str((task.get("queryBinding") or {}).get("factTable") or "")
+    requested_dimension_tables = {
+        str(item.get("table") or "") for item in requested_bindings
+        if item.get("table") and str(item.get("table")) != fact_table and not item.get("grain")
+    }
+    for table in context.get("tables") or []:
+        identities = {str(table.get("qualifiedName") or ""), str(table.get("name") or "")}
+        if requested_dimension_tables & identities:
+            allowed_group_fields.update(
+                str(field.get("name") or "").lower()
+                for field in table.get("fields") or [] if field.get("name")
+            )
+    allowed_group_aliases = {
+        str(item.get("semantic") or "").lower() for item in requested_bindings if item.get("semantic")
+    }
+    group = root.args.get("group")
+    if group is not None and allowed_group_fields:
+        projections = list(root.expressions)
+        for expression in group.expressions:
+            if isinstance(expression, exp.Literal) and expression.is_int:
+                index = int(expression.this) - 1
+                expression = projections[index] if 0 <= index < len(projections) else expression
+            columns = list(expression.find_all(exp.Column))
+            if isinstance(expression, exp.Column):
+                columns = [expression]
+            for column in columns:
+                name = column.name.lower()
+                if name not in allowed_group_fields and name not in allowed_group_aliases:
+                    failures.append(f"查询增加了未请求的分组字段「{column.name}」")
+
     def column_matches(node, binding):
         if not isinstance(node, exp.Column):
             return False
@@ -374,6 +548,8 @@ def query_contract_failures(sql, task, context):
     }
     for binding in (task.get("queryBinding") or {}).get("filters") or task.get("filterBindings") or []:
         semantic = binding.get("semantic") or binding.get("field") or "筛选条件"
+        if binding.get("status") == "metric_formula":
+            continue
         if binding.get("status") != "bound" or not binding.get("field"):
             failures.append(f"筛选条件「{semantic}」没有唯一绑定到物理字段")
             continue
@@ -431,8 +607,9 @@ def query_contract_failures(sql, task, context):
             for value in (binding.get("semantic"), binding.get("field"))
             if value
         )
-        if requested == str(metric.get("name") or ""):
-            names.add(str(metric.get("name") or "").lower())
+        metric_names = [str(metric.get("name") or ""), *(str(item) for item in metric.get("aliases") or [])]
+        if any(requested == item or requested in item or item in requested for item in metric_names if item):
+            names.update(item.lower() for item in metric_names if item)
         found = False
         for item in order_items:
             expression = item.this

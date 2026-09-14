@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { subscribeAnalysisRun } from "./api";
+import { deleteAnalysisSessions, renameAnalysisSession, submitAnalysisRun, subscribeAnalysisRun } from "./api";
+import { httpPatch, httpPost, httpRequest } from "../../api/_http";
 
 vi.mock("../../api/_http", () => ({
   apiUrl: (path) => `http://127.0.0.1:8000${path}`,
   httpDelete: vi.fn(),
   httpGet: vi.fn(),
+  httpPatch: vi.fn(),
   httpPost: vi.fn(),
   httpRequest: vi.fn(),
 }));
@@ -32,6 +34,31 @@ const okResponse = (body) => ({ ok: true, body });
 const errorResponse = (status) => ({ ok: false, status, body: null });
 
 const flushAsync = () => vi.advanceTimersByTimeAsync(0);
+
+test("pins the selected model profile to a submitted run", async () => {
+  httpRequest.mockResolvedValueOnce({ runId: "run-model" });
+
+  await submitAnalysisRun("session-1", "分析本月良率", "idem-model", "profile-qwen");
+
+  expect(httpRequest).toHaveBeenCalledWith(
+    "/api/analysis/sessions/session-1/runs",
+    expect.objectContaining({
+      headers: { "Idempotency-Key": "idem-model" },
+      body: JSON.stringify({ question: "分析本月良率", modelProfileId: "profile-qwen" }),
+    }),
+  );
+});
+
+test("renames and bulk deletes analysis sessions through persistent APIs", async () => {
+  httpPatch.mockResolvedValueOnce({ sessionId: "session-1", title: "六月质量复盘" });
+  httpPost.mockResolvedValueOnce({ deletedIds: ["session-1", "session-2"], deletedCount: 2 });
+
+  await renameAnalysisSession("session-1", "六月质量复盘");
+  await deleteAnalysisSessions(["session-1", "session-2"]);
+
+  expect(httpPatch).toHaveBeenCalledWith("/api/analysis/sessions/session-1", { title: "六月质量复盘" });
+  expect(httpPost).toHaveBeenCalledWith("/api/analysis/sessions/bulk-delete", { sessionIds: ["session-1", "session-2"] });
+});
 
 describe("authenticated SSE event subscription", () => {
   let fetchMock;

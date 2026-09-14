@@ -303,6 +303,16 @@ def build_plan(
     )
     if not model_enabled or generate_text is None:
         return normalize_delegated_tasks(fallback, state.get("run_id", "run")), "deterministic", None
+    # A delegated capability is executable only when the graph has an explicit
+    # hand-off route for it.  Registered-but-unroutable delegated descriptors must
+    # not be exposed to the model as callable tools: otherwise a syntactically
+    # valid plan deterministically fails at runtime (e.g. inspect_context).
+    graph_delegates = {"analysis.query_data", "modeling.propose"}
+    unsupported_delegates = {
+        str(item.get("name")) for item in (capability_descriptors or [])
+        if item.get("delegated") and item.get("name") not in graph_delegates
+    }
+    planner_capabilities = set(allowed_capabilities) - unsupported_delegates
     schema = AgentPlan.model_json_schema(by_alias=True)
     system = (
         "你是 ForgeSight 的受限业务规划器。只选择 allowedCapabilities 中的业务能力；"
@@ -315,7 +325,7 @@ def build_plan(
             "goal": state.get("user_question"),
             "analysisQuestion": state.get("analysis_question"),
             "segments": state.get("request_segments") or [],
-            "allowedCapabilities": sorted(allowed_capabilities),
+            "allowedCapabilities": sorted(planner_capabilities),
             "agentIntent": state.get("agent_intent"),
             "capabilitySchemas": _capability_schemas(capability_descriptors),
             "budget": (budget or fallback.budget).model_dump(by_alias=True),
@@ -328,7 +338,7 @@ def build_plan(
     try:
         raw = generate_text(state, "planner.build", system, user)
         candidate = AgentPlan.model_validate(_extract_json(raw))
-        if any(step.capability not in allowed_capabilities for step in candidate.steps):
+        if any(step.capability not in planner_capabilities for step in candidate.steps):
             raise ValueError("计划引用了未注册能力")
         # Every requested query retains its authoritative task contract. Model
         # planning may add inspection steps, but cannot silently drop a request.

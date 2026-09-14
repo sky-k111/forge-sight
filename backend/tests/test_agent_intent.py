@@ -22,6 +22,7 @@ def test_system_utility_is_deterministic_and_does_not_enter_analysis():
     assert classify_request_kind("现在几点？") == "utility"
     assert classify_request_kind("今天星期几？") == "utility"
     assert classify_request_kind("当前使用哪个数据源？") == "utility"
+    assert classify_request_kind("我现在问的数据是哪个数据源？") == "utility"
     assert classify_request_kind("数据更新到什么时候？") == "utility"
 
     response = build_system_utility_response(

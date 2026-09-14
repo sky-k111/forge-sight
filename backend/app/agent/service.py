@@ -132,10 +132,12 @@ def list_sessions(user_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> list[dict
             item = _session_dict(row, source_name)
             latest_question = latest_questions.get(row.id)
             latest_run = latest_runs.get(row.id)
+            stored_title = " ".join((row.title or "").split())
+            uses_automatic_title = stored_title in {"", "新分析", "未命名分析", "制造业务问析"}
             item["displayTitle"] = (
                 " ".join(latest_question.content.split())[:120]
-                if latest_question
-                else row.title
+                if uses_automatic_title and latest_question
+                else stored_title or "未命名分析"
             )
             item["runCount"] = int(run_counts.get(row.id, 0))
             item["latestRunStatus"] = latest_run.status if latest_run else None
@@ -164,6 +166,59 @@ def delete_session(session_id: str, user_id: str, tenant_id: str = DEFAULT_TENAN
         }
 
 
+def rename_session(session_id: str, title: str, user_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
+    """Persist a user-defined conversation title inside the current tenant boundary."""
+    normalized = " ".join(title.split()).strip()
+    if not normalized:
+        raise AnalysisConflict("会话名称不能为空")
+    with PlatformSession() as session:
+        row = (
+            session.query(AnalysisSession)
+            .filter_by(id=session_id, user_id=user_id, tenant_id=tenant_id)
+            .with_for_update()
+            .first()
+        )
+        if row is None or row.status == "deleted":
+            raise AnalysisNotFound(f"会话 {session_id} 不存在")
+        row.title = normalized[:200]
+        row.updated_at = datetime.now()
+        session.commit()
+        return {"sessionId": row.id, "title": row.title, "displayTitle": row.title}
+
+
+def delete_sessions(session_ids: list[str], user_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
+    """Atomically soft-delete a bounded set of conversations owned by one user."""
+    normalized_ids = list(dict.fromkeys(str(item).strip() for item in session_ids if str(item).strip()))
+    if not normalized_ids:
+        raise AnalysisConflict("请至少选择一个会话")
+    with PlatformSession() as session:
+        rows = (
+            session.query(AnalysisSession)
+            .filter(
+                AnalysisSession.id.in_(normalized_ids),
+                AnalysisSession.user_id == user_id,
+                AnalysisSession.tenant_id == tenant_id,
+                AnalysisSession.status != "deleted",
+            )
+            .with_for_update()
+            .all()
+        )
+        found_ids = {row.id for row in rows}
+        missing = [item for item in normalized_ids if item not in found_ids]
+        if missing:
+            raise AnalysisNotFound(f"会话 {missing[0]} 不存在")
+        deleted_at = datetime.now()
+        for row in rows:
+            row.status = "deleted"
+            row.updated_at = deleted_at
+        session.commit()
+        return {
+            "deletedIds": normalized_ids,
+            "deletedCount": len(normalized_ids),
+            "retention": "audit",
+        }
+
+
 def get_session(session_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
     with PlatformSession() as session:
         row = session.query(AnalysisSession).filter_by(id=session_id, tenant_id=tenant_id).first()
@@ -182,6 +237,7 @@ def get_session(session_id: str, tenant_id: str = DEFAULT_TENANT_ID) -> dict:
 def create_run(
     session_id: str, question: str, idempotency_key: str | None = None,
     tenant_id: str | None = None,
+    *, model_profile_id: str | None = None,
 ) -> dict:
     normalized_question = question.strip()
     with PlatformSession() as session:
@@ -199,6 +255,8 @@ def create_run(
             ).first()
             if existing:
                 return _run_acceptance(existing)
+        if " ".join((parent.title or "").split()) in {"", "新分析", "未命名分析", "制造业务问析"}:
+            parent.title = normalized_question[:200]
         history_rows = (
             session.query(AnalysisMessage)
             .filter_by(session_id=session_id)
@@ -254,6 +312,31 @@ def create_run(
         planner_assignment = _planner_assignment(parent.user_id, snapshot_planner_settings(session))
         budget_snapshot = default_budget()
         budget_snapshot["planner"] = planner_assignment
+        # Freeze the selected model profile for this run.  Only non-secret metadata
+        # is persisted; the worker resolves the credential server-side by id.
+        try:
+            from app.api.model_settings import resolve_runtime_profile
+
+            model_runtime = resolve_runtime_profile(model_profile_id)
+        except (KeyError, ValueError) as exc:
+            if model_profile_id:
+                raise AnalysisConflict("所选模型配置不存在或没有可用凭据，请重新选择") from exc
+            # Keep local/offline tests and unconfigured deployments able to accept a
+            # run; the existing provider error path will explain a missing default key.
+            model_runtime = {
+                "id": None,
+                "name": "默认模型",
+                "protocol": settings.llm_protocol,
+                "baseUrl": settings.llm_base_url,
+                "model": settings.llm_model,
+            }
+        budget_snapshot["llm"] = {
+            "profileId": model_runtime["id"],
+            "profileName": model_runtime["name"],
+            "protocol": model_runtime["protocol"],
+            "baseUrl": model_runtime["baseUrl"],
+            "model": model_runtime["model"],
+        }
         budget_snapshot["access"] = {
             "tenantId": parent.tenant_id,
             "userId": parent.user_id,
@@ -293,6 +376,7 @@ def create_run(
                 "status": "running" if inline_conversation else "queued",
                 "question": normalized_question,
                 "sourceId": parent.source_id,
+                "modelProfile": budget_snapshot["llm"],
                 "executionPath": "inline-conversation" if inline_conversation else "worker",
             },
         )
@@ -808,6 +892,7 @@ def _interaction_dict(row: AnalysisInteraction) -> dict:
 
 
 def _run_summary(run: AnalysisRun) -> dict:
+    model_profile = dict((run.budget_snapshot_json or {}).get("llm") or {})
     return {
         "id": run.id,
         "sessionId": run.session_id,
@@ -815,6 +900,7 @@ def _run_summary(run: AnalysisRun) -> dict:
         "status": run.status,
         "currentStepKey": run.current_step_key,
         "workflowVersion": run.workflow_version,
+        "modelProfile": model_profile or None,
         "skillEnhancement": {
             "enabled": bool(run.skill_enhancement_enabled),
             "variant": run.skill_experiment_variant,
@@ -843,10 +929,12 @@ def _run_summary(run: AnalysisRun) -> dict:
 
 
 def _run_acceptance(run: AnalysisRun) -> dict:
+    model_profile = dict((run.budget_snapshot_json or {}).get("llm") or {})
     return {
         "runId": run.id,
         "sessionId": run.session_id,
         "status": run.status,
+        "modelProfile": model_profile or None,
         "streamUrl": f"/api/analysis/runs/{run.id}/stream",
         "snapshotUrl": f"/api/analysis/runs/{run.id}",
         "acceptedAt": run.created_at.isoformat(),

@@ -46,8 +46,59 @@ def resolve_time_constraint(constraint: dict[str, Any] | None, horizon: Any = No
     if not constraint:
         return None
     kind = constraint.get("kind")
-    # Absolute boundaries are already authoritative. Never discard them merely
-    # because their reference metadata says now/data_horizon.
+    # A month label is a semantic calendar period. Canonicalize its boundaries
+    # here so an LLM-provided inclusive month-end (06-30) cannot leak into an
+    # end-exclusive SQL contract. Explicit day ranges remain authoritative.
+    if kind == "absolute":
+        label = str(constraint.get("label") or "")
+        periods = constraint.get("periods") or []
+        if periods and not label:
+            label = str(periods[0].get("label") or "")
+        # An explicit range may span several calendar months. Do not collapse
+        # it to the first month merely because the label begins with YYYY-MM.
+        # Normalize a month-end supplied as an inclusive date to our exclusive
+        # first-day boundary, while preserving the complete range.
+        if len(periods) == 1:
+            supplied = periods[0]
+            start = _to_date(supplied.get("startInclusive"))
+            end = _to_date(supplied.get("endExclusive"))
+            if start and end:
+                next_month = date(start.year + 1, 1, 1) if start.month == 12 else date(start.year, start.month + 1, 1)
+                if end > next_month:
+                    if end.day != 1:
+                        end = date(end.year + 1, 1, 1) if end.month == 12 else date(end.year, end.month + 1, 1)
+                    out = dict(constraint)
+                    out["periods"] = [{
+                        **supplied,
+                        "key": supplied.get("key") or "range",
+                        "startInclusive": start.isoformat(),
+                        "endExclusive": end.isoformat(),
+                    }]
+                    return out
+        year_month = _calendar_month(label, constraint, horizon)
+        if year_month:
+            year, month = year_month
+            month_start = date(year, month, 1)
+            month_end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+            ordinal = _week_of_month(label)
+            if ordinal is not None:
+                start = month_start + timedelta(days=(ordinal - 1) * 7)
+                end = min(start + timedelta(days=7), month_end)
+                if start >= month_end:
+                    return dict(constraint)
+                key = f"month-week-{ordinal}"
+                resolved_label = label or f"{year}-{month:02d}第{ordinal}周"
+            else:
+                start, end = month_start, month_end
+                key = "month"
+                resolved_label = f"{year}-{month:02d}"
+            out = dict(constraint)
+            out["periods"] = [{
+                "key": key, "label": resolved_label,
+                "startInclusive": start.isoformat(), "endExclusive": end.isoformat(),
+            }]
+            return out
+    # Fully specified non-month boundaries are authoritative.
     if kind == "absolute" and constraint.get("periods"):
         return dict(constraint)
     resolvable = {
@@ -78,6 +129,55 @@ def _amount(value: Any) -> int:
 
 def _month_start(d: date) -> date:
     return d.replace(day=1)
+
+
+def _shift_months(value: date, months: int) -> date:
+    index = value.year * 12 + value.month - 1 + months
+    year, month_index = divmod(index, 12)
+    month = month_index + 1
+    next_month = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+    last_day = (next_month - timedelta(days=1)).day
+    return date(year, month, min(value.day, last_day))
+
+
+def _calendar_month(label: str, constraint: dict[str, Any], horizon: Any = None) -> tuple[int, int] | None:
+    """Resolve a recognized calendar-month label without interpreting user intent."""
+    # A day label also begins with a year/month pair.  Do not widen an explicit
+    # day into its whole month merely because a provider emitted a stale
+    # ``timeGrain=month`` alongside otherwise authoritative day boundaries.
+    if re.search(r"\d{4}\s*(?:年|[-/])\s*\d{1,2}\s*(?:月|[-/])\s*\d{1,2}\s*(?:日)?", label):
+        return None
+    explicit = re.search(r"(?<!\d)(\d{4})\s*(?:年|[-/])\s*(\d{1,2})(?:\s*月)?", label)
+    if explicit:
+        year, month = int(explicit.group(1)), int(explicit.group(2))
+        return (year, month) if 1 <= month <= 12 else None
+    bare = re.search(r"(?<!\d)(\d{1,2})\s*月份?(?!\d)", label)
+    if not bare:
+        return None
+    month = int(bare.group(1))
+    if not 1 <= month <= 12:
+        return None
+    use_now = constraint.get("reference") == "now"
+    ref = reference_date() if use_now else reference_date(horizon)
+    # "now" describes the current calendar, so a bare future month is allowed.
+    # A data-horizon reference means "the most recent occurrence in the loaded
+    # data" and therefore rolls a future month back one year.
+    year = ref.year if use_now or month <= ref.month else ref.year - 1
+    return year, month
+
+
+def _week_of_month(label: str) -> int | None:
+    """Return a 1-based seven-day bucket for an explicit month-week label.
+
+    This is calendar normalization, not business-intent guessing.  The accepted
+    intent already says the range is an absolute week; this function only turns
+    labels such as ``6月第一周`` into executable half-open boundaries.
+    """
+    match = re.search(r"第\s*([1-5一二三四五])\s*周", str(label or ""))
+    if not match:
+        return None
+    token = match.group(1)
+    return int(token) if token.isdigit() else {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5}.get(token)
 
 
 def _resolve_relative(constraint: dict[str, Any], ref: date, horizon: Any = None) -> dict[str, Any]:
@@ -156,11 +256,15 @@ def _resolve_relative(constraint: dict[str, Any], ref: date, horizon: Any = None
             "endExclusive": f"{today.year + 1}-01-01",
         }]
     elif kind == "specific_month":
-        # 裸“6月份”锚定到参考日期（数据地平线优先）。规则：目标月份不晚于参考月用参考年，
-        # 否则用参考年 - 1（即最近一个出现过该月的数据年份），从而覆盖跨年边界。
-        month = int(constraint.get("month") or 1)
-        month = max(1, min(12, month))
-        year = today.year if month <= today.month else (today.year - 1)
+        # 显式年份必须优先于参考日期；只有裸“6月份”才锚定数据地平线。
+        # provider 即便只把 month 放进结构化字段，label 仍保留用户给出的年份。
+        calendar_month = _calendar_month(str(constraint.get("label") or ""), constraint, horizon)
+        if calendar_month:
+            year, month = calendar_month
+        else:
+            month = int(constraint.get("month") or 1)
+            month = max(1, min(12, month))
+            year = today.year if month <= today.month else (today.year - 1)
         start = date(year, month, 1)
         end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
         out["periods"] = [{
@@ -178,28 +282,22 @@ def _resolve_relative(constraint: dict[str, Any], ref: date, horizon: Any = None
             members = [{"label": constraint.get("label")}]
         resolved: list[dict[str, Any]] = []
         for p in members:
-            if isinstance(p, dict) and p.get("startInclusive") and p.get("endExclusive"):
-                resolved.append(dict(p))
-                continue
             label = str(p.get("label") or "") if isinstance(p, dict) else str(p)
             member_reference = str(p.get("reference") or constraint.get("reference") or "data_horizon") if isinstance(p, dict) else str(constraint.get("reference") or "data_horizon")
-            member_today = reference_date() if member_reference == "now" else reference_date(horizon)
-            month = None
-            m = re.search(r"(\d{1,2})\s*月", label)
-            if m:
-                month = int(m.group(1))
-            if month is None:
-                m = re.search(r"\d{4}[-/](\d{1,2})", label)
-                if m:
-                    month = int(m.group(1))
-            if month is None:
-                continue
-            if not (1 <= month <= 12):
-                continue
-            year = member_today.year if month <= member_today.month else member_today.year - 1
-            start = date(year, month, 1)
-            end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
-            resolved.append({"label": label, "startInclusive": start.isoformat(), "endExclusive": end.isoformat()})
+            if isinstance(p, dict):
+                member = dict(p)
+                member["kind"] = str(member.get("kind") or ("recent" if member.get("amount") else "absolute"))
+                member["reference"] = member_reference
+                member.setdefault("timeGrain", member.get("grain") or constraint.get("timeGrain") or "day")
+                if member.get("startInclusive") or member.get("endExclusive"):
+                    member["periods"] = [{
+                        "label": label,
+                        **({"startInclusive": member["startInclusive"]} if member.get("startInclusive") else {}),
+                        **({"endExclusive": member["endExclusive"]} if member.get("endExclusive") else {}),
+                    }]
+                nested = resolve_time_constraint(member, horizon)
+                for period in (nested or {}).get("periods") or []:
+                    resolved.append({**period, "label": label or period.get("label", ""), "reference": member_reference})
         if resolved:
             mstart = min(d["startInclusive"] for d in resolved)
             mend = max(d["endExclusive"] for d in resolved)
@@ -207,12 +305,32 @@ def _resolve_relative(constraint: dict[str, Any], ref: date, horizon: Any = None
             out["periodBreakdown"] = resolved
     elif kind == "recent":
         amount = _amount(constraint.get("amount"))
-        unit = constraint.get("unit") or "天"
-        days = amount * (1 if unit in {"天", "日"} else 30 if unit in {"月", "个月"} else 7)
+        raw_unit = str(constraint.get("unit") or "day").strip().lower()
+        unit = {
+            "day": "day", "days": "day", "天": "day", "日": "day",
+            "week": "week", "weeks": "week", "周": "week", "星期": "week",
+            "month": "month", "months": "month", "月": "month", "个月": "month",
+            "quarter": "quarter", "quarters": "quarter", "季度": "quarter", "季": "quarter",
+            "year": "year", "years": "year", "年": "year",
+        }.get(raw_unit)
+        if unit is None:
+            raise ValueError(f"unsupported recent time unit: {raw_unit}")
+        if unit == "day":
+            start = today - timedelta(days=amount - 1)
+        elif unit == "week":
+            start = today - timedelta(days=amount * 7 - 1)
+        elif unit in {"month", "quarter"}:
+            start = _shift_months(today + timedelta(days=1), -amount * (3 if unit == "quarter" else 1))
+        else:
+            try:
+                start = (today + timedelta(days=1)).replace(year=today.year + 1 - amount)
+            except ValueError:  # leap day
+                start = date(today.year + 1 - amount, 2, 28)
         out["periods"] = [{
             "key": "recent",
-            "label": constraint.get("label", f"最近 {amount}{unit}"),
-            "startInclusive": (today - timedelta(days=days)).isoformat(),
+            "label": constraint.get("label", f"最近 {amount}{raw_unit}"),
+            # “最近 N 天”包含锚点当天，因此 [start, end) 恰好 N 天。
+            "startInclusive": start.isoformat(),
             "endExclusive": (today + timedelta(days=1)).isoformat(),
         }]
     elif kind == "absolute" or kind == "specific_year":
