@@ -9,6 +9,7 @@ import { pageFromPath, roleFromPath, routeByPage } from "../../app/routeConfig";
 import { createSession, deleteSession, deleteSessions, listSessions, renameSession } from "../../api/analysis";
 import { fetchMe, logout as apiLogout } from "../../api/auth";
 import { getUnreadCount } from "../../api/messages";
+import { getAdminOverview } from "../../api/overview";
 import { getCurrentTenant, listMyTenants } from "../../api/tenants";
 import { AUTH_EXPIRED_EVENT, getCachedUser, getToken, setSession } from "../../lib/auth";
 import { clearTenantWorkspaceState, getActiveTenantId, setActiveTenantId } from "../../lib/tenant";
@@ -17,6 +18,8 @@ const users = {
   business: { name: "王敏", title: "生产部 · 业务分析", initials: "王" },
   admin: { name: "林涛", title: "数据治理组 · 管理员", initials: "林" },
 };
+
+const todoDotTones = { amber: "bg-amber", blue: "bg-primary", red: "bg-red" };
 
 const SIDEBAR_MIN = 210;
 const SIDEBAR_MAX = 290;
@@ -49,6 +52,7 @@ export default function AppShell() {
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [expandedItems, setExpandedItems] = useState(() => new Set(["data-semantic-governance"]));
   const [unreadCount, setUnreadCount] = useState(0);
+  const [todoItems, setTodoItems] = useState(null);
   const [tenants, setTenants] = useState(() => cachedUser?.tenants ?? []);
   const [activeTenant, setActiveTenant] = useState(null);
   const selectedAnalysisSession = (sessions ?? []).find((session) => session.id === activeSessionId) ?? null;
@@ -105,6 +109,22 @@ export default function AppShell() {
     window.addEventListener("forgesight:messages-changed", refreshUnread);
     return () => { cancelled = true; window.clearInterval(timer); window.removeEventListener("forgesight:messages-changed", refreshUnread); };
   }, []);
+
+  useEffect(() => {
+    if (role !== "admin") return undefined;
+    let cancelled = false;
+    const loadTodos = () =>
+      getAdminOverview()
+        .then((data) => { if (!cancelled) setTodoItems(data?.todo ?? []); })
+        .catch(() => { if (!cancelled) setTodoItems([]); });
+    loadTodos();
+    // 治理动作（如复核拦截记录）完成后立即刷新侧栏待办
+    window.addEventListener("forgesight:governance-changed", loadTodos);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("forgesight:governance-changed", loadTodos);
+    };
+  }, [role]);
 
   useEffect(() => {
     let cancelled = false;
@@ -276,6 +296,7 @@ export default function AppShell() {
         width={sidebarWidth}
         sessions={sessions}
         sessionsError={sessionsError}
+        todoItems={todoItems}
         activeSessionId={activeSessionId}
         onNavigate={navigatePage}
         onCreateTask={createTask}
@@ -334,7 +355,7 @@ export default function AppShell() {
   );
 }
 
-function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessionsError, activeSessionId, onNavigate, onCreateTask, onStartAnalysis, onDeleteSession, onDeleteSessions, onRenameSession, onSelectSession, onRetrySessions, onToggleDarkMode, onLogout, onToggle, onResizeStart, onResizeKeyDown, onResizeReset, mobileOpen, expandedItems, onToggleItem }) {
+function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessionsError, todoItems, activeSessionId, onNavigate, onCreateTask, onStartAnalysis, onDeleteSession, onDeleteSessions, onRenameSession, onSelectSession, onRetrySessions, onToggleDarkMode, onLogout, onToggle, onResizeStart, onResizeKeyDown, onResizeReset, mobileOpen, expandedItems, onToggleItem }) {
   const [searchText, setSearchText] = useState("");
   const [openSessionMenuId, setOpenSessionMenuId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
@@ -681,9 +702,22 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
           <div className="border-t border-line px-2 pb-2.5">
             <div className="px-2 pb-1.5 pt-2.5 text-[11px] font-semibold text-muted">治理待办</div>
             <div className="flex flex-col gap-0.5">
-              <QueueItem dotClass="bg-amber" title="3 个指标待审核" caption="质量、设备主题" count={3} onClick={() => onNavigate("knowledge")} />
-              <QueueItem dotClass="bg-primary" title="2 个字段待映射" caption="设备运行数据" count={2} onClick={() => onNavigate("resources")} />
-              <QueueItem dotClass="bg-red" title="1 条拦截待复核" caption="今天 10:21" count={1} onClick={() => onNavigate("security")} />
+              {todoItems === null ? (
+                <div className="px-2 py-1.5 text-[11px] text-faint">正在读取治理状态…</div>
+              ) : todoItems.length ? (
+                todoItems.map((item) => (
+                  <QueueItem
+                    key={item.key}
+                    dotClass={todoDotTones[item.tone] ?? "bg-primary"}
+                    title={`${item.count} ${item.unit ?? "个"}${item.label}`}
+                    caption={item.caption}
+                    count={item.count}
+                    onClick={() => onNavigate(item.page)}
+                  />
+                ))
+              ) : (
+                <div className="px-2 py-1.5 text-[11px] text-faint">暂无待办，治理基线正常</div>
+              )}
             </div>
           </div>
         )

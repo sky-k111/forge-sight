@@ -39,12 +39,37 @@ from app.db.platform import Base, platform_engine
 log = logging.getLogger(__name__)
 
 
+def ensure_audit_review_columns():
+    """create_all 不会给已存在的表补列；旧平台库需要手动补齐审计复核列。
+
+    列类型按模型定义编译到当前方言（SQLite 用 DATETIME，PostgreSQL 用 TIMESTAMP）。
+    """
+    from sqlalchemy import inspect, text
+
+    from app.db.models import AuditLog
+
+    inspector = inspect(platform_engine)
+    if "audit_log" not in inspector.get_table_names():
+        return
+    columns = {item["name"] for item in inspector.get_columns("audit_log")}
+    dialect = platform_engine.dialect
+    if "reviewed_at" not in columns:
+        col_type = AuditLog.reviewed_at.type.compile(dialect=dialect)
+        with platform_engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE audit_log ADD COLUMN reviewed_at {col_type}"))
+    if "reviewed_by" not in columns:
+        col_type = AuditLog.reviewed_by.type.compile(dialect=dialect)
+        with platform_engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE audit_log ADD COLUMN reviewed_by {col_type} DEFAULT ''"))
+
+
 def create_platform_tables():
     from app.auth.deps import validate_email_gate_configuration, validate_security_configuration
 
     validate_security_configuration()
     validate_email_gate_configuration()
     Base.metadata.create_all(platform_engine)
+    ensure_audit_review_columns()
     # 确保默认数据源存在；资源目录为空时自动做首次元数据扫描
     from app.db.models import DataTable
     from app.db.platform import PlatformSession

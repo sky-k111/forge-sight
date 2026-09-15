@@ -41,6 +41,8 @@ class AuditLog(Base):
     resource: Mapped[str] = mapped_column(String(255), default="", comment="涉及数据资源")
     result: Mapped[str] = mapped_column(String(20), comment="允许 / 已拦截 / 已记录")
     detail: Mapped[str] = mapped_column(Text, default="", comment="详情（SQL 摘要、拦截原因等）")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, default=None, comment="拦截记录复核时间，未复核为空")
+    reviewed_by: Mapped[str] = mapped_column(String(50), default="", comment="复核人")
 
 
 # 结果 → 前端展示的 tone（与前端 StatusPill 对齐）

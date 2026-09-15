@@ -27,6 +27,7 @@ def feishu_session(monkeypatch):
     monkeypatch.setattr(auth_service, "PlatformSession", session_factory)
     monkeypatch.setattr(feishu_api, "PlatformSession", session_factory)
     monkeypatch.setattr(auth_service, "write_audit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(feishu_api, "write_audit", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(settings, "auth_token_secret", "feishu-test-secret")
     monkeypatch.setattr(settings, "auth_external_identity_gate_enabled", True)
     monkeypatch.setattr(settings, "auth_email_gate_enabled", False)

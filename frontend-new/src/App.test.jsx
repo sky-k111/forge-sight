@@ -435,6 +435,11 @@ beforeEach(() => {
             { index: "02", title: "确认数据字段映射", note: "2 个字段尚未补充业务中文名", status: "待映射", tone: "blue", page: "resources" },
             { index: "03", title: "复核危险 SQL 拦截记录", note: "DELETE FROM dim_process", status: "已拦截", tone: "red", page: "security" },
           ],
+          todo: [
+            { key: "metrics", label: "指标待审核", unit: "个", count: 3, caption: "质量、设备", page: "knowledge", tone: "amber" },
+            { key: "fields", label: "字段待映射", unit: "个", count: 2, caption: "设备运行数据", page: "resources", tone: "blue" },
+            { key: "intercepts", label: "拦截待复核", unit: "条", count: 1, caption: "今天 10:21", page: "security", tone: "red" },
+          ],
           topics: [
             { name: "生产", coverage: 92 },
             { name: "质量", coverage: 96 },
@@ -1053,7 +1058,15 @@ describe("ForgeSight application routes", () => {
       (await screen.findAllByRole("button", { name: /过程/ }))[0],
     );
 
-    expect(container.querySelector(".trace-step__node")).toBeTruthy();
+    // Process groups are collapsed by default; expand the first one to reveal step nodes.
+    const groupTrigger = await waitFor(() => {
+      const trigger = container.querySelector(".evidence-step-group__trigger");
+      expect(trigger).toBeTruthy();
+      return trigger;
+    });
+    fireEvent.click(groupTrigger);
+
+    await waitFor(() => expect(container.querySelector(".trace-step__node")).toBeTruthy());
   });
 
   test("slides the evidence panel shell between open and closed states", async () => {
@@ -1157,6 +1170,11 @@ describe("ForgeSight application routes", () => {
     ).toBe("false");
     expect(await screen.findByText("待处理事项")).toBeTruthy();
     expect(window.location.pathname).toBe("/admin/overview");
+    // 侧栏治理待办来自 /api/overview/admin 的真实聚合，而非写死文案
+    const metricsTodo = await screen.findByText("3 个指标待审核");
+    expect(metricsTodo.closest("button")).toBeTruthy();
+    fireEvent.click(screen.getByText("1 条拦截待复核").closest("button"));
+    expect(window.location.pathname).toBe("/admin/security");
   });
 
   test("keeps the evidence chain available when an analysis has no result", async () => {
