@@ -44,6 +44,7 @@ export default function ResourcesPage() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [connectorOpen, setConnectorOpen] = useState(false);
   const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
+  const [graphOpen, setGraphOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState(null);
   const [editNotice, setEditNotice] = useState("");
@@ -345,8 +346,8 @@ export default function ResourcesPage() {
   if (!tables) return <RouteSkeleton />;
 
   return (
-    <PageFrame>
-      <Card className="flex flex-wrap items-center gap-5 px-5 py-4">
+    <PageFrame className="max-w-[1360px] gap-4">
+      <div className="relative z-30 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
         <div className="relative">
           <button
             type="button"
@@ -357,7 +358,7 @@ export default function ResourcesPage() {
           >
             <SourceTypeMark type={currentSource?.type} />
             <span className="min-w-0">
-              <strong className="block max-w-52 truncate text-body font-semibold text-ink">{currentSource?.name ?? "数据源"}</strong>
+              <strong className="block max-w-52 truncate text-sm font-semibold text-ink">{currentSource?.name ?? "数据源"}</strong>
               <small className="block text-[11px] text-faint">
                 {currentSource ? `${currentSource.typeLabel} · 只读连接 · ${currentSource.status}` : "加载中"}
               </small>
@@ -419,26 +420,30 @@ export default function ResourcesPage() {
             </>
           )}
         </div>
-        <div className="flex items-center gap-5 text-xs text-muted">
-          <span><b className="mr-1 font-mono text-base font-semibold text-ink">{tables.length}</b>数据表</span>
-          <span><b className="mr-1 font-mono text-base font-semibold text-ink">{tables.reduce((sum, table) => sum + table.fields, 0)}</b>字段</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 rounded-control border border-line bg-surface-2 px-2.5 py-1.5">
+            <span className={cn("h-1.5 w-1.5 rounded-full", semanticIndex?.status === "failed" ? "bg-red" : semanticIndex?.status === "succeeded" ? "bg-green" : "bg-amber")} />
+            <span className="text-[11px] font-semibold text-ink-2">{semanticIndex?.statusLabel ?? "正在读取索引状态"}</span>
+            {semanticIndex?.status === "failed" ? (
+              <Button size="sm" variant="ghost" onClick={retryIndex} disabled={indexAction}>重试</Button>
+            ) : (
+              <Button size="sm" variant="ghost" onClick={queueFullIndex} disabled={indexAction} title="重新生成当前数据源的全部语义向量">
+                <Icon name="refresh" size={13} />{indexAction ? "已入队" : "重建"}
+              </Button>
+            )}
+          </div>
+          <Button variant="primary" onClick={openConnector}>
+            <Icon name="plus" size={15} />接入数据源
+          </Button>
         </div>
-        <div className="ml-auto flex items-center gap-2 rounded-control border border-line bg-surface-2 px-2.5 py-1.5">
-          <span className={cn("h-1.5 w-1.5 rounded-full", semanticIndex?.status === "failed" ? "bg-red" : semanticIndex?.status === "succeeded" ? "bg-green" : "bg-amber")} />
-          <span className="text-[11px] font-semibold text-ink-2">{semanticIndex?.statusLabel ?? "正在读取索引状态"}</span>
-          {semanticIndex?.documents > 0 && <span className="font-mono text-[10px] text-faint">{semanticIndex.documents} 项语义资产</span>}
-          {semanticIndex?.status === "failed" ? (
-            <Button size="sm" variant="ghost" onClick={retryIndex} disabled={indexAction}>重试</Button>
-          ) : (
-            <Button size="sm" variant="ghost" onClick={queueFullIndex} disabled={indexAction} title="重新生成当前数据源的全部语义向量">
-              <Icon name="refresh" size={13} />{indexAction ? "已入队" : "重建"}
-            </Button>
-          )}
-        </div>
-        <Button variant="primary" onClick={openConnector}>
-          <Icon name="plus" size={15} />接入数据源
-        </Button>
-      </Card>
+      </div>
+
+      <div className="grid grid-cols-2 divide-y divide-line overflow-hidden rounded-panel border border-line bg-paper sm:grid-cols-4 sm:divide-y-0 sm:divide-x">
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">数据表</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-ink">{tables.length}</strong></div>
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">字段</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-ink">{tables.reduce((sum, table) => sum + table.fields, 0)}</strong></div>
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">表关系</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-ink">{relations.length}</strong></div>
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">语义资产</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-ink">{semanticIndex?.documents ?? 0}</strong></div>
+      </div>
 
       <Modal open={connectorOpen} onClose={() => setConnectorOpen(false)} label={editingId == null ? "接入数据源" : "数据源配置管理"} maxWidth={720}>
         <div className="p-5">
@@ -681,11 +686,24 @@ export default function ResourcesPage() {
       </Modal>
 
       <Card>
-        <SectionHeader eyebrow="业务数据关系" title="生产—质量—设备关联图" action="展开关系图" />
+        <SectionHeader eyebrow="业务数据关系" title="生产—质量—设备关联图" action="展开关系图" onAction={() => setGraphOpen(true)} />
         <div className="px-5 pb-5">
           <SchemaGraph tables={tables} relations={relations} selected={tableIdentity(selectedTable)} onSelect={(name) => { setSelectedName(name); setPreviewOpen(false); }} />
         </div>
       </Card>
+
+      <Modal open={graphOpen} onClose={() => setGraphOpen(false)} label="数据关系图" maxWidth={1200}>
+        <div className="flex items-center justify-between gap-4 border-b border-line px-5 py-3.5">
+          <div>
+            <span className="text-[11px] font-semibold tracking-wide text-faint">业务数据关系</span>
+            <h3 className="mt-0.5 text-sm font-semibold text-ink">生产—质量—设备关联图</h3>
+          </div>
+          <button type="button" onClick={() => setGraphOpen(false)} aria-label="关闭关系图" className="grid h-8 w-8 cursor-pointer place-items-center rounded-control text-muted transition-colors hover:bg-surface-2 hover:text-ink"><Icon name="close" size={16} /></button>
+        </div>
+        <div className="max-h-[76vh] overflow-auto p-5">
+          <SchemaGraph expanded tables={tables} relations={relations} selected={tableIdentity(selectedTable)} onSelect={(name) => { setSelectedName(name); setPreviewOpen(false); setGraphOpen(false); }} />
+        </div>
+      </Modal>
 
       <div className="grid items-start gap-3.5 xl:grid-cols-[minmax(320px,0.85fr)_minmax(0,1.5fr)]">
         <Card>
@@ -872,7 +890,7 @@ const nodeTones = {
   violet: "text-violet",
 };
 
-function SchemaGraph({ tables, relations, selected, onSelect }) {
+function SchemaGraph({ tables, relations, selected, onSelect, expanded = false }) {
   const positions = [
     [18, 26], [246, 26], [486, 26], [724, 26],
     [18, 138], [246, 138], [486, 138], [724, 138],
@@ -909,7 +927,7 @@ function SchemaGraph({ tables, relations, selected, onSelect }) {
     <div className="overflow-hidden rounded-card border border-line bg-surface-2">
       <div
         data-testid="schema-graph-canvas"
-        className="relative mx-auto w-full max-w-[920px]"
+        className={cn("relative mx-auto w-full", expanded ? "max-w-[1360px]" : "max-w-[920px]")}
         style={{ aspectRatio: `${SCHEMA_GRAPH_WIDTH} / ${SCHEMA_GRAPH_HEIGHT}` }}
       >
         <svg

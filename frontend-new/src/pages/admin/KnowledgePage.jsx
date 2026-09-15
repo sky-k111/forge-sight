@@ -280,40 +280,39 @@ export default function KnowledgePage() {
   if (!data) return <RouteSkeleton />;
 
   return (
-    <PageFrame>
-      <Card className="flex flex-wrap items-center gap-5 px-5 py-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-control bg-primary-soft text-primary"><Icon name="knowledge" /></span>
-          <span className="min-w-0">
-            <strong className="block text-body font-semibold text-ink">业务知识库</strong>
+    <PageFrame className="max-w-[1360px] gap-4">
+      <div className="relative z-30 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-control bg-primary-soft text-primary"><Icon name="knowledge" size={16} /></span>
+          <div className="min-w-0">
+            <strong className="block text-sm font-semibold text-ink">业务知识库</strong>
             <small className="text-[11px] text-faint">最近同步：今天 10:12</small>
-          </span>
-        </div>
-        <div className="flex items-center gap-5 text-xs text-muted">
-          <span><b className="mr-1 font-mono text-base font-semibold text-ink">{knowledgeCount}</b>知识项</span>
-          <span><b className="mr-1 font-mono text-base font-semibold text-ink">{linkedCoverage}%</b>指标已关联数据</span>
-          <span><b className="mr-1 font-mono text-base font-semibold text-amber">{pendingCount}</b>待审核或验证</span>
-          <span><b className="mr-1 font-mono text-base font-semibold text-primary">{pendingCandidateCount}</b>AI 候选</span>
-        </div>
-        <div className="ml-auto">
-          <div className="mb-2 flex justify-end">
-            <span className="inline-flex items-center gap-1.5 rounded-tag border border-line bg-surface-2 px-2 py-1 text-[10px] font-semibold text-muted" title={semanticIndex?.latestJob?.reason ?? "当前数据源语义索引状态"}>
-              <span className={cn("h-1.5 w-1.5 rounded-full", semanticIndex?.status === "failed" ? "bg-red" : semanticIndex?.status === "succeeded" ? "bg-green" : "bg-amber")} />
-              {semanticIndex?.statusLabel ?? "读取索引状态"}
-              {semanticIndex?.status === "succeeded" && semanticIndex.documents > 0 ? ` · ${semanticIndex.documents} 项` : ""}
-            </span>
           </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-tag border border-line bg-surface-2 px-2 py-1 text-[10px] font-semibold text-muted" title={semanticIndex?.latestJob?.reason ?? "当前数据源语义索引状态"}>
+            <span className={cn("h-1.5 w-1.5 rounded-full", semanticIndex?.status === "failed" ? "bg-red" : semanticIndex?.status === "succeeded" ? "bg-green" : "bg-amber")} />
+            {semanticIndex?.statusLabel ?? "读取索引状态"}
+            {semanticIndex?.status === "succeeded" && semanticIndex.documents > 0 ? ` · ${semanticIndex.documents} 项` : ""}
+          </span>
           <SourceBindingPicker
             sources={data.sources ?? []}
             value={currentSourceId}
             onChange={changeSource}
           />
+          <Button onClick={handleGenerateCandidates} disabled={!currentSourceId || candidateBusy}>
+            <Icon name="refresh" size={14} />{candidateBusy ? "生成中" : "生成口径候选"}
+          </Button>
+          <Button variant="primary" onClick={() => setEditor({})}><Icon name="plus" size={15} />新增知识</Button>
         </div>
-        <Button onClick={handleGenerateCandidates} disabled={!currentSourceId || candidateBusy}>
-          <Icon name="refresh" size={14} />{candidateBusy ? "生成中" : "生成口径候选"}
-        </Button>
-        <Button variant="primary" onClick={() => setEditor({})}><Icon name="plus" size={15} />新增知识</Button>
-      </Card>
+      </div>
+
+      <div className="grid grid-cols-2 divide-y divide-line overflow-hidden rounded-panel border border-line bg-paper sm:grid-cols-4 sm:divide-y-0 sm:divide-x">
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">知识项</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-ink">{knowledgeCount}</strong></div>
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">指标已关联数据</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-ink">{linkedCoverage}%</strong></div>
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">待审核或验证</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-amber">{pendingCount}</strong></div>
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">AI 候选</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-primary">{pendingCandidateCount}</strong></div>
+      </div>
 
       {actionError && (
         <div role="alert" className="flex items-center gap-2 rounded-control border border-red/25 bg-red-soft px-3 py-2 text-xs text-red">

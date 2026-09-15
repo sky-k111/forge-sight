@@ -35,24 +35,32 @@ export default function MemoryGovernancePage() {
   const promote = async (id) => { await promoteMemory(id); await load(); };
 
   return (
-    <PageFrame>
-      <Card className="overflow-hidden">
-        <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-5">
-          <div><span className="text-[11px] font-semibold tracking-[.08em] text-primary">MEMORY CONTROL PLANE</span><h2 className="mt-1 text-xl font-semibold text-ink">记忆治理与实验开关</h2><p className="mt-1 max-w-2xl text-xs leading-5 text-muted">记忆召回按运行快照进入 A/B 对照。关闭后，新运行不召回也不沉淀记忆，现有内容仍保留供审计与恢复。</p></div>
-          <div className="flex gap-2"><Button onClick={consolidate}><Icon name="refresh" size={14} />执行合并与过期</Button><Button variant={summary.settings.enabled ? "secondary" : "primary"} onClick={toggle}>{summary.settings.enabled ? "关闭记忆增强" : "开启记忆增强"}</Button></div>
+    <PageFrame className="max-w-[1360px] gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-control bg-primary-soft text-primary"><Icon name="memory" size={16} /></span>
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold tracking-tight text-ink">记忆治理与实验开关</h2>
+            <p className="mt-0.5 max-w-2xl text-[11px] text-muted">记忆召回按运行快照进入 A/B 对照；关闭后新运行不召回也不沉淀，现有内容仍保留供审计与恢复。</p>
+          </div>
         </div>
-        <div className="grid border-t border-line sm:grid-cols-2 lg:grid-cols-5">
-          <Metric label="全部记忆" value={summary.total} />
-          <Metric label="已生效" value={summary.byStatus.active ?? 0} />
-          <Metric label="待确认" value={summary.byStatus.candidate ?? 0} />
-          <Metric label="召回次数" value={summary.recallCount} />
-          <Metric label="当前实验" value={summary.settings.variant.toUpperCase()} textual />
+        <div className="flex shrink-0 gap-2">
+          <Button onClick={consolidate}><Icon name="refresh" size={14} />执行合并与过期</Button>
+          <Button variant={summary.settings.enabled ? "secondary" : "primary"} onClick={toggle}>{summary.settings.enabled ? "关闭记忆增强" : "开启记忆增强"}</Button>
         </div>
-      </Card>
+      </div>
+
+      <div className="grid grid-cols-2 divide-y divide-line overflow-hidden rounded-panel border border-line bg-paper sm:grid-cols-5 sm:divide-y-0 sm:divide-x">
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">全部记忆</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-ink">{summary.total}</strong></div>
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">已生效</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-ink">{summary.byStatus.active ?? 0}</strong></div>
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">待确认</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-amber">{summary.byStatus.candidate ?? 0}</strong></div>
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">召回次数</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-ink">{summary.recallCount}</strong></div>
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">当前实验</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-ink">{summary.settings.variant.toUpperCase()}</strong></div>
+      </div>
 
       <Card className="overflow-hidden">
         <div className="grid lg:grid-cols-[300px_1fr_1fr]">
-          <div className="border-b border-line px-5 py-4 lg:border-b-0 lg:border-r"><span className="text-[11px] font-semibold tracking-[.08em] text-primary">A/B OBSERVATION</span><h3 className="mt-1 font-semibold text-ink">开启前后是否真的更好</h3><p className="mt-1 text-xs leading-5 text-muted">每次运行保存开关快照，不用主观印象判断记忆有没有帮助。</p></div>
+          <div className="border-b border-line px-5 py-4 lg:border-b-0 lg:border-r"><span className="text-[11px] font-semibold tracking-wide text-primary">A/B 对照观察</span><h3 className="mt-1 font-semibold text-ink">开启前后是否真的更好</h3><p className="mt-1 text-xs leading-5 text-muted">每次运行保存开关快照，不用主观印象判断记忆有没有帮助。</p></div>
           <ExperimentCell label="未启用记忆" data={summary.experiment.off} />
           <ExperimentCell label="启用记忆" data={summary.experiment.on} active />
         </div>
@@ -67,10 +75,6 @@ export default function MemoryGovernancePage() {
       </section>
     </PageFrame>
   );
-}
-
-function Metric({ label, value, textual = false }) {
-  return <div className="border-b border-line px-5 py-4 sm:border-b-0 sm:border-r"><span className="text-[11px] text-faint">{label}</span><strong className={`mt-1 block text-ink ${textual ? "text-sm" : "font-mono text-xl"}`}>{value}</strong></div>;
 }
 
 function ExperimentCell({ label, data, active = false }) {

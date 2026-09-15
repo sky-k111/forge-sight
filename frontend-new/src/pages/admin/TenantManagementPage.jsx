@@ -2,10 +2,17 @@ import { useEffect, useState } from "react";
 import { listSources } from "../../api/datasources";
 import { getCurrentTenant, listCurrentTenantMembers } from "../../api/tenants";
 import Icon from "../../components/ui/Icon";
-import { Card, ErrorNotice, PageFrame, RouteSkeleton, StatusPill } from "../../components/ui";
+import cn from "../../lib/cn";
+import { ErrorNotice, PageFrame, RouteSkeleton, StatusPill } from "../../components/ui";
 import { getToken } from "../../lib/auth";
 
 const roleLabels = { owner: "所有者", admin: "管理员", member: "成员", viewer: "只读成员" };
+
+function formatJoined(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value).slice(0, 10) : date.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
+}
 
 export default function TenantManagementPage() {
   const [data, setData] = useState(null);
@@ -34,71 +41,125 @@ export default function TenantManagementPage() {
   if (error) return <PageFrame><ErrorNotice title="企业空间加载失败" detail={error.message || "请检查当前账号的企业权限后重试。"} onRetry={load} /></PageFrame>;
   if (!data) return <RouteSkeleton />;
 
+  const enabledCount = data.members.filter((member) => member.enabled).length;
+  const roleCounts = data.members.reduce((acc, member) => ({ ...acc, [member.role]: (acc[member.role] ?? 0) + 1 }), {});
+
   return (
-    <PageFrame>
-      <section className="overflow-hidden rounded-card border border-line bg-surface shadow-card">
-        <div className="grid gap-0 lg:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.75fr)]">
-          <div className="px-6 py-6 lg:px-8 lg:py-8">
-            <div className="flex items-center gap-2 text-xs font-semibold text-primary"><Icon name="shield" size={16} />当前企业边界</div>
-            <h2 className="mt-3 text-2xl font-semibold tracking-tight text-ink">{data.tenant.name}</h2>
-            <p className="mt-2 max-w-[68ch] text-sm leading-6 text-muted">数据源、指标口径、调查会话和长期记忆均以该企业为第一层隔离边界；企业内部的部门与岗位权限在此边界内继续生效。</p>
-            <div className="mt-5 flex flex-wrap gap-2">
-              <StatusPill tone="green">运行中</StatusPill>
-              <span className="rounded-tag border border-line bg-surface-2 px-2 py-1 text-[11px] text-muted">租户标识 {data.tenant.slug}</span>
-              <span className="rounded-tag border border-line bg-surface-2 px-2 py-1 text-[11px] text-muted">我的角色 {roleLabels[data.tenant.role] ?? data.tenant.role}</span>
-            </div>
+    <PageFrame className="max-w-[1360px] gap-4">
+      <section className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-control bg-primary-soft text-primary"><Icon name="shield" size={16} /></span>
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-semibold tracking-tight text-ink">{data.tenant.name}</h2>
+            <p className="mt-0.5 truncate text-[11px] text-muted">租户标识 <span className="font-mono">{data.tenant.slug}</span> · 数据源、指标、会话与记忆均以企业为第一隔离边界</p>
           </div>
-          <div className="grid grid-cols-2 border-t border-line bg-surface-2 lg:border-l lg:border-t-0">
-            {[
-              ["成员", data.members.length, "账号与角色"],
-              ["数据源", data.sources.length, "物理连接隔离"],
-              ["隔离层级", "2", "企业 + 数据源"],
-              ["访问模式", "只读", "分析执行边界"],
-            ].map(([label, value, note], index) => (
-              <div key={label} className={`px-5 py-5 ${index % 2 ? "border-l" : ""} ${index > 1 ? "border-t" : ""} border-line`}>
-                <span className="text-xs text-muted">{label}</span>
-                <strong className="mt-2 block text-xl font-semibold tracking-tight text-ink">{value}</strong>
-                <small className="mt-1 block text-[10px] text-faint">{note}</small>
-              </div>
-            ))}
-          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <StatusPill tone="green">运行中</StatusPill>
+          <StatusPill tone="blue">我的角色 · {roleLabels[data.tenant.role] ?? data.tenant.role}</StatusPill>
+          <span className="rounded-full border border-line bg-surface px-2 py-1 text-[11px] text-muted">只读访问</span>
         </div>
       </section>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(340px,0.62fr)]">
-        <Card>
-          <div className="flex items-end justify-between gap-4 border-b border-line px-5 py-4">
-            <div><h3 className="text-base font-semibold text-ink">企业成员</h3><p className="mt-1 text-xs text-muted">成员只能进入已授权的企业空间，企业角色不替代内部部门权限。</p></div>
-            <span className="text-xs text-faint">共 {data.members.length} 人</span>
-          </div>
-          <div className="divide-y divide-line px-5">
-            {data.members.map((member) => (
-              <div key={member.id} className="grid grid-cols-[minmax(0,1fr)_100px_74px] items-center gap-4 py-3.5">
-                <span className="min-w-0"><strong className="block truncate text-sm font-semibold text-ink">{member.displayName}</strong><small className="mt-0.5 block truncate text-[11px] text-faint">{member.username}</small></span>
-                <span className="text-xs text-muted">{roleLabels[member.role] ?? member.role}</span>
-                <StatusPill tone={member.enabled ? "green" : "red"}>{member.enabled ? "已启用" : "已停用"}</StatusPill>
-              </div>
-            ))}
-            {!data.authenticated && (
-              <div className="py-6 text-center text-xs text-muted">成员名单仅对已登录的企业管理员开放，登录后可查看完整列表。</div>
-            )}
-          </div>
-        </Card>
+      <div className="grid grid-cols-2 divide-y divide-line overflow-hidden rounded-panel border border-line bg-paper sm:grid-cols-4 sm:divide-y-0 sm:divide-x">
+        <Fact label="成员" value={data.members.length} note={data.authenticated ? `${enabledCount} 人已启用` : "登录后可见"} />
+        <Fact label="数据源" value={data.sources.length} note="物理连接隔离" />
+        <Fact label="隔离层级" value="企业 + 数据源" note="两级边界" />
+        <Fact label="执行模式" value="只读" note="分析执行边界" />
+      </div>
 
-        <Card>
-          <div className="border-b border-line px-5 py-4"><h3 className="text-base font-semibold text-ink">数据边界</h3><p className="mt-1 text-xs text-muted">这里只展示当前企业可见的数据源。</p></div>
-          <div className="divide-y divide-line px-5">
-            {data.sources.map((source) => (
-              <div key={source.id} className="flex items-center gap-3 py-3.5">
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-control bg-primary-soft text-primary"><Icon name="database" size={17} /></span>
-                <span className="min-w-0 flex-1"><strong className="block truncate text-sm font-semibold text-ink">{source.name}</strong><small className="mt-0.5 block truncate text-[10px] text-faint">{source.typeLabel} · {source.database}</small></span>
-                <StatusPill tone={source.status === "连接正常" ? "green" : "amber"}>{source.status}</StatusPill>
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]">
+        <section className="min-w-0 overflow-hidden rounded-panel border border-line bg-surface">
+          <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+            <div className="flex items-baseline gap-2">
+              <h3 className="text-sm font-semibold text-ink">企业成员</h3>
+              <span className="font-mono text-[11px] text-faint">{data.members.length} 人</span>
+            </div>
+            {data.authenticated && Object.keys(roleCounts).length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(roleCounts).map(([role, count]) => (
+                  <span key={role} className="rounded-tag border border-line bg-surface-2 px-1.5 py-0.5 text-[10px] text-muted">{roleLabels[role] ?? role} {count}</span>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className="border-t border-line bg-surface-2 px-5 py-3 text-[11px] leading-5 text-muted">切换企业空间后，前端会清除当前会话缓存并重新加载，避免把上一个企业的调查状态带入新空间。</div>
-        </Card>
+            )}
+          </header>
+          {data.members.length ? (
+            <div className="divide-y divide-line/70">
+              <div className="grid grid-cols-[minmax(0,1fr)_88px_72px_84px] gap-3 bg-surface-2/50 px-4 py-1.5 text-[10px] font-semibold text-faint">
+                <span>成员</span><span>角色</span><span>状态</span><span className="text-right">加入时间</span>
+              </div>
+              {data.members.map((member) => (
+                <div key={member.id} className="grid grid-cols-[minmax(0,1fr)_88px_72px_84px] items-center gap-3 px-4 py-2.5">
+                  <span className="min-w-0">
+                    <strong className="block truncate text-[13px] font-medium text-ink">{member.displayName}</strong>
+                    <small className="mt-0.5 block truncate font-mono text-[10px] text-faint">@{member.username}</small>
+                  </span>
+                  <span className={cn("truncate text-[11px]", member.role === "owner" || member.role === "admin" ? "text-ink-2" : "text-muted")}>{roleLabels[member.role] ?? member.role}</span>
+                  <StatusPill tone={member.enabled ? "green" : "red"}>{member.enabled ? "已启用" : "已停用"}</StatusPill>
+                  <span className="text-right font-mono text-[10px] text-faint">{formatJoined(member.joinedAt)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="px-5 py-8 text-center text-xs text-muted">
+              {data.authenticated ? "该企业还没有成员。" : "成员名单仅对已登录的企业管理员开放，登录后可查看完整列表。"}
+            </div>
+          )}
+        </section>
+
+        <aside className="grid min-w-0 content-start gap-4">
+          <section className="overflow-hidden rounded-panel border border-line bg-surface">
+            <h3 className="flex items-center justify-between border-b border-line px-4 py-2.5 text-[11px] font-semibold text-muted">
+              数据边界
+              <span className="font-mono text-faint">{data.sources.length} 个源</span>
+            </h3>
+            {data.sources.length ? (
+              <div className="divide-y divide-line/70">
+                {data.sources.map((source) => (
+                  <div key={source.id} className="flex items-center gap-2.5 px-4 py-2.5">
+                    <span className="shrink-0 text-muted"><Icon name="database" size={15} /></span>
+                    <span className="min-w-0 flex-1">
+                      <strong className="block truncate text-[13px] font-medium text-ink">{source.name}</strong>
+                      <small className="mt-0.5 block truncate text-[10px] text-faint">{source.typeLabel} · {source.database}</small>
+                    </span>
+                    <StatusPill tone={source.status === "连接正常" ? "green" : "amber"}>{source.status}</StatusPill>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="px-4 py-6 text-center text-[11px] text-muted">当前企业尚未接入数据源。</p>}
+            <p className="border-t border-line bg-surface-2 px-4 py-2.5 text-[10px] leading-5 text-faint">切换企业空间后，前端会清除当前会话缓存并重新加载，避免把上一个企业的调查状态带入新空间。</p>
+          </section>
+
+          <section className="overflow-hidden rounded-panel border border-line bg-surface">
+            <h3 className="border-b border-line px-4 py-2.5 text-[11px] font-semibold text-muted">成员角色分布</h3>
+            {data.authenticated && data.members.length ? (
+              <div className="grid gap-2.5 px-4 py-3">
+                {Object.entries(roleLabels).filter(([role]) => roleCounts[role]).map(([role, label]) => (
+                  <div key={role}>
+                    <div className="flex items-baseline justify-between text-[11px]">
+                      <span className="text-ink-2">{label}</span>
+                      <span className="font-mono text-faint">{roleCounts[role]} 人</span>
+                    </div>
+                    <span className="mt-1 block h-1.5 overflow-hidden rounded-full bg-surface-3">
+                      <span className="block h-full rounded-full bg-primary" style={{ width: `${(roleCounts[role] / data.members.length) * 100}%` }} />
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="px-4 py-6 text-center text-[11px] text-muted">登录后展示角色分布。</p>}
+          </section>
+        </aside>
       </div>
     </PageFrame>
+  );
+}
+
+function Fact({ label, value, note }) {
+  return (
+    <div className="px-4 py-3">
+      <span className="block text-[11px] text-muted">{label}</span>
+      <strong className="mt-1 block font-mono text-base font-semibold leading-none tracking-tight text-ink">{value}</strong>
+      <small className="mt-1.5 block truncate text-[10px] text-faint">{note}</small>
+    </div>
   );
 }

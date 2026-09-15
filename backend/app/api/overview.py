@@ -5,6 +5,7 @@
 """
 
 from collections import Counter, defaultdict
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
@@ -61,6 +62,17 @@ def _topic_code(topic: str) -> str:
         "主数据": "MDM",
     }
     return codes.get(topic, "DATA")
+
+
+def _relative_time(dt: datetime | None) -> str:
+    if not dt:
+        return ""
+    delta_days = (datetime.now().date() - dt.date()).days
+    if delta_days <= 0:
+        return f"今天 {dt.strftime('%H:%M')}"
+    if delta_days == 1:
+        return f"昨天 {dt.strftime('%H:%M')}"
+    return dt.strftime("%m-%d %H:%M")
 
 
 def _capability(source: DataSource, table_count: int, metric_count: int) -> dict:
@@ -257,10 +269,17 @@ def get_admin_overview(context: TenantContext = Depends(tenant_context)):
         else:
             model_total = model_published = model_pending = 0
 
-        intercept_count = session.query(AuditLog).filter_by(tenant_id=context.tenant_id, result="已拦截").count()
+        # 拦截待复核 = 已拦截且管理员尚未复核；复核后自动从待办中消除
+        intercept_count = (
+            session.query(AuditLog)
+            .filter_by(tenant_id=context.tenant_id, result="已拦截")
+            .filter(AuditLog.reviewed_at.is_(None))
+            .count()
+        )
         intercept_records = (
             session.query(AuditLog)
             .filter_by(tenant_id=context.tenant_id, result="已拦截")
+            .filter(AuditLog.reviewed_at.is_(None))
             .order_by(AuditLog.created_at.desc())
             .limit(3)
             .all()
@@ -272,6 +291,79 @@ def get_admin_overview(context: TenantContext = Depends(tenant_context)):
             .all()
         )
         latest_scan = session.query(func.max(DataTable.scanned_at)).filter(DataTable.source_id.in_(source_ids)).scalar() if source_ids else None
+
+        source_rows = session.query(DataSource).filter(DataSource.id.in_(source_ids)).order_by(DataSource.id).all() if source_ids else []
+        sources = []
+        for src in source_rows:
+            reg_tables = session.query(DataTable).filter_by(source_id=src.id, registered=True).count()
+            src_last_scan = session.query(func.max(DataTable.scanned_at)).filter(DataTable.source_id == src.id).scalar()
+            sources.append({
+                "id": src.id,
+                "name": src.name,
+                "type": src.type,
+                "tables": reg_tables,
+                "lastScan": src_last_scan.strftime("%m-%d %H:%M") if src_last_scan else "",
+            })
+
+        activity = []
+        for log in (
+            session.query(AuditLog)
+            .filter_by(tenant_id=context.tenant_id)
+            .order_by(AuditLog.created_at.desc())
+            .limit(6)
+            .all()
+        ):
+            activity.append({
+                "time": log.created_at.strftime("%m-%d %H:%M") if log.created_at else "",
+                "user": log.user_name,
+                "action": (log.action or "").strip()[:80],
+                "result": log.result,
+            })
+
+        # 侧栏治理待办：三类真实聚合，仅输出有待办数量的条目
+        todo: list[dict] = []
+        if pending_metrics:
+            topics = list(dict.fromkeys((item.topic or "未分类").strip() for item in pending_metrics))
+            todo.append({
+                "key": "metrics",
+                "label": "指标待审核",
+                "unit": "个",
+                "count": len(pending_metrics),
+                "caption": "、".join(topics[:2]) + ("等" if len(topics) > 2 else ""),
+                "page": "knowledge",
+                "tone": "amber",
+            })
+        if unmapped_fields:
+            unmapped_names = []
+            if source_ids:
+                unmapped_names = [
+                    name for (name,) in session.query(DataSource.name)
+                    .join(TableField, TableField.source_id == DataSource.id)
+                    .filter(TableField.source_id.in_(source_ids), TableField.cn_name == "")
+                    .distinct()
+                    .all()
+                ]
+            caption = "、".join(unmapped_names[:2]) + ("等" if len(unmapped_names) > 2 else "")
+            todo.append({
+                "key": "fields",
+                "label": "字段待映射",
+                "unit": "个",
+                "count": unmapped_fields,
+                "caption": caption or "数据资源",
+                "page": "resources",
+                "tone": "blue",
+            })
+        if intercept_count:
+            latest_intercept = intercept_records[0].created_at if intercept_records else None
+            todo.append({
+                "key": "intercepts",
+                "label": "拦截待复核",
+                "unit": "条",
+                "count": intercept_count,
+                "caption": _relative_time(latest_intercept),
+                "page": "security",
+                "tone": "red",
+            })
 
         health = [
             {
@@ -302,7 +394,7 @@ def get_admin_overview(context: TenantContext = Depends(tenant_context)):
                 "icon": "shield",
                 "label": "安全运行",
                 "value": "100%",
-                "note": f"只读策略与审计已启用 · 拦截 {intercept_count} 次已记录",
+                "note": f"只读策略与审计已启用 · {intercept_count} 条拦截待复核",
                 "tone": "green",
                 "page": "security",
             },
@@ -361,5 +453,8 @@ def get_admin_overview(context: TenantContext = Depends(tenant_context)):
             },
             "health": health,
             "queue": queue,
+            "todo": todo,
             "topics": [{"name": item.name, "coverage": item.coverage} for item in topic_rows],
+            "sources": sources,
+            "activity": activity,
         }

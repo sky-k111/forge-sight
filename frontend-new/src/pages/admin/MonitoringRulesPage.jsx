@@ -45,7 +45,7 @@ export default function MonitoringRulesPage() {
     setError(null);
     try { const [nextRules, nextRuns] = await Promise.all([listMonitoringRules(), listMonitoringRuns()]); setRules(nextRules); setRuns(nextRuns); } catch (nextError) { setError(nextError); }
   };
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, []);
   const runCounts = useMemo(() => runs.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] ?? 0) + 1 }), {}), [runs]);
   const act = async (id, action, success) => {
     setBusy(`${id}:${action}`); setNotice("");
@@ -63,8 +63,8 @@ export default function MonitoringRulesPage() {
   if (!rules) return <RouteSkeleton />;
   return (
     <PageFrame className="gap-4">
-      <header><span className="section-kicker">MONITORING GOVERNANCE</span><h2 className="mt-1 text-[25px] font-semibold">监控规则管理</h2><p className="mt-2 text-base text-muted">规则由结构化字段编译为只读 SQL；业务端只看结果，不能关闭或修改告警。</p></header>
-      <div className="grid gap-3 sm:grid-cols-4"><Metric label="规则数" value={rules.length} /><Metric label="排队任务" value={runCounts.queued ?? 0} /><Metric label="成功任务" value={runCounts.succeeded ?? 0} /><Metric label="死信任务" value={runCounts.dead_letter ?? 0} danger={(runCounts.dead_letter ?? 0) > 0} /></div>
+      <header className="border-b border-line pb-3"><p className="text-[13px] text-muted">规则由结构化字段编译为只读 SQL；业务端只看结果，不能关闭或修改告警。</p></header>
+      <div className="grid grid-cols-2 divide-y divide-line overflow-hidden rounded-section border border-line bg-paper sm:grid-cols-4 sm:divide-y-0 sm:divide-x"><Metric label="规则数" value={rules.length} /><Metric label="排队任务" value={runCounts.queued ?? 0} /><Metric label="成功任务" value={runCounts.succeeded ?? 0} /><Metric label="死信任务" value={runCounts.dead_letter ?? 0} danger={(runCounts.dead_letter ?? 0) > 0} /></div>
       {notice && <p className="rounded-control border border-line bg-surface p-3 text-sm" role="status">{notice}</p>}
       <Card className="p-4">
         <h3 className="font-semibold">从安全模板创建规则</h3>
@@ -87,4 +87,4 @@ export default function MonitoringRulesPage() {
   );
 }
 
-function Metric({ label, value, danger }) { return <Card className="p-4"><strong className={`font-mono text-2xl ${danger ? "text-critical" : "text-ink"}`}>{value}</strong><span className="mt-1 block text-xs text-muted">{label}</span></Card>; }
+function Metric({ label, value, danger }) { return <div className="px-4 py-3 text-center"><strong className={`font-mono text-lg font-semibold ${danger ? "text-critical" : "text-ink"}`}>{value}</strong><span className="mt-1 block text-xs text-muted">{label}</span></div>; }
