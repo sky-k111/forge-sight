@@ -510,7 +510,11 @@ export default function AnalysisPage() {
     load();
   };
 
-  const examples = ["统计每条产线最近 7 天的产量趋势", "找出最近一个月不良数量最高的产品", "比较各产线的非计划停机时长"];
+  const examples = [
+    "对比本周与上周各产线的产量变化",
+    "按缺陷类型找出不良数量最高的前三项",
+    "哪条产线的非计划停机时长最长",
+  ];
   const showExamples = messages?.length === 0 && !pending;
   const currentBranchRun = messages?.filter((item) => item.role === "assistant" && item.run).at(-1)?.run ?? null;
 
@@ -526,7 +530,7 @@ export default function AnalysisPage() {
     <div className="flex h-full min-h-0 overflow-hidden bg-surface">
       <section className="flex min-w-0 flex-1 flex-col">
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto px-6 pt-6">
-          <div className="mx-auto w-full max-w-[760px] pb-6">
+          <div className="mx-auto flex min-h-full w-full max-w-[760px] flex-col pb-6">
             {branchContext && (
               <BranchOriginCard
                 context={branchContext}
@@ -618,7 +622,7 @@ export default function AnalysisPage() {
               </div>
             )}
             {showExamples && (
-              <div className="absolute bottom-full left-0 z-10 mb-2.5 flex max-w-full gap-2 overflow-x-auto pb-px">
+              <div className="absolute bottom-full left-0 z-10 mb-2.5 flex max-w-full flex-wrap gap-1.5">
                 {examples.map((example) => (
                   <button
                     type="button"
@@ -1294,12 +1298,9 @@ function AnalysisEmptyState() {
     <section className="analysis-empty-state" aria-labelledby="analysis-empty-title">
       <div className="analysis-empty-hero">
         <div className="analysis-empty-logo-wrap" aria-hidden="true">
-          <span className="analysis-empty-logo-ring analysis-empty-logo-ring--outer" />
-          <span className="analysis-empty-logo-ring analysis-empty-logo-ring--inner" />
           <img src={forgeSightLogo} alt="" className="analysis-empty-logo" />
         </div>
         <div className="analysis-empty-copy">
-          <span className="analysis-empty-kicker">FORGESIGHT / START HERE</span>
           <h2 id="analysis-empty-title">从一个问题开始，进入你的数据现场</h2>
           <p>用业务语言描述现场疑问，ForgeSight 会把方向、证据和下一步整理在一起。</p>
         </div>

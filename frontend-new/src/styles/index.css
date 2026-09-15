@@ -370,11 +370,11 @@
 
 .analysis-empty-state {
   position: relative;
-  margin: clamp(48px, 9vh, 92px) auto 0;
+  margin: auto;
   width: 100%;
-  max-width: 760px;
+  max-width: 680px;
   padding: 0 2px 22px;
-  animation: analysis-empty-in-original 720ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: analysis-empty-in-original 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .analysis-empty-hero {
@@ -382,8 +382,8 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 14px;
-  padding: 0 16px 24px;
+  gap: 10px;
+  padding: 0 16px 14px;
   text-align: center;
 }
 
@@ -416,58 +416,27 @@
 .analysis-empty-logo-wrap {
   position: relative;
   display: grid;
-  height: 88px;
-  width: 88px;
+  height: 44px;
+  width: 44px;
   flex: 0 0 auto;
   place-items: center;
-  isolation: isolate;
 }
 
 .analysis-empty-logo {
   position: relative;
   z-index: 2;
-  height: 58px;
-  width: 58px;
+  height: 32px;
+  width: 32px;
   object-fit: contain;
-  filter: drop-shadow(0 9px 16px rgb(40 93 114 / 16%));
-}
-
-.analysis-empty-logo-ring {
-  position: absolute;
-  border: 1px solid color-mix(in srgb, var(--color-primary) 25%, transparent);
-  border-radius: 50%;
-  animation: analysis-logo-pulse 4.8s ease-in-out infinite;
-}
-
-.analysis-empty-logo-ring--outer {
-  height: 88px;
-  width: 88px;
-}
-
-.analysis-empty-logo-ring--inner {
-  height: 66px;
-  width: 66px;
-  border-style: dashed;
-  border-color: color-mix(in srgb, var(--color-teal) 28%, transparent);
-  animation-delay: -1.6s;
-}
-
-.analysis-empty-kicker {
-  color: var(--color-primary);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.13em;
-  line-height: 1.4;
 }
 
 .analysis-empty-copy h2 {
-  margin: 8px 0 0;
+  margin: 0;
   color: var(--color-ink);
-  font-size: clamp(23px, 3.4vw, 31px);
+  font-size: clamp(19px, 2.4vw, 22px);
   font-weight: 650;
-  letter-spacing: -0.045em;
-  line-height: 1.2;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
 }
 
 .analysis-empty-copy p {
@@ -547,13 +516,8 @@
 }
 
 @keyframes analysis-empty-in-original {
-  from { opacity: 0; transform: translateY(18px) scale(0.985); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-@keyframes analysis-logo-pulse {
-  0%, 100% { opacity: 0.4; transform: scale(0.96); }
-  50% { opacity: 0.85; transform: scale(1.04); }
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @media (max-width: 840px) {
@@ -568,13 +532,10 @@
 }
 
 @media (max-width: 639px) {
-  .analysis-empty-state { margin-top: 28px; }
-  .analysis-empty-hero { align-items: center; gap: 12px; padding-inline: 8px; text-align: center; }
-  .analysis-empty-logo-wrap,
-  .analysis-empty-logo-ring--outer { height: 76px; width: 76px; }
-  .analysis-empty-logo-ring--inner { height: 58px; width: 58px; }
-  .analysis-empty-logo { height: 49px; width: 49px; }
-  .analysis-empty-copy h2 { font-size: 21px; }
+  .analysis-empty-hero { align-items: center; gap: 10px; padding-inline: 8px; text-align: center; }
+  .analysis-empty-logo-wrap { height: 38px; width: 38px; }
+  .analysis-empty-logo { height: 28px; width: 28px; }
+  .analysis-empty-copy h2 { font-size: 19px; }
   .analysis-empty-copy p { font-size: 11px; }
   .analysis-empty-capabilities { flex-wrap: wrap; justify-content: center; margin-inline: auto; }
 }
@@ -585,8 +546,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .analysis-empty-state,
-  .analysis-empty-logo-ring {
+  .analysis-empty-state {
     animation: none !important;
     transform: none !important;
     transition: none !important;
