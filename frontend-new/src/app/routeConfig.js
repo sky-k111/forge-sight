@@ -19,8 +19,7 @@ export const routeByPage = {
   "memory-governance": "/admin/memory",
   settings: "/admin/settings",
   security: "/admin/security",
-  announcements: "/admin/announcements",
-  deliveries: "/admin/deliveries",
+  messaging: "/admin/messaging",
 };
 
 export const pageByPath = Object.fromEntries(Object.entries(routeByPage).map(([page, path]) => [path, page]));

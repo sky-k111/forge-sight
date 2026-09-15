@@ -55,10 +55,7 @@ const MemoryGovernancePage = lazy(
 );
 const SettingsPage = lazy(() => import("../pages/admin/SettingsPage"));
 const SecurityPage = lazy(() => import("../pages/admin/SecurityPage"));
-const AnnouncementsPage = lazy(
-  () => import("../pages/admin/AnnouncementsPage"),
-);
-const DeliveriesPage = lazy(() => import("../pages/admin/DeliveriesPage"));
+const MessagingPage = lazy(() => import("../pages/admin/MessagingPage"));
 
 export function EmailGate({
   allowDemo = import.meta.env.VITE_DEMO_MODE === "true",
@@ -199,11 +196,9 @@ export default function AppRouter() {
               <Route path="admin/memory" element={<MemoryGovernancePage />} />
               <Route path="admin/settings" element={<SettingsPage />} />
               <Route path="admin/security" element={<SecurityPage />} />
-              <Route
-                path="admin/announcements"
-                element={<AnnouncementsPage />}
-              />
-              <Route path="admin/deliveries" element={<DeliveriesPage />} />
+              <Route path="admin/messaging" element={<MessagingPage />} />
+              <Route path="admin/announcements" element={<Navigate to="/admin/messaging" replace />} />
+              <Route path="admin/deliveries" element={<Navigate to="/admin/messaging" replace />} />
               <Route
                 path="*"
                 element={<Navigate to="/workspace/overview" replace />}

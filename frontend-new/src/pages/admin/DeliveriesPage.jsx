@@ -45,7 +45,7 @@ function time(value) {
     : "—";
 }
 
-export default function DeliveriesPage() {
+export default function DeliveriesPage({ embedded = false }) {
   const [items, setItems] = useState(null);
   const [operations, setOperations] = useState(null);
   const [status, setStatus] = useState("");
@@ -122,27 +122,19 @@ export default function DeliveriesPage() {
       setBusy("");
     }
   };
-  if (error)
-    return (
-      <PageFrame>
-        <ErrorNotice
-          title="投递记录加载失败"
-          detail={error.message}
-          onRetry={load}
-        />
-      </PageFrame>
-    );
+  if (error) {
+    const errorView = <ErrorNotice title="投递记录加载失败" detail={error.message} onRetry={load} />;
+    return embedded ? <div className="grid gap-4">{errorView}</div> : <PageFrame>{errorView}</PageFrame>;
+  }
   if (!items) return <RouteSkeleton />;
-  return (
-    <PageFrame className="gap-4">
-      <header>
-        <span className="section-kicker">DELIVERY OPERATIONS</span>
-        <h2 className="mt-1 text-[25px] font-semibold">邮件投递</h2>
-        <p className="mt-2 text-base text-muted">
-          只展示掩码地址和安全错误分类，帮助管理员定位失败任务。
-        </p>
-      </header>
-      <div className="grid grid-cols-3 divide-x divide-line rounded-section border border-line bg-paper py-4">
+  const body = (
+    <>
+      {!embedded && (
+        <header className="border-b border-line pb-3">
+          <p className="text-[13px] text-muted">只展示掩码地址和安全错误分类，帮助管理员定位失败任务。</p>
+        </header>
+      )}
+      <div className="grid grid-cols-3 divide-x divide-line rounded-section border border-line bg-paper py-3">
         <Metric label="当前记录" value={counts.all} />
         <Metric label="待处理" value={counts.waiting} />
         <Metric label="异常" value={counts.failed} danger={counts.failed > 0} />
@@ -301,8 +293,9 @@ export default function DeliveriesPage() {
           />
         )}
       </Card>
-    </PageFrame>
+    </>
   );
+  return embedded ? <div className="grid gap-4">{body}</div> : <PageFrame className="gap-4">{body}</PageFrame>;
 }
 
 function OperationsStrip({ snapshot }) {
@@ -318,8 +311,7 @@ function OperationsStrip({ snapshot }) {
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <span className="section-kicker">RELEASE HEALTH</span>
-          <h3 id="operations-heading" className="mt-1 text-base font-semibold">
+          <h3 id="operations-heading" className="text-sm font-semibold">
             自动化运行状态
           </h3>
         </div>
@@ -379,7 +371,7 @@ function Metric({ label, value, danger }) {
   return (
     <div className="px-4 text-center">
       <strong
-        className={`font-mono text-[25px] ${danger ? "text-critical" : "text-ink"}`}
+        className={`font-mono text-lg font-semibold ${danger ? "text-critical" : "text-ink"}`}
       >
         {value}
       </strong>

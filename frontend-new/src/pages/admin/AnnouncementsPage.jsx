@@ -23,7 +23,7 @@ const STATUS = {
   expired: ["已过期", "amber"],
 };
 
-export default function AnnouncementsPage() {
+export default function AnnouncementsPage({ embedded = false }) {
   const [items, setItems] = useState(null);
   const [filter, setFilter] = useState("");
   const [formOpen, setFormOpen] = useState(false);
@@ -125,27 +125,15 @@ export default function AnnouncementsPage() {
       setBusy("");
     }
   };
-  if (error)
-    return (
-      <PageFrame>
-        <ErrorNotice
-          title="公告加载失败"
-          detail={error.message}
-          onRetry={load}
-        />
-      </PageFrame>
-    );
+  if (error) {
+    const errorView = <ErrorNotice title="公告加载失败" detail={error.message} onRetry={load} />;
+    return embedded ? <div className="grid gap-4">{errorView}</div> : <PageFrame>{errorView}</PageFrame>;
+  }
 
-  return (
-    <PageFrame className="gap-4">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <span className="section-kicker">ADMIN BROADCAST</span>
-          <h2 className="mt-1 text-[25px] font-semibold">公告管理</h2>
-          <p className="mt-2 text-base text-muted">
-            以纯文本安全发布到站内消息，并同步排入邮件队列。
-          </p>
-        </div>
+  const body = (
+    <>
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+        <p className="min-w-0 text-[13px] text-muted">以纯文本安全发布到站内消息，并同步排入邮件队列。</p>
         <Button
           variant="primary"
           onClick={() => setFormOpen((value) => !value)}
@@ -325,8 +313,9 @@ export default function AnnouncementsPage() {
           />
         )}
       </Card>
-    </PageFrame>
+    </>
   );
+  return embedded ? <div className="grid gap-4">{body}</div> : <PageFrame className="gap-4">{body}</PageFrame>;
 }
 
 function Field({ label, children }) {

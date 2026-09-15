@@ -43,8 +43,7 @@ export const roleMenus = {
           icon: "settings",
           children: [
             { id: "security", label: "权限与审计", icon: "shield" },
-            { id: "deliveries", label: "消息渠道与投递", icon: "send" },
-            { id: "announcements", label: "公告管理", icon: "message" },
+            { id: "messaging", label: "消息与投递", icon: "send" },
             { id: "settings", label: "系统设置", icon: "settings" },
           ],
         },
@@ -154,14 +153,9 @@ export const pageMeta = {
     title: "权限与审计",
     subtitle: "检查访问权限、只读边界和执行审计记录",
   },
-  announcements: {
+  messaging: {
     eyebrow: "管理员工作区",
-    title: "公告管理",
-    subtitle: "创建、发布和撤回站内公告",
-  },
-  deliveries: {
-    eyebrow: "管理员工作区",
-    title: "消息渠道与投递",
-    subtitle: "管理邮件、飞书等外部渠道和失败重发",
+    title: "消息与投递",
+    subtitle: "站内公告的创建发布，与邮件等外部渠道的投递状态集中管理",
   },
 };
