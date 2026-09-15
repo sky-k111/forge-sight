@@ -1453,6 +1453,24 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
           <span className="text-[11px] text-faint">{emptyResult ? "当前范围无记录" : `${run.execution.rowCount} 条记录`} · 分析用时 {formatDuration(analysisDuration)}</span>
         </div>
         <p className="mt-3 max-w-[720px] break-words text-body leading-relaxed text-ink-2">{run.conclusion.text}</p>
+        {run.conclusion.highlights.length > 0 && (
+          <div className="mt-3 grid gap-2 border-l-2 border-primary/25 pl-3">
+            <div className="flex items-center gap-1.5"><Icon name="insight" size={14} className="text-primary" /><h4 className="text-xs font-semibold text-ink">关键发现</h4></div>
+            <ol className="grid list-decimal gap-1 pl-4 text-[13px] leading-relaxed text-ink-2">
+              {run.conclusion.highlights.map((highlight) => (
+                <li key={highlight.title}><strong className="font-semibold text-ink">{highlight.title}：</strong>{highlight.text}</li>
+              ))}
+            </ol>
+            {run.conclusion.followUp && (
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] text-faint">建议继续追问</span>
+                <button type="button" onClick={() => onFollowUp(run.conclusion.followUp)} className="flex cursor-pointer items-center gap-1 text-xs font-medium text-primary transition-opacity hover:opacity-75">
+                  {run.conclusion.followUp} <Icon name="arrow" size={13} />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {partialDelivery && (
           <div className="mt-3 flex items-start gap-2 rounded-control border border-amber/30 bg-amber-soft px-3 py-2.5 text-xs leading-relaxed text-amber" role="status">
             <Icon name="alert" size={14} className="mt-0.5 shrink-0" />
@@ -1473,12 +1491,12 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
         )}
         {confidence && (
           <div className={cn(
-            "mt-3 rounded-control border px-3.5 py-3",
+            "mt-3 rounded-control border bg-surface-2/60 px-3.5 py-3",
             confidence.level === "high"
-              ? "border-green/25 bg-green/5"
+              ? "border-green/25"
               : confidence.level === "medium"
-                ? "border-amber/30 bg-amber/5"
-                : "border-red/25 bg-red/5",
+                ? "border-amber/30"
+                : "border-red/25",
           )}>
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
               <span className={cn(
@@ -1599,28 +1617,6 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
           )}
         </section>
       )}
-      {run.conclusion.highlights.length > 0 && <section className="border-t border-line px-5 py-4">
-        <div className="flex items-center gap-2"><Icon name="insight" size={16} className="text-primary" /><h4 className="text-body font-semibold text-ink">关键发现</h4></div>
-        <div className="mt-2.5 grid gap-2.5 border-l-2 border-primary/20 pl-3">
-          <ol className="mt-1.5 grid list-decimal gap-1.5 pl-4 text-body leading-relaxed text-ink-2">
-            {run.conclusion.highlights.map((highlight) => (
-              <li key={highlight.title}><strong className="font-semibold text-ink">{highlight.title}：</strong>{highlight.text}</li>
-            ))}
-          </ol>
-          {run.conclusion.followUp && (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <span className="text-[11px] text-faint">建议继续追问</span>
-              <button
-                type="button"
-                onClick={() => onFollowUp(run.conclusion.followUp)}
-                className="flex cursor-pointer items-center gap-1 text-xs font-medium text-primary transition-opacity hover:opacity-75"
-              >
-                {run.conclusion.followUp} <Icon name="arrow" size={13} />
-              </button>
-            </div>
-          )}
-        </div>
-      </section>}
       <footer className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line bg-surface-2/45 px-5 py-3 text-xs text-ink-2">
         {chart && <span className="inline-flex items-center gap-1"><Icon name="chart" size={14} />{chartTypeName}</span>}
         {run.execution?.columns?.length > 0 && <span className="inline-flex items-center gap-1"><Icon name="database" size={14} />结果表</span>}
@@ -1645,7 +1641,7 @@ function DeliveryLedger({ delivery }) {
     <section
       className={cn(
         "mt-3 rounded-control border px-3.5 py-3",
-        complete ? "border-green/25 bg-green/5" : "border-amber/30 bg-amber/5",
+        complete ? "border-line bg-surface-2/60" : "border-amber/30 bg-amber/5",
       )}
       aria-label="本次交付检查"
     >
@@ -1663,7 +1659,7 @@ function DeliveryLedger({ delivery }) {
           <div key={item.id} className="flex min-w-0 items-center gap-2 text-[11px] text-ink-2">
             <Icon name={item.status === "delivered" ? "check" : "clock"} size={13} className={item.status === "delivered" ? "shrink-0 text-green" : "shrink-0 text-amber"} />
             <span className="min-w-0 truncate">{item.label ?? item.id}</span>
-            <span className={cn("ml-auto shrink-0", item.status === "delivered" ? "text-green" : "text-amber")}>
+            <span className={cn("ml-auto shrink-0", item.status === "delivered" ? "text-faint" : "text-amber")}>
               {item.status === "delivered" ? "已交付" : "未交付"}
             </span>
           </div>
@@ -1749,7 +1745,7 @@ function EvidencePanel({ run, open, onBranch }) {
   const groups = buildEvidenceGroups(plan);
   const [view, setView] = useState("overview");
   const [active, setActive] = useState(plan[1]?.id ?? plan[0]?.id);
-  const [expandedGroup, setExpandedGroup] = useState(plan.find((step) => step.taskId)?.taskId ?? "run");
+  const [expandedGroup, setExpandedGroup] = useState(null);
   const [executionExpanded, setExecutionExpanded] = useState(false);
   const [sourcesExpanded, setSourcesExpanded] = useState(false);
   const [traceFullscreen, setTraceFullscreen] = useState(false);
@@ -1763,7 +1759,7 @@ function EvidencePanel({ run, open, onBranch }) {
 
   useEffect(() => {
     setActive(plan[1]?.id ?? plan[0]?.id);
-    setExpandedGroup(plan.find((step) => step.taskId)?.taskId ?? "run");
+    setExpandedGroup(null);
     setExecutionExpanded(false);
     setSourcesExpanded(false);
     setView("overview");
@@ -2065,14 +2061,15 @@ function BusinessPlanCard({ planner, question, onOpenArtifacts }) {
 function EvidenceOverview({ run, plan, onOpenArtifacts }) {
   const completed = plan.filter((step) => step.status === "succeeded").length;
   const failed = plan.filter((step) => step.status === "failed").length;
+  const hasPlanCard = run.planner?.mode === "bounded" && run.planner?.steps?.length > 0;
   return (
     <div className="evidence-overview grid gap-3">
-      {run.planner?.mode === "bounded" && run.planner?.steps?.length > 0 && (
+      {hasPlanCard && (
         <BusinessPlanCard planner={run.planner} question={run.question} onOpenArtifacts={onOpenArtifacts} />
       )}
       <div className="evidence-card evidence-card--summary rounded-card border border-line bg-surface p-3">
         <span className="text-[10px] font-semibold tracking-wide text-faint">本次分析</span>
-        <p className="mt-1 text-xs leading-relaxed text-ink">{run.question}</p>
+        {!hasPlanCard && <p className="mt-1 text-xs leading-relaxed text-ink">{run.question}</p>}
         <div className="mt-3 grid grid-cols-2 gap-y-2 divide-x divide-line border-y border-line py-2 sm:grid-cols-4">
           <OverviewMetric label="步骤" value={`${completed}/${plan.length}`} />
           <OverviewMetric label="产物" value={run.artifacts?.length ?? 0} />
@@ -2262,14 +2259,14 @@ function TraceArtifacts({ artifacts }) {
         <button
           type="button"
           key={item.id}
-          className="grid w-full cursor-pointer grid-cols-[32px_minmax(0,1fr)_auto_14px] items-center gap-2.5 rounded-control border border-line bg-surface px-2.5 py-2 text-left transition-colors hover:border-line-strong hover:bg-surface-2"
+          title={`${item.name} · ${item.id}`}
+          className="grid w-full cursor-pointer grid-cols-[32px_minmax(0,1fr)_14px] items-center gap-2.5 rounded-control border border-line bg-surface px-2.5 py-2 text-left transition-colors hover:border-line-strong hover:bg-surface-2"
         >
           <span className={cn("grid h-8 w-8 place-items-center rounded-control", tones[item.tone])}><Icon name={item.icon} size={16} /></span>
           <span className="min-w-0">
             <strong className="block truncate text-xs font-semibold text-ink">{item.name}</strong>
             <small className="block truncate text-[10px] text-faint">{item.type}</small>
           </span>
-          <code className="max-w-24 truncate font-mono text-[10px] text-faint">{item.meta}</code>
           <span className="text-faint"><Icon name="chevron" size={14} /></span>
         </button>
       ))}

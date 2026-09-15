@@ -119,28 +119,26 @@ export default function MessagesPage() {
     : "/workspace/messages";
   return (
     <PageFrame className="message-workspace max-w-[1440px] gap-4">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <span className="section-kicker">INBOX · {unread} 未读</span>
-          <h2 className="mt-1 text-[25px] font-semibold tracking-tight">
-            重要信息，在一个地方读完
-          </h2>
-          <p className="mt-2 text-base text-muted">
-            异常警报、Agent 周报与管理员公告按优先级和时间统一排列。
-          </p>
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <h2 className="text-sm font-semibold tracking-tight text-ink">消息中心</h2>
+          <span className="truncate text-[11px] text-faint">
+            {unread ? `${unread} 条未读 · ` : ""}异常警报、Agent 周报与管理员公告按优先级和时间统一排列
+          </span>
         </div>
-        <label className="relative w-full sm:w-72">
+        <label className="relative flex w-full items-center sm:w-64">
           <Icon
             name="search"
-            size={16}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+            size={14}
+            className="pointer-events-none absolute left-2.5 text-faint"
           />
           <input
-            className="input-control h-10 pl-9 text-sm"
+            className="input-control h-8 pl-8 pr-2.5 text-xs"
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
             onKeyDown={(event) => event.key === "Enter" && load()}
             placeholder="搜索标题或摘要，按 Enter"
+            aria-label="搜索消息"
           />
         </label>
       </header>
@@ -151,7 +149,7 @@ export default function MessagesPage() {
             messageId && "hidden",
           )}
         >
-          <div className="flex flex-wrap gap-2 border-b border-line p-3">
+          <div className="flex flex-wrap items-center gap-1.5 border-b border-line p-2.5">
             <Filter
               value={type}
               onChange={setType}
@@ -184,20 +182,22 @@ export default function MessagesPage() {
               ]}
               label="重要程度"
             />
-            <label>
-              <span className="sr-only">开始日期</span>
+            <label className="flex items-center gap-1 text-[11px] text-faint">
+              <span>起</span>
               <input
                 type="date"
-                className="input-control h-9 w-auto text-sm"
+                aria-label="开始日期"
+                className="input-control h-8 w-auto text-xs"
                 value={publishedFrom}
                 onChange={(event) => setPublishedFrom(event.target.value)}
               />
             </label>
-            <label>
-              <span className="sr-only">结束日期</span>
+            <label className="flex items-center gap-1 text-[11px] text-faint">
+              <span>止</span>
               <input
                 type="date"
-                className="input-control h-9 w-auto text-sm"
+                aria-label="结束日期"
+                className="input-control h-8 w-auto text-xs"
                 value={publishedTo}
                 onChange={(event) => setPublishedTo(event.target.value)}
               />
@@ -278,7 +278,7 @@ function Filter({ value, onChange, options, label }) {
     <label>
       <span className="sr-only">{label}</span>
       <select
-        className="input-control h-9 w-auto min-w-28 text-sm"
+        className="input-control h-8 w-auto min-w-24 text-xs"
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >

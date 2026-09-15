@@ -52,10 +52,10 @@ export default function MemoryPage() {
     <PageFrame>
       <section className="overflow-hidden rounded-card border border-line bg-surface shadow-card">
         <div className="grid lg:grid-cols-[minmax(0,1.45fr)_minmax(300px,.75fr)]">
-          <div className="px-6 py-6 lg:px-7">
-            <div className="flex items-center gap-2 text-xs font-semibold text-primary"><Icon name="memory" size={17} />个人智能设置</div>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-ink">让 ForgeSight 按你的分析习惯工作</h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">功能开启后，系统会在完成调查后自动整理明确偏好和有效经验。你无需逐条维护，也可以随时查看、纠正或遗忘。</p>
+          <div className="px-5 py-4.5 lg:px-6">
+            <div className="flex items-center gap-2 text-xs font-semibold text-primary"><Icon name="memory" size={16} />个人智能设置</div>
+            <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-ink">让 ForgeSight 按你的分析习惯工作</h2>
+            <p className="mt-2 max-w-3xl text-[13px] leading-6 text-muted">功能开启后，系统会在完成调查后自动整理明确偏好和有效经验。你无需逐条维护，也可以随时查看、纠正或遗忘。</p>
             <div className="mt-5 flex flex-wrap items-center gap-3">
               <span className={`inline-flex h-9 items-center gap-2 rounded-control px-3 text-xs font-semibold ${settings.enabled ? "bg-green-soft text-green" : "bg-surface-3 text-muted"}`}><span className="h-1.5 w-1.5 rounded-full bg-current" />{settings.enabled ? "自动学习已开启" : "自动学习暂未开启"}</span>
               <Button variant="secondary" onClick={() => setEditor({ title: "", content: "" })}><Icon name="plus" size={14} />补充明确偏好</Button>

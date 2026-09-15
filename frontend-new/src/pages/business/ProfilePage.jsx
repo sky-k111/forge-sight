@@ -170,28 +170,16 @@ export default function ProfilePage() {
 
   return (
     <PageFrame className="profile-page">
-      <section className="profile-hero overflow-hidden rounded-panel border border-line bg-surface shadow-card">
-        <div className="profile-hero__identity">
-          <span className="profile-hero__eyebrow">PERSONAL SPACE / 01</span>
-          <div className="mt-5 flex items-center gap-4">
-            <span className="profile-avatar" aria-hidden="true">{initials}</span>
-            <div className="min-w-0">
-              <h2 className="truncate text-2xl font-semibold tracking-tight text-ink">{displayName}</h2>
-              <p className="mt-1 text-sm text-muted">{user.title || "业务人员"}</p>
-              <p className="mt-1 font-mono text-[11px] text-faint">@{user.username}</p>
-            </div>
-          </div>
-          <div className="mt-6 flex flex-wrap items-center gap-2">
+      <section className="profile-hero flex flex-wrap items-center gap-3 rounded-panel border border-line bg-surface px-4 py-3">
+        <span className="profile-avatar" aria-hidden="true">{initials}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="truncate text-base font-semibold tracking-tight text-ink">{displayName}</h2>
             <StatusPill tone="green">账号正常</StatusPill>
-            <span className="text-[11px] text-faint">偏好和记忆仅对当前账号生效</span>
           </div>
+          <p className="mt-0.5 truncate text-[11px] text-muted">{user.title || "业务人员"} · <span className="font-mono text-faint">@{user.username}</span></p>
         </div>
-        <div className="profile-hero__signal" aria-hidden="true">
-          <span className="profile-hero__signal-ring profile-hero__signal-ring--outer" />
-          <span className="profile-hero__signal-ring profile-hero__signal-ring--inner" />
-          <Icon name="user" size={28} />
-          <small>ACCOUNT / PRIVATE</small>
-        </div>
+        <span className="hidden shrink-0 text-[11px] text-faint sm:block">偏好和记忆仅对当前账号生效</span>
       </section>
 
       <section className="profile-grid">
@@ -234,13 +222,13 @@ export default function ProfilePage() {
             <BindingRow provider="feishu" binding={bindings.feishu} busy={busy} onBind={bindProvider} onUnbind={unbindProvider} />
             <BindingRow provider="email" binding={{ bound: user.emailStatus === "verified", displayName: user.emailMasked }} busy={busy} onBind={bindProvider} onUnbind={null} />
           </div>
-          <div className="border-t border-line bg-surface-2 px-5 py-3 text-[11px] leading-5 text-muted">
+          <div className="border-t border-line bg-surface-2 px-4 py-2.5 text-[11px] leading-5 text-muted">
             换绑第三方账号会重新进行平台授权；邮箱换绑需要完成一次验证码验证。
           </div>
         </Card>
 
         <Card className="profile-card profile-memory-card overflow-hidden">
-          <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-5">
+          <div className="flex items-start justify-between gap-4 border-b border-line px-4 py-3.5">
             <ProfileCardHeader eyebrow="分析上下文" title="个人记忆" description="只在与当前问题相关时被召回，随时可以纠正或遗忘。" icon="memory" compact />
             <Button size="sm" variant="ghost" onClick={() => navigate("/workspace/memory")}>管理记忆 <Icon name="arrow" size={13} /></Button>
           </div>
@@ -278,7 +266,7 @@ export default function ProfilePage() {
 
 function ProfileCardHeader({ eyebrow, title, description, icon, compact = false }) {
   return (
-    <div className={compact ? "min-w-0" : "px-5 py-5"}>
+    <div className={compact ? "min-w-0" : "px-4 py-3.5"}>
       <div className="flex items-center gap-2 text-[10px] font-semibold tracking-[0.08em] text-primary"><Icon name={icon} size={15} />{eyebrow}</div>
       <h3 className="mt-1 text-base font-semibold tracking-tight text-ink">{title}</h3>
       <p className="mt-1 text-[11px] leading-5 text-muted">{description}</p>
