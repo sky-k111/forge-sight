@@ -33,6 +33,8 @@ npm run build       # create the production bundle
 
 Use four spaces in Python and follow existing PEP 8 conventions: `snake_case` functions/modules, `PascalCase` classes, type hints for public interfaces, and short module docstrings. React code uses two spaces, double quotes, semicolons, `PascalCase` component files, and `camelCase` helpers. Keep API access in `src/api/` instead of embedding requests in page components. No repository-wide formatter or linter is configured, so match nearby code and keep imports organized.
 
+All frontend pages must follow the mandatory visual baseline in `docs/ui/FRONTEND_STYLE_BASELINE.md`: one bordered workspace container per page with 1px hairline dividers (never stacked rounded cards), slim toolbar bands, conclusion-and-fact-strip first, flat sections instead of nested cards, cards only as list items or chart tiles, docked side rails, the fixed type scale (10px reserved for versions/IDs), real states only, and filters synced to the URL. Reference implementations already accepted: `OverviewPage` (business dashboard), `ReportsPage`, `ReportComposerPage`.
+
 ## Testing Guidelines
 
 Backend tests use pytest and follow `test_*.py` / `test_*` naming. Frontend tests use Vitest with jsdom and colocated `*.test.js(x)` files. Add focused tests for behavior changes, especially SQL safety, API contracts, reducers, and layout algorithms. Run both suites before requesting review; there is currently no declared coverage threshold.

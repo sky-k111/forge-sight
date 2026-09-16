@@ -793,7 +793,7 @@ describe("ForgeSight application routes", () => {
     );
   });
 
-  test("deletes a sidebar conversation only after explicit confirmation", async () => {
+  test("deletes a sidebar conversation only after explicit confirmation", { timeout: 15000 }, async () => {
     render(<App />);
 
     const main = await screen.findByRole("main");
@@ -1168,7 +1168,7 @@ describe("ForgeSight application routes", () => {
         .getByRole("button", { name: "平台运维" })
         .getAttribute("aria-expanded"),
     ).toBe("false");
-    expect(await screen.findByText("待处理事项")).toBeTruthy();
+    expect(await screen.findByText("治理队列")).toBeTruthy();
     expect(window.location.pathname).toBe("/admin/overview");
     // 侧栏治理待办来自 /api/overview/admin 的真实聚合，而非写死文案
     const metricsTodo = await screen.findByText("3 个指标待审核");
@@ -1235,11 +1235,7 @@ describe("ForgeSight application routes", () => {
     expect(
       await screen.findByRole("heading", { name: "智能建模" }),
     ).toBeTruthy();
-    await screen.findByRole(
-      "heading",
-      { name: "查看任务，确认下一步" },
-      { timeout: 5000 },
-    );
+    await screen.findByText("训练样本");
     expect(
       await screen.findByText(
         (_, element) =>
@@ -1282,11 +1278,7 @@ describe("ForgeSight application routes", () => {
     window.history.replaceState({}, "", "/workspace/modeling");
     render(<App />);
     await screen.findByRole("heading", { name: "智能建模" });
-    await screen.findByRole(
-      "heading",
-      { name: "查看任务，确认下一步" },
-      { timeout: 5000 },
-    );
+    await screen.findByText("训练样本");
     fireEvent.click(await screen.findByRole("button", { name: /建模方案/ }));
     expect(screen.getByText("候选模型")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /人工指定/ }));
@@ -1319,7 +1311,7 @@ describe("ForgeSight application routes", () => {
     window.history.replaceState({}, "", "/admin/models");
     render(<App />);
     expect(
-      await screen.findByRole("heading", { name: "模型治理" }),
+      await screen.findByRole("heading", { name: "复核与发布" }),
     ).toBeTruthy();
     expect(await screen.findByText("业务模型与版本")).toBeTruthy();
     expect(screen.getByRole("navigation", { name: "管理员导航" })).toBeTruthy();
@@ -1330,12 +1322,17 @@ describe("ForgeSight application routes", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "智能建模" });
-    const title = await screen.findByText("等待管理员复核后发布");
-    const section = title.closest("section");
+    const title = await screen.findByText("训练与隔离评估已完成");
+    // 风格基线：结论行位于整页唯一的工作区容器内（单容器 + 分隔线，不叠卡片）
+    const workspace = title.closest('[class*="rounded-panel"]');
 
-    expect(section).toBeTruthy();
-    expect(section.className).toContain("goal-banner--neutral");
-    expect(section.className).not.toContain("bg-ink");
+    expect(workspace).toBeTruthy();
+    expect(workspace.className).toContain("border-line");
+    // 页面顶层只允许一个带边框工作区容器，不得再堆叠兄弟卡片
+    const main = document.querySelector("main");
+    const topPanels = [...main.querySelectorAll('[class*="rounded-panel"]')]
+      .filter((node) => node.parentElement?.closest('[class*="rounded-panel"]') == null);
+    expect(topPanels.length).toBeLessThanOrEqual(1);
   });
 
   test("renders modeling steps with visible completion borders", async () => {

@@ -88,6 +88,22 @@ export function publishModel(modelId, userId = USER_ID()) {
   return httpPost(`/api/v1/model-governance/models/${modelId}/publish`, { userId });
 }
 
+export function submitModelReview(modelId, userId = USER_ID()) {
+  return httpPost(`/api/v1/model-governance/models/${modelId}/submit-review`, { userId });
+}
+
+export function publishModelDirect(modelId, userId = USER_ID()) {
+  return httpPost(`/api/v1/model-governance/models/${modelId}/publish-direct`, { userId });
+}
+
+export function purgeModelArtifacts(userId = USER_ID()) {
+  return httpPost("/api/v1/model-governance/admin/purge-artifacts", { userId });
+}
+
+export function getDriftReport() {
+  return httpGet("/api/v1/model-governance/drift");
+}
+
 export function retireModel(modelId, userId = USER_ID()) {
   return httpPost(`/api/v1/model-governance/models/${modelId}/retire`, { userId });
 }

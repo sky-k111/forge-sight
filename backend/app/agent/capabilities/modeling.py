@@ -62,7 +62,7 @@ def _find_reusable(context: CapabilityContext, arguments: dict) -> CapabilityRes
 
     question = str(arguments.get("question") or context.state.get("user_question") or "")
     task_type = str(arguments.get("taskType") or "")
-    models = find_reusable_models(question, context.source_id, task_type)
+    models = find_reusable_models(question, context.source_id, task_type, viewer_id=context.user_id)
     return CapabilityResult(
         status="succeeded",
         summary=(f"找到 {len(models)} 个可复用的已发布模型。" if models else "没有找到契约匹配的已发布模型。"),

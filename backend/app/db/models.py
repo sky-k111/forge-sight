@@ -1397,8 +1397,10 @@ class GovernedModel(Base):
     tuning_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     explanation_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     algorithm: Mapped[str] = mapped_column(String(30), comment="linear/tree/forest/logistic/kmeans/isolation")
-    status: Mapped[str] = mapped_column(String(16), default="pending", index=True, comment="pending/reviewing/published/rejected/retired")
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True, comment="pending/personal/reviewing/published/rejected/retired")
     owner_id: Mapped[str] = mapped_column(String(64), default="local-test-user")
+    direct_publish: Mapped[bool] = mapped_column(Boolean, default=False, comment="管理员免审直发标记")
+    personal_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="个人档有效期截止")
     metrics_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict, comment="主模型指标摘要")
     features_json: Mapped[list] = mapped_column(JSON_TYPE, default=list)
     model_path: Mapped[str] = mapped_column(Text, default="", comment="模型文件路径（joblib）")
@@ -1439,6 +1441,27 @@ class ModelingInferenceLog(Base):
     input_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     output_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class ModelPredictionTrace(Base):
+    """预测留痕：聚合预测值与后续实际值回填对比，是漂移监控的事实源。"""
+
+    __tablename__ = "model_prediction_trace"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(40), default="tenant-default", index=True)
+    task_id: Mapped[str] = mapped_column(String(40), index=True)
+    model_id: Mapped[str] = mapped_column(String(40), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), default="")
+    scope: Mapped[str] = mapped_column(String(16), default="published", comment="published/personal")
+    metric_kind: Mapped[str] = mapped_column(String(16), default="mean", comment="mean=回归均值 share=分类正例占比")
+    period_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    period_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    predicted_value: Mapped[float] = mapped_column(Numeric(18, 6), default=0)
+    actual_value: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    filled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class PlatformUser(Base):

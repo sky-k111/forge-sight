@@ -10,16 +10,17 @@ import hashlib
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import joblib
 import numpy as np
 import pandas as pd
+from sqlalchemy import or_
 
 from app.agent.ids import new_id
 from app.audit.service import write_audit
 from app.config import settings
-from app.db.models import DataSource, GovernedModel, ModelingEvaluation, ModelingInferenceLog, ModelingTask
+from app.db.models import DataSource, GovernedModel, ModelPredictionTrace, ModelingEvaluation, ModelingInferenceLog, ModelingTask
 from app.db.platform import PlatformSession
 from app.gateway.executor import execute_readonly
 from app.modeling import engine
@@ -46,20 +47,61 @@ STATUS_LABELS = {
 SOURCE_LABELS = {"agent": "Agent 创建", "manual": "人工创建"}
 MODEL_STATUS_LABELS = {
     "pending": ("待复核", "gray"),
+    "personal": ("个人自用", "amber"),
     "reviewing": ("复核中", "blue"),
     "published": ("已发布", "green"),
     "rejected": ("已驳回", "red"),
     "retired": ("已下线", "gray"),
 }
 # 各治理动作的合法来源状态（比全局迁移表更贴合页面按钮语义）：
-# 复核 = 一个动作完成判定（pending/reviewing 待定，rejected 可重新复核通过）；
-# 发布 = 仅复核中可发布（强制经过复核流程）；下线 = 已发布/已驳回可下线。
-REVIEW_ALLOWED_FROM = {"pending", "reviewing", "rejected"}
+# 复核 = 一个动作完成判定（pending/personal/reviewing 待定，rejected 可重新复核通过）；
+# 发布 = 仅复核中可发布（强制经过复核流程）；管理员免审直发走 publish_model_direct；
+# 下线 = 已发布/已驳回可下线。
+REVIEW_ALLOWED_FROM = {"pending", "personal", "reviewing", "rejected"}
 PUBLISH_ALLOWED_FROM = {"reviewing"}
-RETIRE_ALLOWED_FROM = {"published", "rejected"}
+DIRECT_PUBLISH_ALLOWED_FROM = {"pending", "personal", "reviewing"}
+RETIRE_ALLOWED_FROM = {"published", "rejected", "personal"}
 
 TASK_STATUSES = set(STATUS_LABELS)
 MODEL_STATUSES = set(MODEL_STATUS_LABELS)
+
+
+def _personal_active(row: GovernedModel, now: datetime | None = None) -> bool:
+    """个人档是否仍在有效期：状态 personal 且未过期。"""
+    if row.status != "personal":
+        return False
+    now = now or datetime.now()
+    return row.personal_expires_at is None or row.personal_expires_at > now
+
+
+def _gate_publishable(model: GovernedModel) -> bool:
+    """机器质量门禁：效果不达标的模型任何角色都不可发布/自用。"""
+    quality = (model.explanation_json or {}).get("qualityAssessment") or {}
+    return quality.get("publishable") is not False
+
+
+def _item_gate_ok(item: dict) -> bool:
+    quality = item.get("qualityAssessment") or {}
+    return quality.get("publishable") is not False
+
+
+def _enforce_personal_quota(session, owner_id: str) -> None:
+    """个人档配额：活跃个人模型超过上限时，最旧的自动下线。"""
+    quota = max(1, settings.modeling_personal_quota)
+    now = datetime.now()
+    rows = (
+        session.query(GovernedModel)
+        .filter_by(owner_id=owner_id, status="personal")
+        .filter(
+            (GovernedModel.personal_expires_at.is_(None))
+            | (GovernedModel.personal_expires_at > now)
+        )
+        .order_by(GovernedModel.created_at.desc())
+        .all()
+    )
+    for row in rows[quota:]:
+        row.status = "retired"
+        row.retired_at = now
 
 
 class ModelingError(ValueError):
@@ -142,6 +184,12 @@ def _model_dict(row: GovernedModel) -> dict:
         "statusLabel": status_label,
         "tone": tone,
         "calls": row.call_count,
+        "directPublish": bool(row.direct_publish),
+        "personalExpiresAt": _iso(row.personal_expires_at),
+        "personalActive": _personal_active(row),
+        "publishedAt": _iso(row.published_at),
+        "retiredAt": _iso(row.retired_at),
+        "reviewedBy": row.reviewed_by,
         "updatedAt": _iso(row.updated_at),
     }
 
@@ -342,6 +390,29 @@ def _load_model_artifact(model_id: str) -> dict:
     }
 
 
+def _render_training_script(task: ModelingTask, algorithm: str, tuning: dict, prepared: dict, task_type: str) -> str:
+    """由任务契约与最优配置确定性生成可复现建模脚本（随模型版本冻结）。"""
+    params = tuning.get("bestParams") or {}
+    split = (prepared.get("split") or {})
+    name = ALGORITHM_BY_ID.get(algorithm, {}).get("name", algorithm)
+    return "\n".join([
+        f"# ForgeSight 可复现建模脚本 · {name}",
+        "# 取数 SQL 已通过只读 SQL 校验与执行网关，训练与推理共用同一列序。",
+        f"SQL = {task.dataset_sql!r}",
+        f"features = {list(prepared.get('feature_names') or [])!r}",
+        f"target = {task.target_field!r}",
+        f"split = {split.get('strategy', task.split_strategy)!r}  # {split.get('label', '')}",
+        f"hyperparams = {params!r}",
+        "",
+        "from app.modeling.engine import _model_pipeline",
+        "",
+        f"model = _model_pipeline(task_type={task_type!r}, algorithm={algorithm!r}, X_train=X_train, sample_count=len(X_train))",
+        "model.set_params(**{f'estimator__{key}': value for key, value in hyperparams.items()})",
+        f"model.fit(X_train{', y_train' if task_type in ('regression', 'classification') else ''})",
+        "predictions = model.predict(X_new)",
+    ])
+
+
 def _recommended_model(task_type: str, evaluated: list[dict]) -> str:
     """按任务类型挑选指标最优的算法。"""
     key = {"classification": "auc", "regression": "r2",
@@ -518,6 +589,17 @@ def train_task(task_id: str, strategy: str, candidate_ids: list[str], manual_mod
             )
             quality = _assess_model_quality(effective_task_type, metrics)
             explanation["qualityAssessment"] = quality
+            if effective_task_type == "clustering":
+                explanation["clusterProfiles"] = engine.cluster_profiles(
+                    model, prepared["X_train"], prepared["feature_names"],
+                )
+            if algorithm == "kmeans":
+                estimator = model.named_steps.get("estimator")
+                if estimator is not None:
+                    tuning.setdefault("bestParams", {})["n_clusters"] = int(estimator.n_clusters)
+            explanation["script"] = _render_training_script(
+                task, algorithm, tuning, prepared, effective_task_type,
+            )
             evaluated.append({
                 "algorithm": algorithm,
                 "name": ALGORITHM_BY_ID[algorithm]["name"],
@@ -564,7 +646,12 @@ def train_task(task_id: str, strategy: str, candidate_ids: list[str], manual_mod
                     tuning_json=item["tuning"],
                     explanation_json=item["explanation"],
                     algorithm=item["algorithm"],
-                    status="pending",
+                    # 两级授权：机器门禁通过即开个人自用档；未通过只能等管理员处置
+                    status="personal" if _item_gate_ok(item) else "pending",
+                    personal_expires_at=(
+                        datetime.now() + timedelta(days=settings.modeling_personal_ttl_days)
+                        if _item_gate_ok(item) else None
+                    ),
                     owner_id=user_id,
                     metrics_json=item["metrics"],
                     features_json=prepared["features"],
@@ -575,6 +662,7 @@ def train_task(task_id: str, strategy: str, candidate_ids: list[str], manual_mod
                 ))
                 model_ids.append(model_id)
 
+            _enforce_personal_quota(session, user_id)
             recommended = _recommended_model(effective_task_type, evaluated)
             best = next(item for item in evaluated if item["algorithm"] == recommended)
             quality_assessment = best["qualityAssessment"]
@@ -665,7 +753,8 @@ def list_evaluations(task_id: str) -> list[dict]:
     return [row.result_json for row in rows]
 
 
-def _published_model_for(task: ModelingTask, algorithm: str) -> GovernedModel:
+def _serving_model_for(task: ModelingTask, algorithm: str, requester_id: str) -> GovernedModel:
+    """推理取模型：已发布生产版优先；否则 requester 本人未过期的个人档。"""
     with PlatformSession() as session:
         row = (
             session.query(GovernedModel)
@@ -682,8 +771,16 @@ def _published_model_for(task: ModelingTask, algorithm: str) -> GovernedModel:
                 .order_by(GovernedModel.published_at.desc(), GovernedModel.version.desc())
                 .first()
             )
+        if row is None:
+            personal = (
+                session.query(GovernedModel)
+                .filter_by(task_id=task.id, owner_id=requester_id, status="personal")
+                .order_by(GovernedModel.created_at.desc())
+                .all()
+            )
+            row = next((item for item in personal if _personal_active(item)), None)
     if row is None:
-        raise TaskNotTrainedError("该任务尚无已发布模型，请先完成复核与发布")
+        raise TaskNotTrainedError("该任务尚无可用模型：发布版未就绪，且您没有可用的个人档模型")
     return row
 
 
@@ -692,7 +789,7 @@ def predict(task_id: str, records: list[dict], user_id: str) -> dict:
     task = _find_task(task_id)
     if task.status != "trained" or not task.selected_model:
         raise TaskNotTrainedError("该任务尚未完成训练，无法推理")
-    model_row = _published_model_for(task, task.selected_model)
+    model_row = _serving_model_for(task, task.selected_model, user_id)
     artifact = _load_model_artifact(model_row.id)
     feature_names = list(model_row.feature_names_json or [])
     encoders = model_row.feature_encoders_json or {}
@@ -764,8 +861,204 @@ def predict(task_id: str, records: list[dict], user_id: str) -> dict:
         "taskId": task_id,
         "modelId": model_row.id,
         "modelVersion": model_row.version,
+        "scope": "personal" if model_row.status == "personal" else "published",
+        "modelStatus": model_row.status,
         "decisionThreshold": float(model_row.decision_threshold) if model_row.decision_threshold is not None else None,
         "predictions": predictions,
+    }
+
+
+def run_prediction(task_id: str, user_id: str, limit: int = 200) -> dict:
+    """预测编排：按任务契约取最近数据 → 模型推理 → 聚合为业务可读结果卡。
+
+    仅使用发布版或 requester 本人的个人档模型；推理留痕由 predict 统一记录。
+    """
+    task = _find_task(task_id)
+    if task.status != "trained" or not task.selected_model:
+        raise TaskNotTrainedError("该任务尚未完成训练，无法预测")
+    model_row = _serving_model_for(task, task.selected_model, user_id)
+    feature_names = list(model_row.feature_names_json or [])
+    frame = _training_frame(task, user_id, "模型预测取数")
+    if frame.empty:
+        raise TaskNotTrainedError("当前数据源没有可用于预测的记录")
+    recent = frame.tail(max(1, min(int(limit), 500)))
+    records = recent.reindex(columns=feature_names).to_dict("records")
+    result = predict(task_id, records, user_id)
+    predictions = result["predictions"]
+    card = {
+        "kind": "prediction",
+        "taskId": task_id,
+        "modelId": result["modelId"],
+        "modelVersion": result["modelVersion"],
+        "scope": result["scope"],
+        "taskType": task.task_type,
+        "algorithmName": ALGORITHM_BY_ID.get(model_row.algorithm, {}).get("name", model_row.algorithm),
+        "targetLabel": task.target_label or task.target_field,
+        "sampleCount": len(predictions),
+        "factors": [
+            {"name": item.get("name"), "importance": item.get("importance")}
+            for item in (model_row.feature_importance_json or [])[:3]
+        ],
+    }
+    if task.task_type == "regression":
+        values = [item["prediction"] for item in predictions if isinstance(item["prediction"], (int, float))]
+        mean = round(sum(values) / len(values), 2) if values else None
+        card["headline"] = f"基于最近 {len(values)} 条记录，{card['targetLabel']}预测均值 {mean if mean is not None else '—'}"
+        card["stats"] = {"mean": mean, "min": round(min(values), 2) if values else None, "max": round(max(values), 2) if values else None}
+    elif task.task_type == "classification":
+        positive = sum(1 for item in predictions if item["prediction"])
+        share = round(positive * 100 / len(predictions), 1) if predictions else 0.0
+        card["headline"] = f"最近 {len(predictions)} 条记录中 {positive} 条被判定为「{card['targetLabel']}」（{share}%）"
+        card["stats"] = {"positive": positive, "share": share, "threshold": result.get("decisionThreshold")}
+    elif task.task_type == "clustering":
+        groups: dict[int, int] = {}
+        for item in predictions:
+            groups[item.get("cluster", -1)] = groups.get(item.get("cluster", -1), 0) + 1
+        card["kind"] = "group"
+        card["headline"] = f"最近 {len(predictions)} 条记录被自动分为 {len(groups)} 群"
+        card["groups"] = [
+            {"cluster": cluster + 1, "size": size, "share": round(size * 100 / len(predictions), 1)}
+            for cluster, size in sorted(groups.items())
+        ]
+    else:  # anomaly
+        flagged = [item for item in predictions if item.get("isAnomaly")]
+        card["kind"] = "anomaly"
+        card["headline"] = f"最近 {len(predictions)} 条记录中 {len(flagged)} 条偏离正常模式"
+        card["stats"] = {"anomalyCount": len(flagged), "share": round(len(flagged) * 100 / len(predictions), 1) if predictions else 0.0}
+    _record_prediction_trace(task, model_row, user_id, card, recent)
+    return card
+
+
+def _record_prediction_trace(task, model_row, user_id: str, card: dict, recent) -> None:
+    """回归/分类的聚合预测落一条留痕，供偏差监控回填实际值对比。"""
+    if task.task_type == "regression":
+        metric_kind, value = "mean", card.get("stats", {}).get("mean")
+    elif task.task_type == "classification":
+        metric_kind, value = "share", card.get("stats", {}).get("share")
+    else:
+        return
+    if value is None:
+        return
+    period_start = period_end = None
+    if task.time_field and task.time_field in recent.columns:
+        times = pd.to_datetime(recent[task.time_field], errors="coerce").dropna()
+        if len(times):
+            period_start, period_end = times.min().to_pydatetime(), times.max().to_pydatetime()
+    try:
+        from app.tenancy.service import tenant_id_for_source
+
+        with PlatformSession() as session:
+            tenant_id = tenant_id_for_source(session, task.source_id)
+            session.add(ModelPredictionTrace(
+                id=new_id("mpt"), tenant_id=tenant_id, task_id=task.id, model_id=model_row.id,
+                user_id=user_id, scope=card.get("scope", "published"), metric_kind=metric_kind,
+                period_start=period_start, period_end=period_end,
+                predicted_value=float(value), sample_count=int(card.get("sampleCount") or 0),
+            ))
+            session.commit()
+    except Exception:  # noqa: BLE001 - 留痕失败不影响预测交付
+        pass
+
+
+def _actual_for_window(task, frame, trace) -> float | None:
+    """按留痕的时间窗（或全量近期数据）计算实际值：回归取均值、分类取正例占比。"""
+    window = frame
+    if trace.period_start is not None and trace.period_end is not None and task.time_field and task.time_field in frame.columns:
+        times = pd.to_datetime(frame[task.time_field], errors="coerce")
+        window = frame[(times >= trace.period_start) & (times <= trace.period_end)]
+    if task.target_field not in window.columns:
+        return None
+    values = pd.to_numeric(window[task.target_field], errors="coerce").dropna()
+    if not len(values):
+        return None
+    if trace.metric_kind == "share":
+        return float((values > 0.5).mean() * 100) if values.max() <= 1 else None
+    return float(values.mean())
+
+
+def drift_report(tenant_id: str) -> dict:
+    """偏差监控：自动回填已结束窗口的实际值，并按偏差率给出模型健康状态。"""
+    from app.tenancy.service import tenant_source_ids
+
+    with PlatformSession() as session:
+        source_ids = tenant_source_ids(session, tenant_id)
+        tasks = session.query(ModelingTask).filter(ModelingTask.source_id.in_(source_ids)).all() if source_ids else []
+        task_by_id = {task.id: task for task in tasks}
+        traces = (
+            session.query(ModelPredictionTrace)
+            .filter_by(tenant_id=tenant_id)
+            .order_by(ModelPredictionTrace.created_at.desc())
+            .all()
+        )
+        traces = [trace for trace in traces if trace.task_id in task_by_id]
+        models = {
+            row.id: row
+            for row in session.query(GovernedModel).filter(
+                GovernedModel.task_id.in_(list(task_by_id) or ["-none-"])
+            ).all()
+        }
+        # 自动回填：仅处理实际值缺失的留痕，按任务分组避免重复取数
+        pending = [trace for trace in traces if trace.actual_value is None]
+        by_task: dict[str, list] = {}
+        for trace in pending:
+            by_task.setdefault(trace.task_id, []).append(trace)
+        for task_id, task_traces in by_task.items():
+            task = task_by_id[task_id]
+            try:
+                frame = _training_frame(task, "system", "偏差监控回填")
+            except Exception:  # noqa: BLE001 - 取数失败保留未回填状态，下次再试
+                continue
+            for trace in task_traces:
+                actual = _actual_for_window(task, frame, trace)
+                if actual is not None:
+                    trace.actual_value = float(actual)
+                    trace.filled_at = datetime.now()
+            session.commit()
+
+    items = []
+    grouped: dict[str, list] = {}
+    for trace in traces:
+        grouped.setdefault(trace.model_id, []).append(trace)
+    for model_id, model_traces in grouped.items():
+        model = models.get(model_id)
+        if model is None:
+            continue
+        deviations = []
+        for trace in model_traces:
+            if trace.actual_value is None:
+                continue
+            actual = float(trace.actual_value)
+            predicted = float(trace.predicted_value)
+            base = max(abs(actual), 1e-6) if trace.metric_kind == "mean" else 100.0
+            deviations.append(abs(actual - predicted) / base * 100)
+        avg_deviation = round(sum(deviations) / len(deviations), 1) if deviations else None
+        max_deviation = round(max(deviations), 1) if deviations else None
+        status = "pending" if avg_deviation is None else ("drift" if avg_deviation >= 25 else "watch" if avg_deviation >= 10 else "normal")
+        items.append({
+            "modelId": model_id,
+            "modelName": model.name,
+            "modelVersion": model.version,
+            "modelStatus": model.status,
+            "taskId": model.task_id,
+            "taskTitle": task_by_id[model.task_id].title if model.task_id in task_by_id else "",
+            "metricKind": model_traces[0].metric_kind,
+            "traces": len(model_traces),
+            "filled": len(deviations),
+            "avgDeviation": avg_deviation,
+            "maxDeviation": max_deviation,
+            "status": status,
+            "lastPredictedAt": model_traces[0].created_at.strftime("%m-%d %H:%M"),
+        })
+    items.sort(key=lambda item: (item["status"] != "drift", -(item["avgDeviation"] or 0)))
+    return {
+        "items": items,
+        "summary": {
+            "models": len(items),
+            "drift": sum(1 for item in items if item["status"] == "drift"),
+            "watch": sum(1 for item in items if item["status"] == "watch"),
+            "pending": sum(1 for item in items if item["status"] == "pending"),
+        },
+        "thresholds": {"watch": 10, "drift": 25},
     }
 
 
@@ -797,19 +1090,32 @@ def _semantic_terms(text: str) -> set[str]:
     return terms
 
 
-def find_reusable_models(question: str, source_id: int, task_type: str = "") -> list[dict]:
-    """Discover production models for Agent reuse; never returns pending artifacts."""
+def find_reusable_models(question: str, source_id: int, task_type: str = "", viewer_id: str | None = None) -> list[dict]:
+    """Discover reusable models for Agent reuse; never returns pending artifacts.
+
+    候选范围带查看者身份：已发布模型对全租户可见；个人档仅所有者本人且未过期时可见。
+    """
     query_terms = _semantic_terms(question)
     with PlatformSession() as session:
+        scope = (
+            or_(
+                GovernedModel.status == "published",
+                (GovernedModel.status == "personal") & (GovernedModel.owner_id == viewer_id),
+            )
+            if viewer_id
+            else GovernedModel.status == "published"
+        )
         rows = (
             session.query(GovernedModel, ModelingTask)
             .join(ModelingTask, ModelingTask.id == GovernedModel.task_id)
-            .filter(GovernedModel.status == "published", ModelingTask.source_id == source_id)
+            .filter(scope, ModelingTask.source_id == source_id)
             .all()
         )
     matches = []
     for model, task in rows:
         if task_type and task.task_type != task_type:
+            continue
+        if model.status == "personal" and not _personal_active(model):
             continue
         document = " ".join((task.title, task.goal, task.target_label, task.target_field, " ".join(task.features_json or [])))
         model_terms = _semantic_terms(document)
@@ -824,6 +1130,8 @@ def find_reusable_models(question: str, source_id: int, task_type: str = "") -> 
             "targetLabel": task.target_label, "features": list(model.features_json or []),
             "metric": _metric_summary(model.metrics_json or {}), "matchScore": round(score, 4),
             "decisionThreshold": float(model.decision_threshold) if model.decision_threshold is not None else None,
+            "scope": "personal" if model.status == "personal" else "published",
+            "status": model.status,
         })
     matches.sort(key=lambda item: (item["matchScore"], item["version"]), reverse=True)
     return matches[:3]
@@ -897,6 +1205,62 @@ def publish_model(model_id: str, user_id: str) -> dict:
         user_name=user_id, role="管理人员",
     )
     return _model_dict(row)
+
+
+def submit_for_review(model_id: str, user_id: str) -> dict:
+    """所有者把个人档送进复核队列：personal → pending。"""
+    return _transition(model_id, "pending", user_id, "提交复核", {"personal"})
+
+
+def publish_model_direct(model_id: str, user_id: str) -> dict:
+    """管理员免审直发：机器门禁不可跳过；动作单独留痕并可筛。"""
+    if settings.require_review_for_admin_publish:
+        raise ModelingError("当前企业已启用四眼原则，管理员直发被禁止，请走复核流程")
+    model = _get_model(model_id)
+    if model.status not in DIRECT_PUBLISH_ALLOWED_FROM:
+        raise ModelingError(f"当前状态「{MODEL_STATUS_LABELS.get(model.status, model.status)[0]}」不允许直发")
+    if not _gate_publishable(model):
+        quality = (model.explanation_json or {}).get("qualityAssessment") or {}
+        raise ModelingError(f"模型效果未达到发布门槛：{quality.get('reason') or '请改进数据或特征后重新训练'}")
+    now = datetime.now()
+    with PlatformSession() as session:
+        active_rows = session.query(GovernedModel).filter_by(task_id=model.task_id, status="published").all()
+        for active in active_rows:
+            active.status = "retired"
+            active.retired_at = now
+        row = session.get(GovernedModel, model_id)
+        row.status = "published"
+        row.published_at = now
+        row.retired_at = None
+        row.direct_publish = True
+        session.commit()
+    write_audit(
+        action="模型直发（免审）", resource=model_id, result="允许",
+        detail=f"模型 {row.name} v{row.version} 由管理员免审直发（机器门禁已通过）",
+        user_name=user_id, role="管理人员",
+    )
+    return _model_dict(row)
+
+
+def purge_retired_artifacts(grace_days: int | None = None) -> dict:
+    """存储保留策略：retired 超过宽限期的工件文件物理清除，元数据与指纹永留。"""
+    grace = settings.modeling_artifact_grace_days if grace_days is None else grace_days
+    cutoff = datetime.now() - timedelta(days=grace)
+    purged = 0
+    with PlatformSession() as session:
+        rows = (
+            session.query(GovernedModel)
+            .filter_by(status="retired")
+            .filter(GovernedModel.retired_at.isnot(None), GovernedModel.retired_at < cutoff)
+            .all()
+        )
+        for row in rows:
+            if row.model_path and os.path.exists(row.model_path):
+                os.remove(row.model_path)
+                purged += 1
+            row.model_path = ""
+        session.commit()
+    return {"purged": purged, "graceDays": grace}
 
 
 def retire_model(model_id: str, user_id: str) -> dict:

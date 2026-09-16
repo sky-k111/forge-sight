@@ -451,7 +451,34 @@ def _make_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
     return ColumnTransformer(transformers=transformers, remainder="drop", verbose_feature_names_out=True)
 
 
-def _estimator(task_type: str, algorithm: str, sample_count: int):
+def _best_kmeans_k(X_train: pd.DataFrame) -> int:
+    """KMeans 的 k 不再拍脑袋：在 ≤2000 行数值样本上按轮廓系数自动选 k=2..8。"""
+    n = len(X_train)
+    fallback = max(2, min(4, n // 100))
+    numeric = X_train.select_dtypes(include="number")
+    max_k = min(8, max(2, n // 25))
+    if numeric.shape[1] < 2 or n < max_k * 5:
+        return fallback
+    try:
+        sample = numeric.sample(min(n, 2000), random_state=RANDOM_STATE)
+        sample = sample.fillna(sample.median(numeric_only=True))
+        matrix = StandardScaler().fit_transform(sample.to_numpy(dtype=float))
+        if np.isnan(matrix).any():
+            return fallback
+        best_k, best_score = None, -1.0
+        for k in range(2, max_k + 1):
+            labels = KMeans(n_clusters=k, n_init=5, random_state=RANDOM_STATE).fit_predict(matrix)
+            if len(set(labels)) < 2:
+                continue
+            score = float(silhouette_score(matrix, labels))
+            if score > best_score:
+                best_k, best_score = k, score
+        return best_k or fallback
+    except Exception:  # noqa: BLE001 - 选 k 失败绝不阻断训练，退回启发式
+        return fallback
+
+
+def _estimator(task_type: str, algorithm: str, sample_count: int, kmeans_k: int | None = None):
     if algorithm == "linear":
         return LinearRegression()
     if algorithm == "tree":
@@ -468,16 +495,17 @@ def _estimator(task_type: str, algorithm: str, sample_count: int):
     if algorithm == "logistic":
         return LogisticRegression(max_iter=2000, random_state=RANDOM_STATE, class_weight="balanced")
     if algorithm == "kmeans":
-        return KMeans(n_clusters=max(2, min(4, sample_count // 100)), n_init=10, random_state=RANDOM_STATE)
+        return KMeans(n_clusters=kmeans_k or max(2, min(4, sample_count // 100)), n_init=10, random_state=RANDOM_STATE)
     if algorithm == "isolation":
         return IsolationForest(n_estimators=200, contamination="auto", random_state=RANDOM_STATE, n_jobs=1)
     raise ModelingEngineError(f"未知算法：{algorithm}")
 
 
 def _model_pipeline(task_type: str, algorithm: str, X_train: pd.DataFrame, sample_count: int) -> Pipeline:
+    kmeans_k = _best_kmeans_k(X_train) if algorithm == "kmeans" else None
     return Pipeline([
         ("preprocessor", _make_preprocessor(X_train)),
-        ("estimator", _estimator(task_type, algorithm, sample_count)),
+        ("estimator", _estimator(task_type, algorithm, sample_count, kmeans_k=kmeans_k)),
     ])
 
 
@@ -548,6 +576,95 @@ def _threshold_from_oof(model: Pipeline, X_train, y_train, cv, groups) -> tuple[
         }
 
 
+# thorough 档 FLAML 估计器白名单：只映射回赛题六算法家族，不引入超纲模型
+_FLAML_ESTIMATOR_BY_ALGORITHM = {
+    ("classification", "forest"): "rf",
+    ("regression", "forest"): "rf",
+    ("classification", "logistic"): "lr",
+    ("regression", "linear"): "lrl2",
+}
+
+
+def _flaml_time_budget(sample_count: int) -> int:
+    if sample_count < 5000:
+        return 20
+    if sample_count < 50000:
+        return 40
+    return 60
+
+
+def _sklearn_estimator_from_flaml(name: str, task_type: str, config: dict | None):
+    """把 FLAML best_config 映射回赛题白名单内的标准 sklearn 估计器。"""
+    clean = {}
+    for key, value in (config or {}).items():
+        if isinstance(value, (np.integer,)):
+            value = int(value)
+        elif isinstance(value, (np.floating,)):
+            value = float(value)
+        elif isinstance(value, np.str_):
+            value = str(value)
+        if isinstance(value, (int, float, str)) and not isinstance(value, bool):
+            clean[key] = value
+    if name == "rf":
+        params = {key: clean[key] for key in ("n_estimators", "max_depth", "min_samples_leaf", "max_features") if key in clean}
+        params["random_state"] = RANDOM_STATE
+        params["n_jobs"] = 1
+        return (RandomForestRegressor if task_type == "regression" else RandomForestClassifier)(**params)
+    if name == "lr":
+        return LogisticRegression(C=clean.get("C", 1.0), max_iter=2000, random_state=RANDOM_STATE, class_weight="balanced")
+    if name == "lrl2":
+        from sklearn.linear_model import Ridge
+
+        return Ridge(alpha=clean.get("alpha", 1.0))
+    return None
+
+
+def _flaml_search(task_type: str, algorithm: str, X_train, y_train, sample_count: int):
+    """FLAML 限时成本感知搜索（可选依赖）；不可用/失败返回 None，由网格搜索兜底。"""
+    estimator_name = _FLAML_ESTIMATOR_BY_ALGORITHM.get((task_type, algorithm))
+    if estimator_name is None or y_train is None:
+        return None
+    try:
+        from flaml import AutoML
+    except ImportError:
+        return None
+    budget = _flaml_time_budget(sample_count)
+    try:
+        preprocessor = _make_preprocessor(X_train)
+        Xp = preprocessor.fit_transform(X_train)
+        automl = AutoML()
+        # FLAML 2.x：搜索参数直接作为 fit 关键字参数（旧版 settings 字典已废弃）
+        automl.fit(
+            X_train=Xp,
+            y_train=np.asarray(y_train),
+            task="classification" if task_type == "classification" else "regression",
+            time_budget=budget,
+            estimator_list=[estimator_name],
+            log_file_name="",
+            seed=RANDOM_STATE,
+            verbose=0,
+        )
+        # FLAML 只作为超参搜索引擎：取 best_config 重建标准 sklearn 估计器，
+        # 保证产物与网格路径同构（可 clone、可解释、可持久化）。
+        estimator = _sklearn_estimator_from_flaml(estimator_name, task_type, getattr(automl, "best_config", None))
+        if estimator is None:
+            return None
+        pipeline = Pipeline([
+            ("preprocessor", _make_preprocessor(X_train)),
+            ("estimator", estimator),
+        ])
+        pipeline.fit(X_train, np.asarray(y_train))
+        history = getattr(automl, "config_history", {}) or {}
+        return pipeline, {
+            "trials": len(history),
+            "config": dict(automl.best_config or {}),
+            "loss": round4(float(automl.best_loss)) if np.isfinite(automl.best_loss) else None,
+            "budget": budget,
+        }
+    except Exception:  # noqa: BLE001 - 任何 FLAML 失败都静默回退网格档
+        return None
+
+
 def tune_model(task_type: str, algorithm: str, prepared: dict, optimization_level: str = "balanced") -> tuple[Pipeline, dict]:
     """Budgeted AutoML search that never uses the final holdout for selection."""
     X_train, y_train = prepared["X_train"], prepared.get("y_train")
@@ -563,6 +680,24 @@ def tune_model(task_type: str, algorithm: str, prepared: dict, optimization_leve
         }
 
     cv, groups, cv_label = _cv_policy(task_type, prepared)
+    if optimization_level == "thorough":
+        flaml_result = _flaml_search(task_type, algorithm, X_train, y_train, prepared["sample_count"])
+        if flaml_result is not None:
+            best, info = flaml_result
+            threshold, threshold_policy = (0.5, {})
+            if task_type == "classification" and hasattr(best, "predict_proba"):
+                try:
+                    threshold, threshold_policy = _threshold_from_oof(best, X_train, y_train, cv, groups)
+                except Exception:  # noqa: BLE001 - 阈值估计失败退回默认 0.5
+                    threshold_policy = {"source": "default", "message": "FLAML 路径折外概率不可用，使用默认阈值 0.5"}
+            return best, {
+                "optimizationLevel": optimization_level, "searched": True, "engine": "flaml",
+                "candidateCount": info["trials"], "bestParams": info["config"],
+                "cvPolicy": f"FLAML 限时搜索 {info['budget']}s", "cvMetric": "flaml-best-loss", "cvScore": info["loss"],
+                "timeBudgetSeconds": info["budget"],
+                "decisionThreshold": threshold if task_type == "classification" else None,
+                "thresholdPolicy": threshold_policy,
+            }
     if task_type == "classification":
         minority_ratio = float(y_train.value_counts().min() / len(y_train))
         scoring = "average_precision" if minority_ratio < 0.2 else "roc_auc"
@@ -693,6 +828,41 @@ def extract_importance(algorithm: str, model, feature_names: list[str]) -> list[
     items = [{"name": name, "importance": round(value * 100 / total, 1)} for name, value in grouped.items()]
     items.sort(key=lambda item: item["importance"], reverse=True)
     return items[:MAX_IMPORTANCE_FEATURES]
+
+
+def cluster_profiles(pipeline: Pipeline, X_train: pd.DataFrame, feature_names: list[str], max_clusters: int = 6) -> list[dict]:
+    """聚类结果的业务解释：每群规模、占比与最显著的区分特征（标准化 z 偏差）。"""
+    try:
+        names = transformed_feature_names(pipeline, feature_names)
+        transformed = pd.DataFrame(
+            pipeline.named_steps["preprocessor"].transform(X_train), columns=names
+        ).select_dtypes(include="number")
+        labels = pipeline.predict(X_train)
+        if transformed.shape[1] < 1 or not len(set(int(item) for item in labels)):
+            return []
+        overall = transformed.mean()
+        std = transformed.std().replace(0, np.nan)
+        profiles = []
+        for cluster in sorted(set(int(item) for item in labels))[:max_clusters]:
+            mask = np.asarray(labels, dtype=int) == cluster
+            member = transformed[mask].mean()
+            z = ((member - overall) / std).abs().dropna().sort_values(ascending=False)
+            profiles.append({
+                "cluster": cluster + 1,
+                "size": int(mask.sum()),
+                "share": round(float(mask.mean()) * 100, 1),
+                "drivers": [
+                    {
+                        "name": name.split("__", 1)[-1],
+                        "z": round(float(z[name]), 2),
+                        "direction": "高于整体" if member[name] >= overall[name] else "低于整体",
+                    }
+                    for name in z.index[:3]
+                ],
+            })
+        return profiles
+    except Exception:  # noqa: BLE001 - 画像失败不阻断训练
+        return []
 
 
 def build_business_explanation(

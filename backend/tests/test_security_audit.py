@@ -82,6 +82,27 @@ def test_list_audit_logs_stats_and_filters(audit_session):
     assert wildcard["items"] == []
 
 
+def test_audit_cursor_snapshot_and_export_are_tenant_scoped(audit_session):
+    first = audit_service.list_audit_logs(tenant_id="tenant-a", limit=2)
+    assert first["page"]["matchedTotal"] == 6
+    assert first["page"]["hasMore"] is True
+    with audit_session() as session:
+        session.add(AuditLog(tenant_id="tenant-a", user_name="=CMD()", action="new", result="允许"))
+        session.commit()
+    items = list(first["items"])
+    cursor = first["page"]["nextCursor"]
+    while cursor:
+        page = audit_service.list_audit_logs(tenant_id="tenant-a", limit=2, cursor=cursor, snapshot_id=first["page"]["snapshotId"])
+        assert page["page"]["matchedTotal"] == 6
+        items.extend(page["items"])
+        cursor = page["page"]["nextCursor"]
+    assert len({item["id"] for item in items}) == 6
+    csv = "".join(audit_service.export_audit_csv(tenant_id="tenant-a"))
+    assert "other" not in csv
+    assert "'=CMD()" in csv
+    assert csv.startswith("\ufeff")
+
+
 def test_review_audit_log_marks_only_tenant_blocked_rows(audit_session):
     target = next(
         row.id
@@ -151,5 +172,29 @@ def test_security_api_review_flow(audit_session, monkeypatch):
         assert cleared["stats"]["unreviewed"] == 0 and cleared["items"] == []
         detail_row = client.get("/api/security/audit-logs", params={"reviewed": "已复核"}).json()
         assert all(item["at"] and "detail" in item for item in detail_row["items"])
+        downloaded = client.get("/api/security/audit-logs/export", params={"user": "王敏"})
+        assert downloaded.status_code == 200
+        assert "林涛" not in downloaded.text and "王敏" in downloaded.text
+        assert client.get("/api/security/audit-logs", params={"limit": 201}).status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_runtime_configuration_is_real_readonly_and_secret_free(monkeypatch):
+    from app.api import model_settings
+    from app.metadata import datasources
+    from app.config import settings
+    context = TenantContext(tenant_id="tenant-a", tenant_name="A", tenant_slug="a", member_role="owner", user_id="u-1")
+    app.dependency_overrides[security_api.require_tenant_admin] = lambda: context
+    monkeypatch.setattr(datasources, "list_sources", lambda tenant: [{"name": "实际数据源 " + tenant, "typeLabel": "MySQL", "status": "未测试", "password": "SECRET"}])
+    monkeypatch.setattr(model_settings, "_payload", lambda: {"model": "real-model", "protocol": "openai_compatible", "configured": False, "apiKey": "SECRET"})
+    monkeypatch.setattr(settings, "sql_timeout_seconds", 17)
+    try:
+        response = TestClient(app).get("/api/security/runtime")
+        assert response.status_code == 200
+        assert "SECRET" not in response.text
+        assert "实际数据源 tenant-a" in response.text and "real-model" in response.text
+        assert any(policy["value"] == "17s" for policy in response.json()["policies"])
+        assert TestClient(app).patch("/api/security/runtime", json={"readonly": False}).status_code == 405
     finally:
         app.dependency_overrides.clear()

@@ -27,8 +27,12 @@ def reusable_models(
     question: str = Query(min_length=1, max_length=1000),
     source_id: int = Query(alias="sourceId", ge=1),
     task_type: str = Query(default="", alias="taskType", pattern=r"^(|regression|classification|clustering|anomaly)$"),
+    user_id: str = Query(default="", alias="userId"),
+    user: dict | None = Depends(optional_user),
 ):
-    return {"items": service.find_reusable_models(question, source_id, task_type)}
+    # 候选范围带查看者身份：个人档仅所有者本人可见
+    viewer = effective_user_id(user_id or None, user)
+    return {"items": service.find_reusable_models(question, source_id, task_type, viewer_id=viewer)}
 
 
 @router.post("/modeling/tasks", status_code=status.HTTP_201_CREATED)

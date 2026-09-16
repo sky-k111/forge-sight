@@ -4,6 +4,13 @@ import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
 import { Button, Card, ErrorNotice, PageFrame, RouteSkeleton, SectionHeader, StatusPill } from "../../components/ui";
 
+function formatDateTime(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
 // 后端治理状态机：review（pending/reviewing/rejected 可判），publish（仅 reviewing），retire（published/rejected）
 const FILTERS = [
   { key: "", label: "全部模型" },
@@ -88,23 +95,25 @@ export default function ModelGovernancePage() {
   const canTuneThreshold = selected?.decisionThreshold != null && ["published", "reviewing", "retired"].includes(selected?.status ?? "");
 
   return (
-    <PageFrame>
-      <section className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
-        <GovernanceStat icon="model" label="登记模型" value={models.length} caption="覆盖分类、回归、聚类与异常检测" />
-        <GovernanceStat icon="check" label="已发布" value={published} caption="可被业务人员用于推理" tone="green" />
-        <GovernanceStat icon="clock" label="待复核" value={pending} caption="需确认数据、指标与适用边界" tone="amber" />
-        <GovernanceStat icon="shield" label="已下线" value={retired} caption="停止推理但保留审计记录" tone="gray" />
-      </section>
+    <PageFrame className="max-w-[1360px]">
+      {/* 风格基线：一个工作区容器；事实条、表格、详情全部贴附在同一边框内 */}
+      <div className="overflow-hidden rounded-panel border border-line bg-surface shadow-card">
+      <div className="grid grid-cols-2 divide-y divide-line border-b border-line bg-paper/60 sm:grid-cols-4 sm:divide-y-0 sm:divide-x">
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">登记模型</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-ink">{models.length}</strong><small className="mt-1.5 block text-[11px] text-faint">覆盖分类、回归、聚类与异常检测</small></div>
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">已发布</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-teal">{published}</strong><small className="mt-1.5 block text-[11px] text-faint">可被业务人员用于推理</small></div>
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">待复核</span><strong className={cn("mt-1 block font-mono text-base font-semibold leading-none", pending ? "text-amber" : "text-ink")}>{pending}</strong><small className="mt-1.5 block text-[11px] text-faint">需确认数据、指标与适用边界</small></div>
+        <div className="px-4 py-3"><span className="block text-[11px] text-muted">已下线</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-ink">{retired}</strong><small className="mt-1.5 block text-[11px] text-faint">停止推理但保留审计记录</small></div>
+      </div>
 
       {actionError && (
-        <Card className="flex items-start gap-2.5 border-red/25 bg-red-soft px-4 py-3 text-[11px] leading-relaxed text-red">
+        <div className="flex items-start gap-2.5 border-b border-red/25 bg-red-soft px-4 py-2.5 text-[11px] leading-relaxed text-red">
           <span className="mt-0.5"><Icon name="warning" size={14} /></span><span>{actionError}</span>
-        </Card>
+        </div>
       )}
 
-      <div className="grid items-start gap-3.5 xl:grid-cols-[minmax(0,1.55fr)_360px]">
-        <Card className="overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
+      <div className="grid xl:grid-cols-[minmax(0,1.55fr)_360px]">
+        <section className="min-w-0 border-b border-line xl:border-b-0 xl:border-r">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3">
             <div>
               <span className="text-[11px] font-semibold tracking-wide text-faint">模型注册表</span>
               <h2 className="mt-0.5 text-base font-semibold tracking-tight text-ink">业务模型与版本</h2>
@@ -140,7 +149,7 @@ export default function ModelGovernancePage() {
                     selected?.id === model.id && "bg-primary-soft/50",
                   )}
                 >
-                  <span className="min-w-0"><strong className="block truncate text-xs font-semibold text-ink">{model.name}</strong><small className="mt-0.5 block truncate font-mono text-[10px] text-faint">{model.id} · v{model.version}</small></span>
+                  <span className="min-w-0" title={model.id}><strong className="block truncate text-xs font-semibold text-ink">{model.name} <span className="font-mono text-[10px] font-normal text-faint">v{model.version}</span></strong></span>
                   <span className="truncate text-xs text-ink-2">{model.algorithmName}</span>
                   <span className="truncate font-mono text-[11px] text-ink-2">{model.metric}</span>
                   <span className="font-mono text-[11px] text-ink-2">{model.calls} 次</span>
@@ -150,30 +159,33 @@ export default function ModelGovernancePage() {
               {!visibleModels.length && <div className="grid min-h-36 place-content-center text-xs text-muted">当前筛选下没有模型</div>}
             </div>
           </div>
-        </Card>
+        </section>
 
-        <div className="grid gap-3.5">
-          {!selected && <Card className="grid min-h-40 place-content-center p-6 text-center"><p className="text-xs leading-relaxed text-muted">暂无可管理的模型。<br />先在业务端“智能建模”中训练并完成评估，模型会登记到这里。</p></Card>}
-          {selected && <Card>
-            <SectionHeader eyebrow="当前模型" title={selected.name} />
-            <div className="grid gap-3 px-5 pb-5">
-              <div className="flex items-center justify-between"><span className="text-xs text-muted">版本</span><code className="font-mono text-xs text-ink">v{selected.version}</code></div>
+        <aside className="min-w-0">
+          {!selected && <div className="grid min-h-40 place-content-center p-6 text-center"><p className="text-xs leading-relaxed text-muted">暂无可管理的模型。<br />先在业务端“智能建模”中训练并完成评估，模型会登记到这里。</p></div>}
+          {selected && (
+          <div>
+            <div className="border-b border-line px-5 py-3">
+              <span className="block text-[11px] font-semibold text-faint">当前模型</span>
+              <h3 className="mt-0.5 truncate text-sm font-semibold tracking-tight text-ink" title={selected.name}>{selected.name} <span className="font-mono text-[10px] font-normal text-faint">v{selected.version}</span></h3>
+            </div>
+            <div className="grid gap-3 px-5 py-4 [&>*]:min-w-0">
               <GovernanceDetail label="算法" value={selected.algorithmName} />
               <GovernanceDetail label="责任人" value={selected.owner} />
-              <GovernanceDetail label="来源任务" value={selected.taskId} mono />
               <GovernanceDetail label="训练数据" value={selected.dataset} />
               <GovernanceDetail label="评估摘要" value={selected.metric} mono />
-              {selected.qualityAssessment && <div className={cn("rounded-control border px-3 py-2.5 text-[10px] leading-relaxed", qualityBlocked ? "border-red/25 bg-red-soft" : selected.qualityAssessment.status === "ready" ? "border-green/25 bg-green/10" : "border-amber/25 bg-amber-soft")}><div className="flex items-center justify-between gap-2"><strong className={qualityBlocked ? "text-red" : selected.qualityAssessment.status === "ready" ? "text-green" : "text-amber"}>{selected.qualityAssessment.label}</strong><span className="font-semibold text-muted">{qualityBlocked ? "禁止发布" : "可进入人工复核"}</span></div><p className="mt-1 text-ink-2">{selected.qualityAssessment.reason}</p>{selected.qualityAssessment.nextAction && <p className="mt-1 text-muted">建议：{selected.qualityAssessment.nextAction}</p>}</div>}
+              {selected.qualityAssessment && <div className={cn("rounded-control border px-3 py-2.5 text-[11px] leading-relaxed", qualityBlocked ? "border-red/25 bg-red-soft" : selected.qualityAssessment.status === "ready" ? "border-green/25 bg-green/10" : "border-amber/25 bg-amber-soft")}><div className="flex items-center justify-between gap-2"><strong className={qualityBlocked ? "text-red" : selected.qualityAssessment.status === "ready" ? "text-green" : "text-amber"}>{selected.qualityAssessment.label}</strong><span className="font-semibold text-muted">{qualityBlocked ? "禁止发布" : "可进入人工复核"}</span></div><p className="mt-1 text-ink-2">{selected.qualityAssessment.reason}</p>{selected.qualityAssessment.nextAction && <p className="mt-1 text-muted">建议：{selected.qualityAssessment.nextAction}</p>}</div>}
               <GovernanceDetail label="参数搜索" value={selected.tuning?.searched ? `${selected.tuning.candidateCount} 组 · ${selected.tuning.cvPolicy || "交叉验证"}` : "默认参数"} />
               {selected.decisionThreshold != null && <GovernanceDetail label="当前分类阈值" value={Number(selected.decisionThreshold).toFixed(2)} mono />}
               <GovernanceDetail label="调用次数" value={`${selected.calls} 次`} />
-              <GovernanceDetail label="最近更新" value={selected.updatedAt} />
-              {selected.explanation?.applicabilityBoundary && <div className="rounded-control border border-amber/25 bg-amber-soft px-3 py-2.5 text-[10px] leading-relaxed text-muted"><strong className="text-amber">适用边界</strong><p className="mt-1">{selected.explanation.applicabilityBoundary}</p></div>}
+              <GovernanceDetail label="最近更新" value={formatDateTime(selected.updatedAt)} />
+              {selected.explanation?.applicabilityBoundary && <div className="rounded-control border border-amber/25 bg-amber-soft px-3 py-2.5 text-[11px] leading-relaxed text-muted"><strong className="text-amber">适用边界</strong><p className="mt-1">{selected.explanation.applicabilityBoundary}</p></div>}
               {canTuneThreshold && <div className="rounded-control border border-line bg-surface-2 p-3"><div className="flex items-center justify-between gap-3"><div><strong className="block text-[11px] text-ink">创建阈值候选版本</strong><small className="mt-0.5 block text-[10px] text-muted">不会直接修改正在生产使用的版本</small></div><input aria-label="候选分类阈值" type="number" min="0.05" max="0.95" step="0.05" value={thresholdValue} onChange={(event) => setThresholdValue(event.target.value)} className="h-8 w-20 rounded-control border border-line bg-surface px-2 text-right font-mono text-xs outline-none focus:border-line-strong" /></div><Button variant="secondary" className="mt-2 w-full" disabled={acting} onClick={() => runAction(() => createThresholdVariant(selected.id, { threshold: Number(thresholdValue), reason: "管理员根据误报与漏报成本调整" }))}>生成待复核版本</Button></div>}
               <div className="border-t border-line pt-3">
                 <p className="text-[11px] leading-relaxed text-muted">管理员负责发布、下线、权限与版本治理；业务目标、特征确认与训练操作仍在业务端“智能建模”完成。</p>
+                <p className="mt-1.5 truncate font-mono text-[10px] text-faint" title="技术标识，用于审计与接口对接">来源任务 {selected.taskId} · 模型 {selected.id}</p>
               </div>
-              <div className="flex justify-end gap-2">
+              <div className="flex flex-wrap justify-end gap-2">
                 {canPublish && <Button variant="primary" disabled={acting || qualityBlocked} onClick={() => runAction(() => publishModel(selected.id))}>{qualityBlocked ? "未达发布门槛" : "发布模型"}</Button>}
                 {canReview && <Button variant="primary" disabled={acting} onClick={() => { setReviewTarget(selected); setReviewDecision(qualityBlocked ? "reject" : "pass"); setReviewComment(qualityBlocked ? "隔离测试指标未达到最低发布门槛，退回补充数据与特征。" : ""); }}>开始复核</Button>}
                 {canRetire && <Button variant="secondary" disabled={acting} onClick={() => runAction(() => retireModel(selected.id))}>下线模型</Button>}
@@ -181,25 +193,17 @@ export default function ModelGovernancePage() {
                 {!canReview && !canPublish && !canRetire && !canRollback && <Button variant="secondary" disabled>查看版本</Button>}
               </div>
             </div>
-          </Card>}
-
-          <Card>
-            <SectionHeader eyebrow="治理策略" title="发布与运行边界" />
-            <div className="grid gap-2 px-5 pb-5">
-              <PolicyLine title="发布前人工复核" caption="核对数据范围、评估指标和适用边界" />
-              <PolicyLine title="过期模型提醒" caption="连续 30 天无评估记录时标记待检查" />
-              <PolicyLine title="隔离推理环境" caption="禁止模型访问网络和未授权数据源" />
-              <Button variant="secondary" className="mt-1 justify-self-end" disabled>治理策略由系统托管</Button>
-            </div>
-          </Card>
-        </div>
+          </div>
+          )}
+        </aside>
+      </div>
       </div>
 
       {reviewTarget && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-ink/30 p-4" role="dialog" aria-modal="true" aria-label="模型复核">
           <Card className="w-full max-w-md">
             <div className="border-b border-line px-5 py-4">
-              <span className="text-[10px] font-semibold tracking-wide text-faint">人工复核</span>
+              <span className="text-[11px] font-semibold tracking-wide text-faint">人工复核</span>
               <h3 className="mt-0.5 text-base font-semibold tracking-tight text-ink">{reviewTarget.name} · v{reviewTarget.version}</h3>
             </div>
             <div className="grid gap-3.5 px-5 py-4">
@@ -211,7 +215,7 @@ export default function ModelGovernancePage() {
                   className={cn("rounded-control border px-3 py-2.5 text-left transition-colors", reviewTarget.qualityAssessment?.publishable === false ? "cursor-not-allowed border-line bg-surface-2 opacity-50" : "cursor-pointer", reviewDecision === "pass" ? "border-green/40 bg-green/10" : "border-line bg-surface-2")}
                 >
                   <strong className="block text-xs font-semibold text-ink">通过</strong>
-                  <small className="mt-0.5 block text-[10px] text-muted">{reviewTarget.qualityAssessment?.publishable === false ? "隔离评估未达门槛，不能通过" : "复核通过后等待显式发布，不会立即进入生产"}</small>
+                  <small className="mt-0.5 block text-[11px] text-muted">{reviewTarget.qualityAssessment?.publishable === false ? "隔离评估未达门槛，不能通过" : "复核通过后等待显式发布，不会立即进入生产"}</small>
                 </button>
                 <button
                   type="button"
@@ -219,7 +223,7 @@ export default function ModelGovernancePage() {
                   className={cn("cursor-pointer rounded-control border px-3 py-2.5 text-left transition-colors", reviewDecision === "reject" ? "border-red/40 bg-red-soft" : "border-line bg-surface-2")}
                 >
                   <strong className="block text-xs font-semibold text-ink">驳回</strong>
-                  <small className="mt-0.5 block text-[10px] text-muted">驳回后模型进入已驳回，可重新复核</small>
+                  <small className="mt-0.5 block text-[11px] text-muted">驳回后模型进入已驳回，可重新复核</small>
                 </button>
               </div>
               <label className="grid gap-1.5">
@@ -245,15 +249,6 @@ export default function ModelGovernancePage() {
   );
 }
 
-function GovernanceStat({ icon, label, value, caption, tone = "blue" }) {
-  const tones = { blue: "bg-primary-soft text-primary", green: "bg-green/10 text-green", amber: "bg-amber-soft text-amber", teal: "bg-teal-soft text-teal", gray: "bg-surface-3 text-muted" };
-  return <Card className="flex min-h-24 items-start gap-3 p-4"><span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-control", tones[tone])}><Icon name={icon} size={17} /></span><span className="min-w-0"><span className="block text-[11px] text-muted">{label}</span><strong className="mt-0.5 block font-mono text-xl font-semibold text-ink">{value}</strong><small className="mt-1 block text-[10px] leading-relaxed text-faint">{caption}</small></span></Card>;
-}
-
 function GovernanceDetail({ label, value, mono = false }) {
-  return <div className="flex items-start justify-between gap-4 border-b border-line pb-2.5 text-xs last:border-0"><span className="shrink-0 text-muted">{label}</span><span className={cn("text-right text-ink-2", mono && "font-mono text-[11px]")}>{value}</span></div>;
-}
-
-function PolicyLine({ title, caption }) {
-  return <div className="flex items-start gap-2.5 rounded-control border border-line bg-surface-2 px-3 py-2.5"><span className="mt-0.5 text-green"><Icon name="check" size={14} /></span><span><strong className="block text-xs font-semibold text-ink">{title}</strong><small className="mt-0.5 block text-[10px] leading-relaxed text-faint">{caption}</small></span></div>;
+  return <div className="flex min-w-0 items-start justify-between gap-4 border-b border-line pb-2.5 text-xs last:border-0"><span className="shrink-0 text-muted">{label}</span><span className={cn("min-w-0 truncate text-right text-ink-2", mono && "font-mono text-[11px]")} title={String(value)}>{value}</span></div>;
 }

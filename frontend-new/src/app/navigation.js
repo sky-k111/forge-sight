@@ -32,7 +32,10 @@ export const roleMenus = {
           label: "AI 与模型",
           icon: "model",
           children: [
-            { id: "model-governance", label: "模型治理", icon: "model" },
+            { id: "model-training", label: "模型训练", icon: "plus" },
+            { id: "model-governance", label: "复核与发布", icon: "model" },
+            { id: "model-archive", label: "模型档案", icon: "history" },
+            { id: "model-drift", label: "偏差监控", icon: "alert" },
             { id: "skill-governance", label: "分析技能", icon: "knowledge" },
             { id: "memory-governance", label: "记忆治理", icon: "memory" },
           ],
@@ -118,10 +121,25 @@ export const pageMeta = {
     title: "监控规则",
     subtitle: "通过元数据绑定管理监控口径、调度与通知范围",
   },
+  "model-training": {
+    eyebrow: "管理员工作区",
+    title: "模型训练",
+    subtitle: "管理员亲自训练模型，训练完成后可免审直发为生产版本",
+  },
   "model-governance": {
     eyebrow: "管理员工作区",
-    title: "模型治理",
-    subtitle: "4 个模型 · 1 个待复核",
+    title: "复核与发布",
+    subtitle: "模型复核队列、发布门槛与版本回滚",
+  },
+  "model-archive": {
+    eyebrow: "管理员工作区",
+    title: "模型档案",
+    subtitle: "全量模型注册表：版本、调用、直发标记与工件保留",
+  },
+  "model-drift": {
+    eyebrow: "管理员工作区",
+    title: "偏差监控",
+    subtitle: "预测值与实际值自动回填对比，发现模型开始不准的时刻",
   },
   memory: {
     eyebrow: "个人设置",

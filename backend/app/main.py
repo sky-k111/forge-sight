@@ -62,6 +62,21 @@ def ensure_audit_review_columns():
         with platform_engine.begin() as conn:
             conn.execute(text(f"ALTER TABLE audit_log ADD COLUMN reviewed_by {col_type} DEFAULT ''"))
 
+    # 模型治理两级授权：个人档有效期与免审直发标记
+    from app.db.models import GovernedModel
+
+    if "governed_model" not in inspector.get_table_names():
+        return
+    model_columns = {item["name"] for item in inspector.get_columns("governed_model")}
+    if "direct_publish" not in model_columns:
+        col_type = GovernedModel.direct_publish.type.compile(dialect=dialect)
+        with platform_engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE governed_model ADD COLUMN direct_publish {col_type} DEFAULT FALSE"))
+    if "personal_expires_at" not in model_columns:
+        col_type = GovernedModel.personal_expires_at.type.compile(dialect=dialect)
+        with platform_engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE governed_model ADD COLUMN personal_expires_at {col_type}"))
+
 
 def create_platform_tables():
     from app.auth.deps import validate_email_gate_configuration, validate_security_configuration

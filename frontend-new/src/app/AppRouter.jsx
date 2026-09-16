@@ -1,10 +1,11 @@
 import { lazy, useEffect, useState } from "react";
 import {
-  BrowserRouter,
+  createBrowserRouter,
+  createRoutesFromElements,
+  RouterProvider,
   Navigate,
   Outlet,
   Route,
-  Routes,
   useLocation,
   useNavigate,
   useOutletContext,
@@ -46,6 +47,12 @@ const ResourcesPage = lazy(() => import("../pages/admin/ResourcesPage"));
 const MonitoringRulesPage = lazy(() => import("../pages/admin/MonitoringRulesPage"));
 const ModelGovernancePage = lazy(
   () => import("../pages/admin/ModelGovernancePage"),
+);
+const ModelArchivePage = lazy(
+  () => import("../pages/admin/ModelArchivePage"),
+);
+const ModelDriftPage = lazy(
+  () => import("../pages/admin/ModelDriftPage"),
 );
 const SkillGovernancePage = lazy(
   () => import("../pages/admin/SkillGovernancePage"),
@@ -144,9 +151,8 @@ function RouteErrorFallback() {
 }
 
 export default function AppRouter() {
-  return (
-    <BrowserRouter>
-      <Routes>
+  const [router] = useState(() => createBrowserRouter(createRoutesFromElements(
+      <>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/verify-email" element={<EmailVerificationPage />} />
         <Route element={<EmailGate />}>
@@ -191,7 +197,10 @@ export default function AppRouter() {
               <Route path="admin/knowledge" element={<KnowledgePage />} />
               <Route path="admin/resources" element={<ResourcesPage />} />
               <Route path="admin/monitoring-rules" element={<MonitoringRulesPage />} />
+              <Route path="admin/model-training" element={<ModelingPage />} />
               <Route path="admin/models" element={<ModelGovernancePage />} />
+              <Route path="admin/model-archive" element={<ModelArchivePage />} />
+              <Route path="admin/model-drift" element={<ModelDriftPage />} />
               <Route path="admin/skills" element={<SkillGovernancePage />} />
               <Route path="admin/memory" element={<MemoryGovernancePage />} />
               <Route path="admin/settings" element={<SettingsPage />} />
@@ -206,7 +215,7 @@ export default function AppRouter() {
             </Route>
           </Route>
         </Route>
-      </Routes>
-    </BrowserRouter>
-  );
+      </>
+  )));
+  return <RouterProvider router={router} />;
 }

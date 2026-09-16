@@ -1,6 +1,8 @@
 """审计日志服务：写入与查询。任何敏感动作（执行 SQL、拦截、口径变更）都必须经过这里。"""
 
 from datetime import datetime
+import csv
+import io
 
 from sqlalchemy import func, or_
 
@@ -37,6 +39,23 @@ def _like_pattern(keyword: str) -> str:
     return f"%{escaped}%"
 
 
+def _filtered(query, result=None, keyword="", user=None, reviewed=None, snapshot_id=None):
+    if snapshot_id is not None:
+        query = query.filter(AuditLog.id <= snapshot_id)
+    if result:
+        query = query.filter(AuditLog.result == result)
+    if user:
+        query = query.filter(AuditLog.user_name == user)
+    if reviewed == "待复核":
+        query = query.filter(AuditLog.result == "已拦截", AuditLog.reviewed_at.is_(None))
+    elif reviewed == "已复核":
+        query = query.filter(AuditLog.result == "已拦截", AuditLog.reviewed_at.isnot(None))
+    if keyword.strip():
+        pattern = _like_pattern(keyword.strip())
+        query = query.filter(or_(*(column.like(pattern, escape="\\") for column in (AuditLog.action, AuditLog.resource, AuditLog.detail, AuditLog.user_name))))
+    return query
+
+
 def list_audit_logs(
     result: str | None = None,
     keyword: str = "",
@@ -44,6 +63,8 @@ def list_audit_logs(
     reviewed: str | None = None,
     limit: int = 200,
     tenant_id: str = "tenant-default",
+    cursor: int | None = None,
+    snapshot_id: int | None = None,
 ) -> dict:
     """返回 {items, stats, users}：items 为筛选后的审计行，stats 为全量真实统计。
 
@@ -68,26 +89,16 @@ def list_audit_logs(
             )
         ]
 
-        query = scoped
-        if result:
-            query = query.filter(AuditLog.result == result)
-        if user:
-            query = query.filter(AuditLog.user_name == user)
-        if reviewed == "待复核":
-            query = query.filter(AuditLog.result == "已拦截", AuditLog.reviewed_at.is_(None))
-        elif reviewed == "已复核":
-            query = query.filter(AuditLog.result == "已拦截", AuditLog.reviewed_at.isnot(None))
-        if keyword:
-            pattern = _like_pattern(keyword.strip())
-            query = query.filter(
-                or_(
-                    AuditLog.action.like(pattern, escape="\\"),
-                    AuditLog.resource.like(pattern, escape="\\"),
-                    AuditLog.detail.like(pattern, escape="\\"),
-                    AuditLog.user_name.like(pattern, escape="\\"),
-                )
-            )
-        rows = query.order_by(AuditLog.id.desc()).limit(limit).all()
+        limit = max(1, min(limit, 200))
+        if snapshot_id is None:
+            snapshot_id = scoped.with_entities(func.max(AuditLog.id)).scalar() or 0
+        query = _filtered(scoped, result, keyword, user, reviewed, snapshot_id)
+        matched_total = query.count()
+        if cursor is not None:
+            query = query.filter(AuditLog.id < cursor)
+        rows = query.order_by(AuditLog.id.desc()).limit(limit + 1).all()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
 
     items = [
         {
@@ -116,7 +127,42 @@ def list_audit_logs(
             "unreviewed": unreviewed,
         },
         "users": users,
+        "page": {"matchedTotal": matched_total, "snapshotId": snapshot_id, "hasMore": has_more, "nextCursor": rows[-1].id if has_more else None, "limit": limit},
     }
+
+
+def export_audit_csv(tenant_id: str, result=None, keyword="", user=None, reviewed=None, snapshot_id=None):
+    """Stream the filtered tenant snapshot in bounded chunks, not the visible page.
+
+    The ID boundary prevents new inserts from duplicating/extending an export.
+    Review fields are live (this is not a historical MVCC snapshot).
+    """
+    def safe(value):
+        value = str(value or "")
+        return "'" + value if value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r", "\n")) else value
+
+    def record(values):
+        output = io.StringIO(newline="")
+        csv.writer(output).writerow([safe(value) for value in values])
+        return output.getvalue()
+
+    yield "\ufeff" + record(["时间", "用户", "角色", "动作", "资源", "结果", "详情", "复核时间", "复核人"])
+    cursor = None
+    with PlatformSession() as session:
+        scoped = session.query(AuditLog).filter(AuditLog.tenant_id == tenant_id)
+        if snapshot_id is None:
+            snapshot_id = scoped.with_entities(func.max(AuditLog.id)).scalar() or 0
+        while True:
+            query = _filtered(scoped, result, keyword, user, reviewed, snapshot_id)
+            if cursor is not None:
+                query = query.filter(AuditLog.id < cursor)
+            rows = query.order_by(AuditLog.id.desc()).limit(500).all()
+            if not rows:
+                break
+            for row in rows:
+                yield record([row.created_at.isoformat(sep=" "), row.user_name, row.role, row.action, row.resource, row.result, row.detail, row.reviewed_at.isoformat(sep=" ") if row.reviewed_at else "", row.reviewed_by])
+            cursor = rows[-1].id
+            session.expunge_all()
 
 
 def review_audit_logs_batch(log_ids: list[int], tenant_id: str, reviewer: str) -> dict:

@@ -119,6 +119,11 @@ class Settings(BaseSettings):
 
     modeling_storage_dir: str = "modeling_artifacts"
     report_storage_dir: str = "report_artifacts"
+    # 四眼原则开关：开启后管理员发布模型也必须先走复核（默认关闭＝允许免审直发）
+    require_review_for_admin_publish: bool = False
+    modeling_personal_ttl_days: int = 30
+    modeling_personal_quota: int = 3
+    modeling_artifact_grace_days: int = 90
 
     # —— 认证 ——
     auth_token_secret: str = "dev-insecure-secret-change-me"  # 生产必须从 .env 覆盖

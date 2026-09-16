@@ -5,6 +5,7 @@ import forgeSightLogo from "../../assets/forgesight-logo.png";
 import cn from "../../lib/cn";
 import { Button, Card, ErrorNotice, StatusPill } from "../../components/ui";
 import { ChartLegend, ComboMetricChart, CorrelationScatterChart, MatrixHeatmapChart, RankBarChart, ShareDonutChart, TrendLineChart } from "../../components/charts";
+import { PredictionResultCard } from "../../components/models/ResultCards";
 import { listSources } from "../../api/datasources";
 import { createModelingTask } from "../../api/modeling";
 import { submitSkillFeedback } from "../../api/skills";
@@ -561,7 +562,7 @@ export default function AnalysisPage() {
                         {message.plainText ? (
                           <div className="mt-1.5 rounded-card border border-line bg-surface-2 px-3.5 py-3 text-body leading-relaxed text-ink-2">
                             {message.plainText}
-                            {message.inherited && <span className="mt-1 block text-[10px] text-faint">继承自分析分支起点</span>}
+                            {message.inherited && <span className="mt-1 block text-[11px] text-faint">继承自分析分支起点</span>}
                           </div>
                         ) : message.failed ? (
                           <div className="mt-1.5 rounded-card border border-red/25 bg-red-soft px-3.5 py-3 text-xs text-ink-2">
@@ -682,7 +683,7 @@ export default function AnalysisPage() {
                         aria-label="选择分析数据范围"
                         className="absolute bottom-full left-0 z-20 mb-2 min-w-[250px] rounded-card border border-line bg-surface p-1.5 shadow-card-hover"
                       >
-                        <p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-faint">分析数据范围</p>
+                        <p className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-faint">分析数据范围</p>
                         {availableSources.length ? availableSources.map((source) => (
                           <button
                             key={source.id}
@@ -729,7 +730,7 @@ export default function AnalysisPage() {
                       >
                         <div className="border-b border-line px-2 py-2">
                           <strong className="block text-xs font-semibold text-ink">选择本次分析模型</strong>
-                          <span className="mt-0.5 block text-[10px] text-faint">只影响本次发起的分析</span>
+                          <span className="mt-0.5 block text-[11px] text-faint">只影响本次发起的分析</span>
                         </div>
                         {modelProfiles.length ? modelProfiles.map((profile) => (
                           <button
@@ -786,7 +787,7 @@ export default function AnalysisPage() {
             {evidenceOpen && (
               <div className="evidence-panel__header flex items-center gap-3 border-b border-line px-4 pr-14">
                 <div className="min-w-0">
-                  <span className="truncate text-[10px] font-semibold text-faint">执行记录已保存</span>
+                  <span className="truncate text-[11px] font-semibold text-faint">执行记录已保存</span>
                   <h2 className="mt-0.5 text-[15px] font-semibold tracking-tight text-ink">分析证据链</h2>
                 </div>
               </div>
@@ -906,7 +907,7 @@ function BranchOriginCard({ context, originRun, onViewOrigin, onAdjust }) {
       </div>
       {adjustments.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5 border-t border-line bg-surface-2 px-4 py-2.5">
-          <span className="mr-1 text-[10px] font-semibold text-faint">本方案变化</span>
+          <span className="mr-1 text-[11px] font-semibold text-faint">本方案变化</span>
           {adjustments.map(([key, value]) => (
             <span key={key} className="rounded-full border border-line bg-surface px-2 py-1 text-[10px] text-ink-2">
               <span className="text-faint">{ADJUSTMENT_LABELS[key] ?? key}</span>
@@ -931,10 +932,10 @@ function BranchComparisonCard({ context, originRun, currentRun }) {
     <section className="motion-soft-rise mt-5 border-t border-line pt-4">
       <div className="flex items-end justify-between gap-3">
         <div>
-          <span className="text-[10px] font-semibold tracking-wide text-primary">方案差异</span>
+          <span className="text-[11px] font-semibold tracking-wide text-primary">方案差异</span>
           <h3 className="mt-1 text-body font-semibold text-ink">原方案与当前方案</h3>
         </div>
-        <span className="text-[10px] text-faint">两次分析均独立保留</span>
+        <span className="text-[11px] text-faint">两次分析均独立保留</span>
       </div>
       <div className="mt-3 overflow-hidden rounded-card border border-line">
         <div className="grid grid-cols-[112px_minmax(0,1fr)_minmax(0,1fr)] border-b border-line bg-surface-2 text-[10px] font-semibold text-faint">
@@ -1257,7 +1258,7 @@ function ModelingProposalCard({ proposal, delivery, runId, onOpenModeling }) {
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-4 py-3.5">
         <div className="flex min-w-0 items-start gap-2.5">
           <span className="grid h-8 w-8 shrink-0 place-items-center rounded-control bg-primary-soft text-primary"><Icon name="model" size={16} /></span>
-          <div className="min-w-0"><span className="text-[10px] font-semibold tracking-wide text-faint">AGENT 建模方案</span><h3 className="mt-0.5 truncate text-body font-semibold text-ink">{proposal.title}</h3></div>
+          <div className="min-w-0"><span className="text-[11px] font-semibold tracking-wide text-faint">AGENT 建模方案</span><h3 className="mt-0.5 truncate text-body font-semibold text-ink">{proposal.title}</h3></div>
         </div>
         <StatusPill tone={reusableModel || confirmed ? "green" : "amber"}>{reusableModel ? "生产模型可用" : confirmed ? "已进入任务台" : "等待确认"}</StatusPill>
       </div>
@@ -1277,7 +1278,7 @@ function ModelingProposalCard({ proposal, delivery, runId, onOpenModeling }) {
             <ProposalField label="评估重点" value={proposal.metric} />
           </>}
         </div>
-        {!reusableModel && <div className="mt-3 flex flex-wrap items-center gap-1.5"><span className="mr-1 text-[10px] text-faint">候选模型</span>{(proposal.candidates ?? []).map((candidate) => <span key={candidate} className="rounded-full border border-line bg-surface-2 px-2 py-1 text-[10px] text-ink-2">{candidate}</span>)}</div>}
+        {!reusableModel && <div className="mt-3 flex flex-wrap items-center gap-1.5"><span className="mr-1 text-[11px] text-faint">候选模型</span>{(proposal.candidates ?? []).map((candidate) => <span key={candidate} className="rounded-full border border-line bg-surface-2 px-2 py-1 text-[10px] text-ink-2">{candidate}</span>)}</div>}
         {detailsOpen && <div className="mt-3 flex items-start gap-2 rounded-control border border-teal/25 bg-teal-soft px-3 py-2.5 text-[11px] leading-relaxed text-muted"><span className="mt-0.5 text-teal"><Icon name="shield" size={14} /></span><span>开始训练前将检查缺失值、类别比例、时间穿越和结果泄漏字段；训练代码在隔离 Python 环境运行，数据源保持只读。</span></div>}
         <div className="mt-3.5 flex flex-wrap justify-end gap-2">
           <Button variant="ghost" onClick={() => setDetailsOpen((value) => !value)}>{detailsOpen ? "收起检查项" : "查看检查项"}</Button>
@@ -1354,7 +1355,7 @@ function RunningAnalysis({ completed, plan }) {
       <div className="flex items-center gap-3">
         <AnalysisActivityMark />
         <div className="min-w-0 flex-1">
-          <span className="block text-[10px] font-semibold text-primary">分析进行中</span>
+          <span className="block text-[11px] font-semibold text-primary">分析进行中</span>
           <strong className="block text-body font-semibold text-ink">{current?.label ?? "正在准备分析"}</strong>
           <p className="mt-0.5 text-xs text-muted">{current?.caption ?? "正在读取业务上下文"}</p>
         </div>
@@ -1400,6 +1401,10 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
   const chart = run.chart;
   const charts = run.charts?.length ? run.charts : (chart ? [chart] : []);
   const tableRequested = run.tasks?.some((task) => (task.requestedChart ?? task.intent?.requestedChart) === "table");
+  // 预测编排能力（prediction.run）成功后，结果卡随结论呈现
+  const predictionCard = (run.artifacts ?? [])
+    .map((artifact) => (artifact.type === "capability-result" ? artifact.content?.payload?.resultCard : null))
+    .find(Boolean) ?? null;
   const [showTable, setShowTable] = useState(tableRequested || !chart);
   const sqlCode = run.planDetails?.query?.code;
   const chartTypeName = chartTypeLabel(chart);
@@ -1448,7 +1453,7 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-tag", partialDelivery ? "bg-amber/10 text-amber" : "bg-green/10 text-green")}><Icon name={partialDelivery ? "warning" : "check"} size={15} strokeWidth={2.2} /></span>
-            <div><span className="block text-[10px] font-semibold tracking-wide text-faint">{partialDelivery ? "部分交付" : "分析完成"}</span><h3 className="mt-0.5 text-body font-semibold text-ink">{partialDelivery ? "已完成的分析结果" : "分析结果"}</h3></div>
+            <div><span className="block text-[11px] font-semibold tracking-wide text-faint">{partialDelivery ? "部分交付" : "分析完成"}</span><h3 className="mt-0.5 text-body font-semibold text-ink">{partialDelivery ? "已完成的分析结果" : "分析结果"}</h3></div>
           </div>
           <span className="text-[11px] text-faint">{emptyResult ? "当前范围无记录" : `${run.execution.rowCount} 条记录`} · 分析用时 {formatDuration(analysisDuration)}</span>
         </div>
@@ -1471,6 +1476,7 @@ function AnalysisResult({ run, onOpenEvidence, onFollowUp }) {
             )}
           </div>
         )}
+        {predictionCard && <PredictionResultCard card={predictionCard} />}
         {partialDelivery && (
           <div className="mt-3 flex items-start gap-2 rounded-control border border-amber/30 bg-amber-soft px-3 py-2.5 text-xs leading-relaxed text-amber" role="status">
             <Icon name="alert" size={14} className="mt-0.5 shrink-0" />
@@ -1872,7 +1878,7 @@ function EvidencePanel({ run, open, onBranch }) {
                       </span>
                       <span className="min-w-0 flex-1">
                         <strong className="block truncate text-xs font-semibold text-ink">{group.title}</strong>
-                        <span className="text-[10px] text-faint">{completed}/{group.steps.length} 个节点完成</span>
+                        <span className="text-[11px] text-faint">{completed}/{group.steps.length} 个节点完成</span>
                       </span>
                       <Icon name="chevron" size={14} className={cn("shrink-0 text-faint transition-transform", expanded && "rotate-90")} />
                     </button>
@@ -1923,8 +1929,8 @@ function EvidencePanel({ run, open, onBranch }) {
             {activeCheckpoint?.rollbackable && (
               <div className="mt-3 flex items-center justify-between gap-3 rounded-control border border-line bg-surface px-2.5 py-2">
                 <div className="min-w-0">
-                  <span className="block text-[10px] font-semibold text-ink-2">调整分析条件</span>
-                  <span className="block truncate text-[10px] text-faint">保留当前结果，生成可对比的新方案</span>
+                  <span className="block text-[11px] font-semibold text-ink-2">调整分析条件</span>
+                  <span className="block truncate text-[11px] text-faint">保留当前结果，生成可对比的新方案</span>
                 </div>
                 <button
                   type="button"
@@ -1951,7 +1957,7 @@ function EvidencePanel({ run, open, onBranch }) {
               <span className="grid h-6 w-6 shrink-0 place-items-center rounded-tag bg-primary-soft text-primary"><Icon name="database" size={14} /></span>
               <span className="min-w-0 flex-1">
                 <strong className="block text-xs font-semibold text-ink">引用资产</strong>
-                <span className="text-[10px] text-muted">{run.sources.length} 项数据、指标与语义资产</span>
+                <span className="text-[11px] text-muted">{run.sources.length} 项数据、指标与语义资产</span>
               </span>
               <Icon name="chevron" size={14} className={cn("shrink-0 text-muted transition-transform duration-300", sourcesExpanded && "rotate-90")} />
             </button>
@@ -1993,7 +1999,7 @@ function BusinessPlanCard({ planner, question, onOpenArtifacts }) {
         <span className="min-w-0">
           <span className="flex items-center gap-1.5 text-primary">
             <Icon name="model" size={14} />
-            <span className="text-[10px] font-semibold tracking-wide">AGENT 调查计划</span>
+            <span className="text-[11px] font-semibold tracking-wide">AGENT 调查计划</span>
           </span>
           <strong className="mt-1 block line-clamp-2 text-xs leading-relaxed text-ink">{planner.plan?.goal ?? question}</strong>
         </span>
@@ -2026,7 +2032,7 @@ function BusinessPlanCard({ planner, question, onOpenArtifacts }) {
                   <span className="min-w-0">
                     <span className="flex items-center justify-between gap-2">
                       <strong className="truncate text-[11px] font-semibold text-ink">{step.purpose}</strong>
-                      <span className="shrink-0 font-mono text-[9px] text-faint">{step.capability}</span>
+                      <span className="shrink-0 font-mono text-[10px] text-faint">{step.capability}</span>
                     </span>
                     <span className="mt-0.5 block line-clamp-2 text-[10px] leading-relaxed text-muted">{step.summary}</span>
                   </span>
@@ -2050,7 +2056,7 @@ function BusinessPlanCard({ planner, question, onOpenArtifacts }) {
             </div>
           )}
           {planner.degraded && (
-            <p className="border-t border-primary/10 px-3 py-2 text-[10px] text-muted">模型规划不可用时已安全降级为确定性计划，受治理分析链和权限边界保持不变。</p>
+            <p className="border-t border-primary/10 px-3 py-2 text-[11px] text-muted">模型规划不可用时已安全降级为确定性计划，受治理分析链和权限边界保持不变。</p>
           )}
         </div>
       )}
@@ -2068,7 +2074,7 @@ function EvidenceOverview({ run, plan, onOpenArtifacts }) {
         <BusinessPlanCard planner={run.planner} question={run.question} onOpenArtifacts={onOpenArtifacts} />
       )}
       <div className="evidence-card evidence-card--summary rounded-card border border-line bg-surface p-3">
-        <span className="text-[10px] font-semibold tracking-wide text-faint">本次分析</span>
+        <span className="text-[11px] font-semibold tracking-wide text-faint">本次分析</span>
         {!hasPlanCard && <p className="mt-1 text-xs leading-relaxed text-ink">{run.question}</p>}
         <div className="mt-3 grid grid-cols-2 gap-y-2 divide-x divide-line border-y border-line py-2 sm:grid-cols-4">
           <OverviewMetric label="步骤" value={`${completed}/${plan.length}`} />

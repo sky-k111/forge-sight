@@ -100,7 +100,7 @@ def test_governance_endpoints(modeling_session):
         json={"strategy": "auto", "candidateIds": ["tree"], "userId": "zhangsan"},
     )
     model = client.get("/api/v1/model-governance/models").json()["items"][0]
-    assert model["status"] == "pending"
+    assert model["status"] == "personal"
 
     # 复核通过后显式发布
     reviewed = client.post(

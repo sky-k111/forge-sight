@@ -53,6 +53,9 @@ export default function AppShell() {
   const [expandedItems, setExpandedItems] = useState(() => new Set(["data-semantic-governance"]));
   const [unreadCount, setUnreadCount] = useState(0);
   const [todoItems, setTodoItems] = useState(null);
+  const [todoError, setTodoError] = useState(false);
+  const [todoLoading, setTodoLoading] = useState(false);
+  const [todoRetry, setTodoRetry] = useState(0);
   const [tenants, setTenants] = useState(() => cachedUser?.tenants ?? []);
   const [activeTenant, setActiveTenant] = useState(null);
   const selectedAnalysisSession = (sessions ?? []).find((session) => session.id === activeSessionId) ?? null;
@@ -111,20 +114,35 @@ export default function AppShell() {
   }, []);
 
   useEffect(() => {
-    if (role !== "admin") return undefined;
+    if (role !== "admin") { setTodoItems(null); setTodoError(false); return undefined; }
     let cancelled = false;
-    const loadTodos = () =>
-      getAdminOverview()
-        .then((data) => { if (!cancelled) setTodoItems(data?.todo ?? []); })
-        .catch(() => { if (!cancelled) setTodoItems([]); });
+    let sequence = 0;
+    const loadTodos = () => {
+      const request = ++sequence;
+      setTodoLoading(true);
+      return getAdminOverview()
+        .then((data) => { if (!cancelled && request === sequence) { setTodoItems(data?.todo ?? []); setTodoError(false); } })
+        .catch(() => { if (!cancelled && request === sequence) setTodoError(true); })
+        .finally(() => { if (!cancelled && request === sequence) setTodoLoading(false); });
+    };
+    // 治理动作（如复核拦截记录）完成后立即刷新侧栏待办；
+    // 治理工作台加载时随事件携带同一份 todo，避免侧栏与主页面显示不同步的快照
+    const onGovernance = (event) => {
+      if (Array.isArray(event?.detail?.todo)) {
+        setTodoItems(event.detail.todo);
+        setTodoError(false);
+        setTodoLoading(false);
+        return;
+      }
+      loadTodos();
+    };
     loadTodos();
-    // 治理动作（如复核拦截记录）完成后立即刷新侧栏待办
-    window.addEventListener("forgesight:governance-changed", loadTodos);
+    window.addEventListener("forgesight:governance-changed", onGovernance);
     return () => {
       cancelled = true;
-      window.removeEventListener("forgesight:governance-changed", loadTodos);
+      window.removeEventListener("forgesight:governance-changed", onGovernance);
     };
-  }, [role]);
+  }, [role, todoRetry]);
 
   useEffect(() => {
     let cancelled = false;
@@ -297,6 +315,9 @@ export default function AppShell() {
         sessions={sessions}
         sessionsError={sessionsError}
         todoItems={todoItems}
+        todoError={todoError}
+        todoLoading={todoLoading}
+        onRetryTodos={() => setTodoRetry((value) => value + 1)}
         activeSessionId={activeSessionId}
         onNavigate={navigatePage}
         onCreateTask={createTask}
@@ -355,7 +376,7 @@ export default function AppShell() {
   );
 }
 
-function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessionsError, todoItems, activeSessionId, onNavigate, onCreateTask, onStartAnalysis, onDeleteSession, onDeleteSessions, onRenameSession, onSelectSession, onRetrySessions, onToggleDarkMode, onLogout, onToggle, onResizeStart, onResizeKeyDown, onResizeReset, mobileOpen, expandedItems, onToggleItem }) {
+function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessionsError, todoItems, todoError, todoLoading, onRetryTodos, activeSessionId, onNavigate, onCreateTask, onStartAnalysis, onDeleteSession, onDeleteSessions, onRenameSession, onSelectSession, onRetrySessions, onToggleDarkMode, onLogout, onToggle, onResizeStart, onResizeKeyDown, onResizeReset, mobileOpen, expandedItems, onToggleItem }) {
   const [searchText, setSearchText] = useState("");
   const [openSessionMenuId, setOpenSessionMenuId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
@@ -646,7 +667,7 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
                           </>
                         ) : (
                           <div className="px-1 py-1">
-                            <p className="whitespace-normal text-[10px] leading-4 text-muted">确定删除？审计记录仍会保留。</p>
+                            <p className="whitespace-normal text-[11px] leading-4 text-muted">确定删除？审计记录仍会保留。</p>
                             <div className="mt-2 flex justify-end gap-1.5">
                               <button
                                 type="button"
@@ -681,14 +702,14 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
                   {!confirmBulkDelete ? (
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[10px] text-muted">已选 {selectedSessionIds.size} 项</span>
-                      <button type="button" onClick={() => setConfirmBulkDelete(true)} className="cursor-pointer rounded-tag px-2 py-1 text-[10px] font-semibold text-red hover:bg-red-soft">批量删除</button>
+                      <button type="button" onClick={() => setConfirmBulkDelete(true)} className="cursor-pointer rounded-tag px-2 py-1 text-[11px] font-semibold text-red hover:bg-red-soft">批量删除</button>
                     </div>
                   ) : (
                     <div>
                       <p className="text-[10px] text-muted">删除这 {selectedSessionIds.size} 个会话？</p>
                       <div className="mt-1.5 flex justify-end gap-1">
                         <button type="button" disabled={bulkDeleting} onClick={() => setConfirmBulkDelete(false)} className="h-6 cursor-pointer rounded-tag px-2 text-[10px] text-muted hover:bg-surface-2 disabled:opacity-50">取消</button>
-                        <button type="button" disabled={bulkDeleting} onClick={removeSelectedSessions} className="h-6 cursor-pointer rounded-tag bg-red px-2 text-[10px] font-semibold text-white disabled:cursor-wait disabled:opacity-60">{bulkDeleting ? "删除中" : "确认删除"}</button>
+                        <button type="button" disabled={bulkDeleting} onClick={removeSelectedSessions} className="h-6 cursor-pointer rounded-tag bg-red px-2 text-[11px] font-semibold text-white disabled:cursor-wait disabled:opacity-60">{bulkDeleting ? "删除中" : "确认删除"}</button>
                       </div>
                     </div>
                   )}
@@ -702,9 +723,10 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
           <div className="border-t border-line px-2 pb-2.5">
             <div className="px-2 pb-1.5 pt-2.5 text-[11px] font-semibold text-muted">治理待办</div>
             <div className="flex flex-col gap-0.5">
-              {todoItems === null ? (
+              {todoError && <div role="alert" className="px-2 py-1.5 text-[11px] text-amber">治理状态读取失败{todoItems?.length ? "，以下为上次快照" : "，暂不能确认是否有待办"}<button type="button" disabled={todoLoading} onClick={onRetryTodos} className="ml-1 min-h-8 font-semibold text-primary hover:underline">{todoLoading ? "重试中…" : "重试"}</button></div>}
+              {todoItems === null && !todoError ? (
                 <div className="px-2 py-1.5 text-[11px] text-faint">正在读取治理状态…</div>
-              ) : todoItems.length ? (
+              ) : todoItems?.length ? (
                 todoItems.map((item) => (
                   <QueueItem
                     key={item.key}
@@ -715,9 +737,9 @@ function Sidebar({ role, page, user, collapsed, darkMode, width, sessions, sessi
                     onClick={() => onNavigate(item.page)}
                   />
                 ))
-              ) : (
+              ) : !todoError ? (
                 <div className="px-2 py-1.5 text-[11px] text-faint">暂无待办，治理基线正常</div>
-              )}
+              ) : null}
             </div>
           </div>
         )
@@ -848,7 +870,7 @@ function SidebarNavItem({ item, page, collapsed, expanded, onNavigate, onToggle 
                   tabIndex={expanded ? 0 : -1}
                   onClick={() => onNavigate(child.id)}
                   className={cn(
-                    "flex h-9 w-full cursor-pointer items-center gap-2 rounded-[8px] px-2 text-left text-muted transition-all hover:bg-surface/70 hover:text-ink",
+                    "flex h-9 w-full cursor-pointer items-center gap-2 rounded-[8px] px-2 text-left text-muted transition-colors hover:bg-surface/70 hover:text-ink",
                     page === child.id && "bg-surface text-ink shadow-card ring-1 ring-inset ring-line",
                   )}
                 >
@@ -908,7 +930,7 @@ function Topbar({ page, user, evidenceOpen, hasAnalysisEvidence, unreadCount, on
           onClick={onOpenMessages}
         >
           <Icon name="bell" />
-          {unreadCount > 0 && <span className="absolute -right-1 -top-1 grid min-h-4 min-w-4 place-items-center rounded-full bg-critical px-1 text-[9px] font-bold text-white ring-2 ring-surface">{unreadCount > 99 ? "99+" : unreadCount}</span>}
+          {unreadCount > 0 && <span className="absolute -right-1 -top-1 grid min-h-4 min-w-4 place-items-center rounded-full bg-critical px-1 text-[10px] font-bold text-white ring-2 ring-surface">{unreadCount > 99 ? "99+" : unreadCount}</span>}
         </button>
         <button
           type="button"
@@ -948,13 +970,13 @@ function TenantSwitcher({ activeTenant, tenants, onChange }) {
         <span className="grid h-6 w-6 shrink-0 place-items-center rounded-tag bg-primary-soft text-primary"><Icon name="database" size={13} /></span>
         <span className="min-w-0 flex-1">
           <strong className="block truncate text-[11px] font-semibold text-ink">{activeTenant?.name ?? "正在确认企业"}</strong>
-          <small className="block text-[9px] text-muted">{activeTenant?.role === "owner" ? "企业所有者" : activeTenant?.role === "admin" ? "企业管理员" : "企业成员"}</small>
+          <small className="block text-[11px] text-muted">{activeTenant?.role === "owner" ? "企业所有者" : activeTenant?.role === "admin" ? "企业管理员" : "企业成员"}</small>
         </span>
         {tenants.length > 1 && <Icon name="chevron" size={13} className={cn("text-faint transition-transform", open && "rotate-90")} />}
       </button>
       {open && tenants.length > 1 && (
         <div role="listbox" aria-label="切换企业空间" className="absolute right-0 top-11 z-50 w-72 overflow-hidden rounded-card border border-line bg-surface p-1.5 shadow-card-hover">
-          <div className="px-2.5 pb-1.5 pt-1 text-[10px] font-semibold text-muted">企业空间</div>
+          <div className="px-2.5 pb-1.5 pt-1 text-[11px] font-semibold text-muted">企业空间</div>
           {tenants.map((tenant) => (
             <button
               type="button"
@@ -970,11 +992,11 @@ function TenantSwitcher({ activeTenant, tenants, onChange }) {
               <span className={cn("h-2 w-2 shrink-0 rounded-full", tenant.id === activeTenant?.id ? "bg-primary" : "bg-line-strong")} />
               <span className="min-w-0 flex-1">
                 <strong className="block truncate text-xs font-semibold text-ink">{tenant.name}</strong>
-                <small className="text-[10px] text-muted">{tenant.role === "owner" ? "所有者" : tenant.role === "admin" ? "管理员" : "成员"}</small>
+                <small className="text-[11px] text-muted">{tenant.role === "owner" ? "所有者" : tenant.role === "admin" ? "管理员" : "成员"}</small>
               </span>
             </button>
           ))}
-          <p className="mx-2.5 mt-1 border-t border-line py-2 text-[10px] leading-4 text-faint">切换后，数据源、调查记录、记忆与指标口径会同步切换。</p>
+          <p className="mx-2.5 mt-1 border-t border-line py-2 text-[11px] leading-4 text-faint">切换后，数据源、调查记录、记忆与指标口径会同步切换。</p>
         </div>
       )}
     </div>

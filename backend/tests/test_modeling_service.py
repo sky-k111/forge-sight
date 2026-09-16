@@ -115,7 +115,9 @@ def test_train_full_flow(modeling_session):
     # 模型注册 + joblib 落盘
     models = list_models()
     assert len(models) == 3
-    assert all(m["status"] == "pending" for m in models)
+    # 两级授权：机器门禁通过的候选训练后直接进入个人自用档
+    assert all(m["status"] == "personal" for m in models)
+    assert all(m["personalExpiresAt"] for m in models)
     assert all(m["algorithmName"] for m in models)
     with modeling_session() as session:
         for row in session.query(GovernedModel).all():
@@ -276,7 +278,7 @@ def test_retrain_creates_versions_and_evaluation_history(modeling_session):
     assert [item["version"] for item in models] == [1, 2]
     assert [item["trainingRevision"] for item in models] == [1, 2]
     assert models[0]["status"] == "published"
-    assert models[1]["status"] == "pending"
+    assert models[1]["status"] == "personal"
     history = list_evaluations(task["id"])
     assert [item["trainingRevision"] for item in history] == [2, 1]
     with modeling_session() as session:
@@ -329,3 +331,171 @@ def test_agent_model_discovery_only_returns_published_same_source(modeling_sessi
     matches = find_reusable_models("识别高不良风险生产记录", 1, "classification")
     assert matches and matches[0]["modelId"] == model["id"]
     assert find_reusable_models("识别高不良风险生产记录", 2, "classification") == []
+
+
+def test_personal_tier_owner_only_serving(modeling_session):
+    task, _ = create_task(make_task_payload())
+    train_task(task["id"], "auto", ["logistic"], None, "zhangsan")
+    personal = [m for m in list_models() if m["status"] == "personal"]
+    assert personal, "门禁通过的模型应进入个人自用档"
+    model = personal[0]
+    assert model["personalActive"] is True and model["personalExpiresAt"]
+
+    record = {"工序": "装配", "产线": "L1", "停机时长": 10, "计划数量": 100}
+    mine = predict(task["id"], [record], "zhangsan")
+    assert mine["scope"] == "personal" and mine["predictions"]
+    # 非所有者拿不到别人的个人档
+    with pytest.raises(TaskNotTrainedError):
+        predict(task["id"], [record], "lisi")
+    # 复用匹配同样带查看者身份
+    assert find_reusable_models("识别高不良风险的生产记录", 1, "classification", viewer_id="zhangsan")
+    assert not find_reusable_models("识别高不良风险的生产记录", 1, "classification", viewer_id="lisi")
+
+
+def test_direct_publish_admin_only_path(modeling_session, monkeypatch):
+    from app.config import settings as app_settings
+    from app.modeling.service import publish_model_direct
+
+    task, _ = create_task(make_task_payload(title="直发验证模型"))
+    train_task(task["id"], "auto", ["logistic"], None, "zhangsan")
+    model = next(m for m in list_models() if m["status"] == "personal")
+
+    published = publish_model_direct(model["id"], "admin")
+    assert published["status"] == "published" and published["directPublish"] is True
+
+    # 四眼原则开启后直发被禁止
+    task2, _ = create_task(make_task_payload(title="四眼原则模型"))
+    train_task(task2["id"], "auto", ["logistic"], None, "zhangsan")
+    model2 = next(m for m in list_models() if m["status"] == "personal" and m["taskId"] == task2["id"])
+    monkeypatch.setattr(app_settings, "require_review_for_admin_publish", True)
+    with pytest.raises(ModelingError):
+        publish_model_direct(model2["id"], "admin")
+    monkeypatch.setattr(app_settings, "require_review_for_admin_publish", False)
+    # 常规发布通道仍强制复核：personal 直接 publish 非法
+    with pytest.raises(ModelingError):
+        publish_model(model2["id"], "admin")
+
+
+def test_purge_retired_artifacts_respects_grace(modeling_session, tmp_path, monkeypatch):
+    from app.config import settings as app_settings
+    from app.modeling.service import purge_retired_artifacts
+    from datetime import datetime, timedelta
+
+    task, _ = create_task(make_task_payload(title="清理验证模型"))
+    train_task(task["id"], "auto", ["logistic"], None, "zhangsan")
+    model = next(m for m in list_models() if m["status"] == "personal")
+    retire_model(model["id"], "admin")
+
+    artifact = tmp_path / "old.joblib"
+    artifact.write_bytes(b"fake")
+    with modeling_session() as session:
+        row = session.get(GovernedModel, model["id"])
+        row.model_path = str(artifact)
+        # 刚下线：宽限期内不清理
+        row.retired_at = datetime.now() - timedelta(days=1)
+        session.commit()
+    assert purge_retired_artifacts()["purged"] == 0 and artifact.exists()
+
+    with modeling_session() as session:
+        row = session.get(GovernedModel, model["id"])
+        row.retired_at = datetime.now() - timedelta(days=app_settings.modeling_artifact_grace_days + 1)
+        session.commit()
+    assert purge_retired_artifacts()["purged"] == 1 and not artifact.exists()
+    # 元数据永留：行还在，路径清空
+    with modeling_session() as session:
+        row = session.get(GovernedModel, model["id"])
+        assert row.model_path == ""
+
+
+def test_clustering_auto_k_profiles_and_script_reproducible(modeling_session):
+    task, _ = create_task(make_task_payload(
+        title="产线运行模式聚类",
+        taskType="clustering",
+        targetField="",
+        targetLabel="",
+        goal="按运行模式给工序记录自动分群",
+        candidates=["kmeans"],
+    ))
+    response = train_task(task["id"], "auto", ["kmeans"], None, "zhangsan")
+    item = response["results"]["models"][0]
+    k = item["tuning"]["bestParams"]["n_clusters"]
+    assert 2 <= k <= 8, "k 必须来自轮廓系数自动选择范围"
+    profiles = item["explanation"]["clusterProfiles"]
+    assert profiles, "聚类必须输出群画像"
+    assert profiles[0]["drivers"], "画像需含区分特征"
+    assert abs(sum(p["share"] for p in profiles) - 100.0) < 1.5
+    script = item["explanation"]["script"]
+    compile(script, "<modeling-script>", "exec")
+    assert "SQL = " in script and "hyperparams" in script
+
+
+def test_linear_model_exposes_coefficient_importance(modeling_session):
+    task, _ = create_task(make_task_payload(
+        title="停机时长回归",
+        taskType="regression",
+        targetField="停机时长",
+        targetLabel="停机时长",
+        goal="预测停机时长",
+        features=["工序", "产线", "计划数量"],
+        candidates=["linear"],
+    ))
+    response = train_task(task["id"], "auto", ["linear"], None, "zhangsan")
+    item = response["results"]["models"][0]
+    assert item["featureImportance"], "线性模型需给出系数归一化重要度解释"
+
+
+def test_run_prediction_returns_business_card(modeling_session):
+    from app.modeling.service import run_prediction
+
+    task, _ = create_task(make_task_payload(candidates=["tree"]))
+    train_task(task["id"], "auto", ["tree"], None, "zhangsan")
+    model = list_models()[0]
+    review_model(model["id"], "pass", "指标达标", "admin")
+    publish_model(model["id"], "admin")
+
+    card = run_prediction(task["id"], "zhangsan")
+    assert card["kind"] == "prediction" and card["scope"] == "published"
+    assert card["sampleCount"] > 0 and "高风险" in card["headline"]
+    assert card["stats"]["share"] is not None
+    assert isinstance(card["factors"], list)
+
+    # 个人档同样可预测（owner 本人），scope 标注个人
+    task2, _ = create_task(make_task_payload(title="个人档预测", candidates=["tree"]))
+    train_task(task2["id"], "auto", ["tree"], None, "lisi")
+    personal_card = run_prediction(task2["id"], "lisi")
+    assert personal_card["scope"] == "personal"
+
+
+def test_thorough_level_uses_flaml_with_grid_fallback(modeling_session, monkeypatch):
+    task, _ = create_task(make_task_payload(title="FLAML 深入搜索", candidates=["forest"]))
+    response = train_task(task["id"], "auto", ["forest"], None, "zhangsan", optimization_level="thorough")
+    tuning = response["results"]["models"][0]["tuning"]
+    assert tuning.get("engine") == "flaml", "已安装 FLAML 时 thorough 档应走限时搜索"
+    assert tuning["searched"] is True and tuning["timeBudgetSeconds"] == 20
+    assert tuning["candidateCount"] >= 1
+
+    # FLAML 不可用时静默回退网格档，训练不失败
+    from app.modeling import engine as modeling_engine
+    monkeypatch.setattr(modeling_engine, "_flaml_search", lambda *_args, **_kwargs: None)
+    task2, _ = create_task(make_task_payload(title="FLAML 回退验证", candidates=["forest"]))
+    response2 = train_task(task2["id"], "auto", ["forest"], None, "zhangsan", optimization_level="thorough")
+    tuning2 = response2["results"]["models"][0]["tuning"]
+    assert "engine" not in tuning2 and tuning2["searched"] is True
+
+
+def test_prediction_trace_and_drift_backfill(modeling_session):
+    from app.modeling.service import drift_report, run_prediction
+
+    task, _ = create_task(make_task_payload(candidates=["tree"]))
+    train_task(task["id"], "auto", ["tree"], None, "zhangsan")
+    model = list_models()[0]
+    review_model(model["id"], "pass", "指标达标", "admin")
+    publish_model(model["id"], "admin")
+    run_prediction(task["id"], "zhangsan")
+
+    report = drift_report("tenant-default")
+    assert report["summary"]["models"] == 1
+    item = report["items"][0]
+    assert item["traces"] >= 1 and item["filled"] >= 1, "实际值应自动回填"
+    assert item["avgDeviation"] is not None
+    assert item["status"] in {"normal", "watch", "drift"}
