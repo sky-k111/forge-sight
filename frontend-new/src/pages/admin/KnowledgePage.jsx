@@ -52,7 +52,7 @@ function SourceBindingPicker({ sources, value, onChange }) {
       >
         <SourceTypeMark type={selected?.type} className="h-7 w-7 rounded-tag" imageClassName="h-[18px] w-[18px]" />
         <span className="min-w-0 flex-1 leading-tight">
-          <span className="block text-[10px] font-medium text-faint">当前绑定数据源</span>
+          <span className="block text-[11px] font-medium text-faint">当前绑定数据源</span>
           <span className="mt-0.5 block truncate text-xs font-semibold text-ink">{selected?.name ?? "未选择数据源"}</span>
         </span>
         <Icon
@@ -68,7 +68,7 @@ function SourceBindingPicker({ sources, value, onChange }) {
           aria-label="可用数据源"
           className="absolute right-0 top-[calc(100%+6px)] z-40 min-w-full overflow-hidden rounded-control border border-line bg-surface p-1 shadow-[0_16px_40px_rgb(18_29_38_/12%)]"
         >
-          <div className="border-b border-line px-2.5 py-2 text-[10px] font-semibold tracking-wide text-faint">选择物理绑定环境</div>
+          <div className="border-b border-line px-2.5 py-2 text-[11px] font-semibold tracking-wide text-faint">选择物理绑定环境</div>
           <div className="max-h-64 overflow-y-auto py-1">
             {sources.map((source) => {
               const active = source.id === selected?.id;
@@ -290,7 +290,7 @@ export default function KnowledgePage() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 rounded-tag border border-line bg-surface-2 px-2 py-1 text-[10px] font-semibold text-muted" title={semanticIndex?.latestJob?.reason ?? "当前数据源语义索引状态"}>
+          <span className="inline-flex items-center gap-1.5 rounded-tag border border-line bg-surface-2 px-2 py-1 text-[11px] font-semibold text-muted" title={semanticIndex?.latestJob?.reason ?? "当前数据源语义索引状态"}>
             <span className={cn("h-1.5 w-1.5 rounded-full", semanticIndex?.status === "failed" ? "bg-red" : semanticIndex?.status === "succeeded" ? "bg-green" : "bg-amber")} />
             {semanticIndex?.statusLabel ?? "读取索引状态"}
             {semanticIndex?.status === "succeeded" && semanticIndex.documents > 0 ? ` · ${semanticIndex.documents} 项` : ""}
@@ -515,16 +515,16 @@ function MetricCandidates({ items, busyId, onGenerate, generating, onReview }) {
               </div>
               <div className="grid gap-3 p-4">
                 <div>
-                  <span className="text-[10px] font-semibold tracking-wide text-faint">业务定义</span>
+                  <span className="text-[11px] font-semibold tracking-wide text-faint">业务定义</span>
                   <p className="mt-1 text-xs leading-5 text-ink-2">{canonical.definition || "未提供定义"}</p>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <div className="rounded-control border border-line bg-surface-2 p-2.5">
-                    <span className="text-[10px] font-semibold text-muted">统一业务公式</span>
+                    <span className="text-[11px] font-semibold text-muted">统一业务公式</span>
                     <code className="mt-1 block break-words font-mono text-[11px] leading-5 text-ink">{canonical.formula || "—"}</code>
                   </div>
                   <div className="rounded-control border border-line bg-surface-2 p-2.5">
-                    <span className="text-[10px] font-semibold text-muted">当前数据源物理公式</span>
+                    <span className="text-[11px] font-semibold text-muted">当前数据源物理公式</span>
                     <code className="mt-1 block break-words font-mono text-[11px] leading-5 text-ink">{binding.physicalFormula || "—"}</code>
                   </div>
                 </div>
@@ -549,7 +549,7 @@ function MetricCandidates({ items, busyId, onGenerate, generating, onReview }) {
               </div>
               {candidate.status === "pending" && (
                 <div className="flex items-center justify-between gap-3 border-t border-line bg-surface-2 px-4 py-3">
-                  <span className="text-[10px] text-faint">接受 ≠ 发布；仍需审核统一口径或验证当前数据源绑定</span>
+                  <span className="text-[11px] text-faint">接受 ≠ 发布；仍需审核统一口径或验证当前数据源绑定</span>
                   <div className="flex gap-2">
                     <Button size="sm" onClick={() => onReview(candidate, false)} disabled={isBusy}>驳回</Button>
                     <Button size="sm" variant="primary" onClick={() => onReview(candidate, true)} disabled={!valid || isBusy}>
@@ -592,7 +592,7 @@ function MetricDetail({ metric, onEdit, onDelete, onPublish }) {
           <StatusPill tone={metric.bindingStatus === "已验证" ? "green" : "amber"}>{metric.bindingStatus}</StatusPill>
         </div>
         <code className="mt-2 block break-words font-mono text-[11px] leading-relaxed text-ink">{metric.physicalFormula || "尚未配置物理公式"}</code>
-        <p className="mt-1.5 text-[10px] text-faint">{metric.sourceName || "当前数据源"} · {metric.sqlDialect || "未指定方言"} · 绑定版本 v{metric.bindingVersion ?? "—"}</p>
+        <p className="mt-1.5 text-[11px] text-faint">{metric.sourceName || "当前数据源"} · {metric.sqlDialect || "未指定方言"} · 绑定版本 v{metric.bindingVersion ?? "—"}</p>
       </div>
       <div className="grid gap-2 border-t border-line pt-3 text-xs">
         {[
@@ -707,7 +707,7 @@ function MetricEditorModal({ metric, sourceId, onClose, onSaved }) {
         </label>
         <div className="rounded-control border border-line bg-surface-2 p-3">
           <span className="text-[11px] font-semibold text-muted">当前数据源物理绑定</span>
-          <p className="mt-0.5 text-[10px] text-faint">物理公式、表和时间字段仅影响当前选中的数据源，不会覆盖其他工厂。</p>
+          <p className="mt-0.5 text-[11px] text-faint">物理公式、表和时间字段仅影响当前选中的数据源，不会覆盖其他工厂。</p>
           <label className="mt-3 grid gap-1.5 text-[11px] font-semibold text-muted">
             物理计算表达式 *
             <input className={cn(inputClass, "font-mono")} value={form.physicalFormula} onChange={set("physicalFormula")} placeholder="如：SUM(good_qty) / NULLIF(SUM(input_qty), 0) * 100" />

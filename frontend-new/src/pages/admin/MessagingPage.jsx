@@ -19,7 +19,7 @@ export default function MessagingPage() {
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="grid h-8 w-8 shrink-0 place-items-center rounded-control bg-primary-soft text-primary"><Icon name="send" size={16} /></span>
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold tracking-tight text-ink">消息与投递</h2>
+            <h2 className="text-sm font-semibold tracking-tight text-ink">发布与投递</h2>
             <p className="mt-0.5 text-[11px] text-muted">站内公告的创建发布，与周报、告警的邮件投递状态集中管理</p>
           </div>
         </div>

@@ -61,10 +61,9 @@ export default function TenantManagementPage() {
         </div>
       </section>
 
-      <div className="grid grid-cols-2 divide-y divide-line overflow-hidden rounded-panel border border-line bg-paper sm:grid-cols-4 sm:divide-y-0 sm:divide-x">
+      <div className="grid grid-cols-2 divide-y divide-line overflow-hidden rounded-panel border border-line bg-paper sm:grid-cols-3 sm:divide-y-0 sm:divide-x">
         <Fact label="成员" value={data.members.length} note={data.authenticated ? `${enabledCount} 人已启用` : "登录后可见"} />
         <Fact label="数据源" value={data.sources.length} note="物理连接隔离" />
-        <Fact label="隔离层级" value="企业 + 数据源" note="两级边界" />
         <Fact label="执行模式" value="只读" note="分析执行边界" />
       </div>
 
@@ -127,7 +126,7 @@ export default function TenantManagementPage() {
                 ))}
               </div>
             ) : <p className="px-4 py-6 text-center text-[11px] text-muted">当前企业尚未接入数据源。</p>}
-            <p className="border-t border-line bg-surface-2 px-4 py-2.5 text-[10px] leading-5 text-faint">切换企业空间后，前端会清除当前会话缓存并重新加载，避免把上一个企业的调查状态带入新空间。</p>
+            <p className="border-t border-line bg-surface-2 px-4 py-2.5 text-[11px] leading-5 text-faint">切换企业空间后，前端会清除当前会话缓存并重新加载，避免把上一个企业的调查状态带入新空间。</p>
           </section>
 
           <section className="overflow-hidden rounded-panel border border-line bg-surface">

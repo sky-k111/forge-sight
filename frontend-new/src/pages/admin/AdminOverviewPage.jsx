@@ -38,7 +38,15 @@ export default function AdminOverviewPage() {
   const load = () => {
     setError(null);
     setData(null);
-    getAdminOverview().then(setData).catch(setError);
+    getAdminOverview()
+      .then((payload) => {
+        setData(payload);
+        // 与侧栏共享同一份待办快照，避免两处显示不同步的治理状态
+        window.dispatchEvent(
+          new CustomEvent("forgesight:governance-changed", { detail: { todo: payload?.todo ?? [] } }),
+        );
+      })
+      .catch(setError);
   };
   useEffect(load, []);
 
@@ -74,15 +82,15 @@ export default function AdminOverviewPage() {
       </section>
 
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]">
-        <div className="grid min-w-0 content-start gap-4">
-          <section className="overflow-hidden rounded-panel border border-line bg-surface">
-            <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
-              <div className="flex items-baseline gap-2">
-                <h3 className="text-sm font-semibold text-ink">待处理事项</h3>
-                <span className="font-mono text-[11px] text-faint">{data.queue.length} 项</span>
-              </div>
-              <span className="text-[11px] text-faint">按优先级排序</span>
-            </header>
+        {/* 左侧一个完整的治理队列工作区：待办 + 最近活动，分区线组织 */}
+        <section className="min-w-0 overflow-hidden rounded-panel border border-line bg-surface">
+          <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+            <div className="flex items-baseline gap-2">
+              <h3 className="text-sm font-semibold text-ink">治理队列</h3>
+              <span className="font-mono text-[11px] text-faint">{data.queue.length} 项待办</span>
+            </div>
+            <span className="text-[11px] text-faint">按优先级排序</span>
+          </header>
             {data.queue.length ? (
               <div>
                 {groupOrder.map((status) => {
@@ -120,13 +128,11 @@ export default function AdminOverviewPage() {
                 <p className="text-[11px] text-muted">没有待审核指标、待映射字段或待复核拦截记录。</p>
               </div>
             )}
-          </section>
-
-          <section className="overflow-hidden rounded-panel border border-line bg-surface">
-            <h3 className="flex items-center justify-between border-b border-line px-4 py-3 text-sm font-semibold text-ink">
+          <div className="border-t border-line">
+            <h4 className="flex items-center justify-between bg-surface-2/60 px-4 py-1.5 text-[11px] font-semibold text-muted">
               最近治理活动
-              <span className="text-[11px] font-normal text-faint">只读审计 · 最近 {activity.length} 条</span>
-            </h3>
+              <span className="font-normal text-faint">只读审计 · 最近 {activity.length} 条</span>
+            </h4>
             {activity.length ? (
               <div className="divide-y divide-line/70">
                 {activity.map((item, index) => (
@@ -139,12 +145,15 @@ export default function AdminOverviewPage() {
                 ))}
               </div>
             ) : <p className="px-4 py-6 text-center text-[11px] text-muted">暂无审计记录。</p>}
-          </section>
-        </div>
+          </div>
+        </section>
 
-        <aside className="grid min-w-0 content-start gap-4">
+        {/* 右侧合并为一个治理状态面板：健康、覆盖、新鲜度用分区线组织 */}
+        <aside className="min-w-0">
           <section className="overflow-hidden rounded-panel border border-line bg-surface">
-            <h3 className="border-b border-line px-4 py-2.5 text-[11px] font-semibold text-muted">治理健康</h3>
+            <h3 className="border-b border-line px-4 py-3 text-sm font-semibold text-ink">治理状态</h3>
+            <div className="border-b border-line pb-1">
+            <h4 className="px-4 pb-1 pt-2.5 text-[11px] font-semibold text-muted">治理健康</h4>
             <div className="divide-y divide-line/70">
               {data.health.map((item) => {
                 const pct = percentOf(item.value);
@@ -166,16 +175,16 @@ export default function AdminOverviewPage() {
                           <span className={cn("block h-full rounded-full", healthBars[item.tone] ?? "bg-primary")} style={{ width: `${pct}%` }} />
                         </span>
                       )}
-                      <small className="mt-1 block truncate text-[10px] text-faint">{item.note}</small>
+                      <small className="mt-1 block truncate text-[11px] text-faint">{item.note}</small>
                     </span>
                   </button>
                 );
               })}
             </div>
-          </section>
+          </div>
 
-          <section className="overflow-hidden rounded-panel border border-line bg-surface">
-            <h3 className="border-b border-line px-4 py-2.5 text-[11px] font-semibold text-muted">主题语义覆盖</h3>
+          <div className="border-b border-line pb-1">
+            <h4 className="px-4 pb-1 pt-2.5 text-[11px] font-semibold text-muted">主题语义覆盖</h4>
             <div className="grid gap-2.5 px-4 py-3">
               {data.topics.length ? data.topics.map((item) => (
                 <div key={item.name}>
@@ -189,10 +198,10 @@ export default function AdminOverviewPage() {
                 </div>
               )) : <p className="text-[11px] text-muted">尚未配置业务主题。</p>}
             </div>
-          </section>
+          </div>
 
-          <section className="overflow-hidden rounded-panel border border-line bg-surface">
-            <h3 className="border-b border-line px-4 py-2.5 text-[11px] font-semibold text-muted">数据源新鲜度</h3>
+          <div className="pb-1">
+            <h4 className="px-4 pb-1 pt-2.5 text-[11px] font-semibold text-muted">数据源新鲜度</h4>
             {sources.length ? (
               <div className="divide-y divide-line/70">
                 {sources.map((src) => (
@@ -205,7 +214,7 @@ export default function AdminOverviewPage() {
                     <span className="shrink-0 text-muted"><Icon name="database" size={15} /></span>
                     <span className="min-w-0 flex-1">
                       <strong className="block truncate text-[13px] font-medium text-ink">{src.name}</strong>
-                      <small className="mt-0.5 block truncate text-[10px] text-faint">
+                      <small className="mt-0.5 block truncate text-[11px] text-faint">
                         {sourceTypeLabels[src.type] ?? src.type} · {src.tables} 张表 · 扫描 {src.lastScan || "—"}
                       </small>
                     </span>
@@ -214,6 +223,7 @@ export default function AdminOverviewPage() {
                 ))}
               </div>
             ) : <p className="px-4 py-6 text-center text-[11px] text-muted">尚未接入数据源。</p>}
+          </div>
           </section>
         </aside>
       </div>

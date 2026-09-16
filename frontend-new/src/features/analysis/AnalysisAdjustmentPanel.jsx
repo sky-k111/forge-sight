@@ -91,7 +91,7 @@ export default function AnalysisAdjustmentPanel({
       <aside className="relative flex h-full w-[430px] max-w-[94vw] flex-col border-l border-line bg-surface shadow-[-18px_0_48px_rgb(24_34_45/12%)] motion-soft-rise">
         <header className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div className="min-w-0">
-            <span className="text-[10px] font-semibold tracking-wide text-primary">新分析方案</span>
+            <span className="text-[11px] font-semibold tracking-wide text-primary">新分析方案</span>
             <h2 className="mt-1 text-[17px] font-semibold tracking-tight text-ink">调整分析条件</h2>
             <p className="mt-1 text-xs leading-relaxed text-muted">原分析保持不变，仅对你修改的条件重新计算。</p>
           </div>

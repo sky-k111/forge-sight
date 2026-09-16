@@ -369,7 +369,7 @@ export default function ResourcesPage() {
             <>
               <button type="button" aria-hidden tabIndex={-1} className="fixed inset-0 z-10 cursor-default" onClick={() => setSourceMenuOpen(false)} />
               <div role="listbox" aria-label="切换数据源" className="motion-soft-rise absolute left-0 top-full z-20 mt-2 w-72 rounded-panel border border-line bg-surface p-1.5 shadow-card-hover">
-                <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-faint">切换数据源</div>
+                <div className="px-2 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-faint">切换数据源</div>
                 {sources.map((source) => {
                   const active = source.id === currentSource?.id;
                   return (
@@ -479,7 +479,7 @@ export default function ResourcesPage() {
                       <strong className="block text-body font-semibold text-ink">{meta.label}</strong>
                       <code className="block font-mono text-[10px] text-faint">{meta.type}</code>
                       <small className="mt-1 block text-[11px] leading-relaxed text-muted">{TYPE_DESCRIPTIONS[meta.type]}</small>
-                      <span className={cn("mt-2 inline-flex rounded-tag border px-1.5 py-px text-[9px] font-semibold", meta.maturity === "stable" ? "border-green/20 bg-green-soft text-green" : "border-amber/25 bg-amber-soft text-amber")}>{meta.maturity === "stable" ? "稳定适配" : "Beta 适配"}</span>
+                      <span className={cn("mt-2 inline-flex rounded-tag border px-1.5 py-px text-[10px] font-semibold", meta.maturity === "stable" ? "border-green/20 bg-green-soft text-green" : "border-amber/25 bg-amber-soft text-amber")}>{meta.maturity === "stable" ? "稳定适配" : "Beta 适配"}</span>
                     </span>
                     <Icon name="chevron" size={14} className="mt-1 shrink-0 text-faint transition group-hover:translate-x-0.5 group-hover:text-primary" />
                   </button>
@@ -544,13 +544,13 @@ export default function ResourcesPage() {
                     <label className="grid gap-1.5 text-[11px] font-semibold text-muted sm:col-span-2">
                       密码
                       <input type="password" value={form.password} onChange={updateForm("password")} placeholder={editingId != null ? "留空表示不修改" : ""} className={cn(inputClass, "font-mono")} />
-                      <small className="text-[10px] font-normal text-faint">密码仅保存在平台服务端，接口永不回传明文。</small>
+                      <small className="text-[11px] font-normal text-faint">密码仅保存在平台服务端，接口永不回传明文。</small>
                     </label>
                   </div>
                   <label className="grid gap-1.5 text-[11px] font-semibold text-muted">
                     Schema 范围 <span className="font-normal text-faint">（可选，多个用逗号分隔）</span>
                     <input value={form.schemas} onChange={updateForm("schemas")} placeholder={form.type === "postgresql" ? "public, manufacturing" : form.type === "sqlserver" ? "dbo" : "留空自动发现"} className={cn(inputClass, "font-mono")} />
-                    <small className="text-[10px] font-normal text-faint">留空时连接成功后自动发现非系统 Schema；扫描和白名单均保留 schema.table 身份。</small>
+                    <small className="text-[11px] font-normal text-faint">留空时连接成功后自动发现非系统 Schema；扫描和白名单均保留 schema.table 身份。</small>
                   </label>
                   {form.type === "sqlserver" && (
                     <div className="grid gap-3 sm:grid-cols-2">
@@ -898,6 +898,7 @@ function SchemaGraph({ tables, relations, selected, onSelect, expanded = false }
   const toneForTopic = (topic) => ({ 生产: "blue", 质量: "teal", 设备: "amber", 库存: "violet" }[topic] ?? "blue");
   const nodes = (tables ?? []).slice(0, positions.length).map((table, index) => ({
     id: tableIdentity(table),
+    name: table.name ?? tableIdentity(table),
     label: table.cn || table.name,
     x: positions[index][0],
     y: positions[index][1],
@@ -952,14 +953,15 @@ function SchemaGraph({ tables, relations, selected, onSelect, expanded = false }
             )}
           >
             <span className={cn("shrink-0", nodeTones[node.tone] ?? nodeTones.blue)}><Icon name="database" size={14} /></span>
+            {/* 第一行业务中文名；第二行物理短表名（去掉同质 schema 前缀），完整身份放 tooltip */}
             <span className="min-w-0">
-              <strong className="block truncate text-xs font-semibold text-ink">{node.label}</strong>
-              <small title={node.id} className="block truncate font-mono text-[9px] text-faint">{node.id}</small>
+              <strong className={cn("block text-xs font-semibold text-ink", expanded ? "line-clamp-2" : "truncate")}>{node.label}</strong>
+              <small title={node.id} className={cn("block font-mono text-[10px] text-faint", expanded ? "line-clamp-2" : "truncate")}>{node.name}</small>
             </span>
           </button>
         ))}
         {(tables?.length ?? 0) > positions.length && (
-          <span className="absolute bottom-1 right-2 text-[9px] text-faint">当前展示前 {positions.length} 张表</span>
+          <span className="absolute bottom-1 right-2 text-[11px] text-faint">当前展示前 {positions.length} 张表</span>
         )}
       </div>
     </div>

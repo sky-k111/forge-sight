@@ -75,7 +75,7 @@ function ProviderOption({ provider, selected, disabled = false, onSelect }) {
           {isDingTalk ? "钉钉" : "飞书"}
           <span
             className={cn(
-              "rounded-full px-1.5 py-0.5 text-[9px] font-medium",
+              "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
               disabled ? "bg-surface-2 text-faint" : "bg-green-500/10 text-green-700"
             )}
           >

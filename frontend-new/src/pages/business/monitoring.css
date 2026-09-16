@@ -448,14 +448,19 @@
 .monitoring-loading,
 .monitoring-empty {
   display: flex;
-  min-height: 270px;
   align-items: center;
   justify-content: center;
   gap: 12px;
   padding: 32px 24px;
   color: var(--color-muted);
 }
+/* 加载表格时维持完整工作区高度，避免布局跳动 */
+.monitoring-loading {
+  min-height: 270px;
+}
+/* 空状态收紧，不再占满首屏 */
 .monitoring-empty {
+  min-height: 180px;
   flex-direction: column;
   gap: 9px;
   text-align: center;

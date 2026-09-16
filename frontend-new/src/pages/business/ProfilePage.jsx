@@ -186,7 +186,7 @@ export default function ProfilePage() {
         <Card className="profile-card profile-llm-card overflow-hidden xl:col-span-2">
           <div className="profile-llm-card__header">
             <div className="min-w-0">
-              <p className="text-[10px] font-semibold tracking-[0.08em] text-primary">模型服务</p>
+              <p className="text-[11px] font-semibold tracking-[0.08em] text-primary">模型服务</p>
               <h3 className="mt-1 text-base font-semibold tracking-tight text-ink">模型配置</h3>
               <p className="mt-1 text-[11px] leading-5 text-muted">保存多个模型服务，发起分析时可按次选择。</p>
             </div>
@@ -504,7 +504,7 @@ function BindingRow({ provider, binding, busy, onBind, onUnbind }) {
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2"><h4 className="text-sm font-semibold text-ink">{meta.label}</h4><StatusPill tone={bound ? "green" : "gray"}>{bound ? "已绑定" : "未绑定"}</StatusPill></div>
         <p className="mt-1 truncate text-[11px] text-muted">{detail}</p>
-        <p className="mt-1 truncate text-[10px] text-faint">{meta.description}</p>
+        <p className="mt-1 truncate text-[11px] text-faint">{meta.description}</p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {bound && onUnbind && <Button size="sm" variant="ghost" onClick={() => onUnbind(provider)} disabled={busyThis}>解绑</Button>}

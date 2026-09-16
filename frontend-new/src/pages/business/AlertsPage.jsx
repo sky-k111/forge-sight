@@ -128,7 +128,7 @@ export default function AlertsPage() {
     <PageFrame className="monitoring-page">
       <header className="monitoring-toolbar" aria-label="异常监测工具栏">
         <div className="monitoring-toolbar__main">
-          <h2>异常监测</h2>
+          <h2>异常记录</h2>
           <span className="monitoring-toolbar__divider" aria-hidden="true" />
           <label className="monitoring-source">
             <Icon name="database" size={14} />
