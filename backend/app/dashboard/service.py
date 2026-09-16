@@ -6,6 +6,7 @@ import json
 import logging
 from datetime import date, datetime, timedelta
 from typing import Any
+from app.knowledge.metric_semantics import metric_semantics
 
 from fastapi import HTTPException
 
@@ -158,6 +159,7 @@ def _catalog(session, source_id: int, tenant_id: str) -> list[dict[str, Any]]:
             "kinds": kinds,
             "version": metric.version,
             "bindingVersion": binding.version,
+            "semantics": metric_semantics(binding.physical_formula, binding.sql_dialect),
         })
     return result
 
@@ -216,6 +218,8 @@ def save_config(source_id: int, tenant_id: str, user_id: str, config: DashboardC
                     raise HTTPException(status_code=422, detail=f"组件 {widget.id} 使用的指标当前不可用")
                 if widget.kind == "rank" and widget.dimension not in metric["dimensions"]:
                     raise HTTPException(status_code=422, detail=f"组件 {widget.id} 使用的维度当前不可用")
+                if widget.appearance.chartType in {"donut", "pie", "treemap"} and not metric["semantics"]["compositionAllowed"]:
+                    raise HTTPException(status_code=422, detail=f"组件 {widget.id} 的指标不可加总，不能生成构成图")
         row = session.get(DashboardPreference, (tenant_id, user_id, source.id))
         current_version = row.version if row else 0
         if config.version != current_version:
@@ -270,6 +274,7 @@ def _context(session, source: DataSource, tenant_id: str) -> dict[str, Any]:
             "dimensions": [item for item in declared_dimensions if item in dimension_bindings],
             "dimensionBindings": dimension_bindings,
             "unit": _unit(metric), "version": metric.version, "bindingVersion": binding.version,
+            "semantics": metric_semantics(binding.physical_formula, binding.sql_dialect),
             "fieldMappings": [{"semanticField": item.semantic_field, "tableName": item.table_name, "fieldName": item.field_name} for item in field_rows],
         })
     tables = []

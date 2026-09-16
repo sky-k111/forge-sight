@@ -263,6 +263,17 @@ def test_pdf_trend_compare_draws_two_line_series():
     assert len(line.data) == 2
 
 
+def test_pdf_comparison_missing_values_are_gaps_for_lines_and_columns():
+    content = _report_content()
+    for kind, chart_class in (("line", HorizontalLineChart), ("column", VerticalBarChart)):
+        spec = {"key": kind, "type": kind, "title": "双期产量", "description": "缺失不补零", "unit": "件", "categoryLabel": "日期", "valueLabel": "产量", "comparisonLabel": "上一周期", "points": [{"label": "2026-08-08", "value": 10, "previousValue": 8}, {"label": "2026-08-09", "value": 11, "previousValue": None}], "evidenceArtifactIds": ["artifact-output"], "colorRole": "production"}
+        chart = next(item for item in _report_chart(ChartSpec.model_validate(spec)).contents if isinstance(item, chart_class))
+        assert list(chart.data[1]) == [8, None]
+        content["charts"] = [spec]
+        assert render_pdf_bytes(content).startswith(b"%PDF")
+        assert render_excel_bytes(content).startswith(b"PK")
+
+
 def test_pdf_exports_every_agent_chart_instead_of_only_the_first_one():
     content = _report_content()
     content["charts"] = [

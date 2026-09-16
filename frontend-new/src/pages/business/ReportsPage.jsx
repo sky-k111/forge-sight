@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
 import { reportListSummary } from "../../lib/narrative";
@@ -60,6 +60,15 @@ function defaultRange() {
   return { start: dateValue(start), end: dateValue(end) };
 }
 
+function currentWeekRange() {
+  const now = new Date();
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  return `${dateValue(monday).slice(5)} ~ ${dateValue(sunday).slice(5)}`;
+}
+
 export default function ReportsPage() {
   const navigate = useNavigate();
   const [reports, setReports] = useState(null);
@@ -67,21 +76,41 @@ export default function ReportsPage() {
   const [templates, setTemplates] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
   const [sourceId, setSourceId] = useState(null);
-  const [filter, setFilter] = useState("all");
-  const [search, setSearch] = useState("");
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [advanced, setAdvanced] = useState({
-    periodFrom: "",
-    periodTo: "",
-    reportType: "",
-    scope: "",
-    severity: "",
-    read: "",
+  // 筛选状态以 URL 为准（与异常监测一致）：刷新、后退、分享链接都不丢
+  const [params, setParams] = useSearchParams();
+  const filter = params.get("status") || "all";
+  const search = params.get("q") || "";
+  const advanced = useMemo(() => ({
+    periodFrom: params.get("from") || "",
+    periodTo: params.get("to") || "",
+    reportType: params.get("type") || "",
+    scope: params.get("scope") || "",
+    severity: params.get("severity") || "",
+    read: params.get("read") || "",
+  }), [params]);
+  const [advancedOpen, setAdvancedOpen] = useState(() => Boolean(
+    advanced.periodFrom || advanced.periodTo || advanced.reportType || advanced.scope || advanced.severity || advanced.read,
+  ));
+  const updateParams = (changes) => setParams((current) => {
+    const next = new URLSearchParams(current);
+    Object.entries(changes).forEach(([key, value]) => (value ? next.set(key, String(value)) : next.delete(key)));
+    return next;
+  }, { replace: true });
+  const setFilter = (value) => updateParams({ status: value === "all" ? "" : value });
+  const setSearch = (value) => updateParams({ q: value });
+  const setAdvanced = (next) => updateParams({
+    type: next.reportType,
+    scope: next.scope,
+    severity: next.severity,
+    read: next.read,
+    from: next.periodFrom,
+    to: next.periodTo,
   });
   const [downloadBusy, setDownloadBusy] = useState("");
   const [downloadNotice, setDownloadNotice] = useState("");
   const [error, setError] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [railOpen, setRailOpen] = useState(false);
 
   const load = async () => {
     setError(null);
@@ -200,14 +229,30 @@ export default function ReportsPage() {
     (item) => !TERMINAL.has(item.status),
   ).length;
   const scopeOptions = reportScopeOptions(reports);
+  const enabledSubscriptions = subscriptions.filter((item) => item.enabled).length;
+  const latestPublished = reports
+    .filter((item) => item.status === "published")
+    .sort((a, b) => String(b.periodEnd ?? "").localeCompare(String(a.periodEnd ?? "")))[0];
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-canvas">
+      {/* 页头即状态：结论、本周期、最近发布合成一行，不再另设状态横条 */}
       <header className="flex h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line bg-paper px-3">
-        <div className="flex min-w-0 items-baseline gap-2">
-          <h2 className="text-sm font-semibold tracking-tight text-ink">周报中心</h2>
-          <span className="hidden truncate text-[11px] text-faint md:block">正文、证据与导出文件对应同一冻结版本</span>
-        </div>
+        <h2 className="text-sm font-semibold tracking-tight text-ink">本周期报告</h2>
+        <span className="hidden h-4 w-px bg-line md:block" aria-hidden="true" />
+        <p className="hidden min-w-0 flex-1 truncate text-xs text-muted md:block">
+          <strong className={cn("font-semibold", attentionCount ? "text-amber" : "text-ink")}>
+            {attentionCount ? `${attentionCount} 份报告需处理` : "本周期运行正常"}
+          </strong>
+          <span className="mx-2 text-line-strong">·</span>
+          本周期 <code className="font-mono text-[11px] text-ink-2">{currentWeekRange()}</code>
+          {latestPublished && (
+            <>
+              <span className="mx-2 text-line-strong">·</span>
+              最近发布「<span className="text-ink-2">{latestPublished.title}</span>」
+            </>
+          )}
+        </p>
         <div className="ml-auto flex min-w-0 flex-wrap items-center gap-1.5">
           <label className="relative flex items-center">
             <Icon name="database" size={13} className="pointer-events-none absolute left-2 text-faint" />
@@ -230,28 +275,21 @@ export default function ReportsPage() {
         </div>
       </header>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-line bg-surface-2/60 px-3 py-1.5 text-[11px]">
-        <span className="font-semibold text-ink">{attentionCount ? `${attentionCount} 份报告需处理` : "本周期运行状态正常"}</span>
-        <span className="hidden h-3 w-px bg-line sm:block" />
-        <CountChip label="生成中" value={runningCount} />
-        <CountChip label="需关注" value={attentionCount} tone={attentionCount ? "amber" : "muted"} />
-        <CountChip label="已发布" value={publishedCount} tone="teal" />
-        <span className="ml-auto flex items-center gap-1.5 text-faint">
-          <i className="h-1.5 w-1.5 shrink-0 rounded-full bg-teal" aria-hidden="true" />
-          自动送达 {subscriptions.filter((item) => item.enabled).length} 个订阅 · 仅发送已发布版本
-        </span>
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line bg-paper px-3 py-2">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 xl:flex-row">
+        {/* 筛选与列表合并为一个工作区面板 */}
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-panel border border-line bg-paper">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-2">
             <div className="flex items-center gap-0.5 rounded-control bg-surface-2 p-0.5">
               <FilterTab active={filter === "all"} onClick={() => setFilter("all")}>全部 {reports.length}</FilterTab>
               <FilterTab active={filter === "running"} onClick={() => setFilter("running")}>生成中 {runningCount}</FilterTab>
               <FilterTab active={filter === "attention"} onClick={() => setFilter("attention")}>需关注 {attentionCount}</FilterTab>
               <FilterTab active={filter === "published"} onClick={() => setFilter("published")}>已发布 {publishedCount}</FilterTab>
             </div>
-            <label className="relative ml-auto flex items-center">
+            <span className="ml-auto hidden items-center gap-1.5 text-[11px] text-faint sm:flex">
+              <i className="h-1.5 w-1.5 shrink-0 rounded-full bg-teal" aria-hidden="true" />
+              自动送达 {enabledSubscriptions} 个订阅 · 仅发送已发布版本
+            </span>
+            <label className="relative flex items-center">
               <Icon name="search" size={13} className="pointer-events-none absolute left-2.5 text-faint" />
               <input
                 value={search}
@@ -264,6 +302,16 @@ export default function ReportsPage() {
             <Button size="sm" variant="ghost" onClick={() => setAdvancedOpen((value) => !value)}>
               <Icon name="filter" size={13} />
               {advancedOpen ? "收起筛选" : "更多筛选"}
+            </Button>
+            <Button
+              size="sm"
+              variant={railOpen ? "secondary" : "ghost"}
+              className="hidden xl:inline-flex"
+              aria-pressed={railOpen}
+              onClick={() => setRailOpen((value) => !value)}
+            >
+              <Icon name="panel" size={13} />
+              模板与覆盖
             </Button>
           </div>
           {advancedOpen && (
@@ -427,10 +475,21 @@ export default function ReportsPage() {
           </div>
         </section>
 
-        <aside className="flex w-full shrink-0 flex-col border-t border-line bg-paper xl:w-[320px] xl:border-t-0 xl:border-l">
-          <div className="flex h-9 shrink-0 items-center justify-between border-b border-line px-3">
+        {/* 模板与覆盖降级为可折叠侧栏：≥1280px 由工具条开关控制，默认收起 */}
+        <aside className={cn("flex w-full shrink-0 flex-col overflow-hidden rounded-panel border border-line bg-paper xl:w-[320px]", !railOpen && "xl:hidden")}>
+          <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-line px-3">
             <h3 className="text-xs font-semibold text-ink">模板与覆盖</h3>
-            <span className="font-mono text-[10px] text-faint">{templates.length} 个可生成</span>
+            <span className="flex items-center gap-2">
+              <span className="font-mono text-[10px] text-faint">{templates.length} 个可生成</span>
+              <button
+                type="button"
+                aria-label="收起模板与覆盖"
+                onClick={() => setRailOpen(false)}
+                className="hidden h-5 w-5 cursor-pointer place-items-center rounded-tag text-muted transition-colors hover:bg-surface-2 hover:text-ink xl:grid"
+              >
+                <Icon name="chevron" size={12} className="rotate-180" />
+              </button>
+            </span>
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
             {templates.map((template) => {
@@ -446,7 +505,7 @@ export default function ReportsPage() {
                   <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", ready ? "bg-teal" : "bg-amber")} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-xs font-semibold text-ink">{template.name}</span>
-                    <span className="mt-0.5 block truncate text-[10px] text-muted">{template.audience}</span>
+                    <span className="mt-0.5 block truncate text-[11px] text-muted">{template.audience}</span>
                     <span className="mt-1.5 block h-1 overflow-hidden rounded-full bg-surface-3">
                       <i className={cn("block h-full rounded-full", ready ? "bg-teal" : "bg-amber")} style={{ width: `${score}%` }} />
                     </span>
@@ -587,10 +646,7 @@ function ReportCreateWizard({
       maxWidth={760}
     >
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
-        <div className="flex items-baseline gap-2">
-          <h3 className="text-sm font-semibold text-ink">创建一份可复核报告</h3>
-          <span className="hidden text-[10px] font-semibold tracking-[0.08em] text-faint sm:inline">CREATE REPORT</span>
-        </div>
+        <h3 className="text-sm font-semibold text-ink">创建一份可复核报告</h3>
         <button
           type="button"
           aria-label="关闭报告创建窗口"
@@ -837,17 +893,6 @@ function ReportCreateWizard({
         )}
       </div>
     </Modal>
-  );
-}
-
-function CountChip({ label, value, tone = "muted" }) {
-  const dot = tone === "teal" ? "bg-teal" : tone === "amber" ? "bg-amber" : "bg-line-strong";
-  return (
-    <span className="inline-flex items-center gap-1.5 text-muted">
-      <i className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot)} aria-hidden="true" />
-      <strong className="font-mono text-[12px] font-semibold text-ink">{value}</strong>
-      {label}
-    </span>
   );
 }
 

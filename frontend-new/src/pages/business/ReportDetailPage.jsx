@@ -138,7 +138,7 @@ export default function ReportDetailPage() {
               className="inline-flex min-h-11 items-center gap-2 rounded-control text-sm font-semibold text-muted hover:text-ink"
             >
               <Icon name="chevron" size={15} className="rotate-180" />
-              返回周报中心
+              返回本周期报告
             </button>
             <div className="flex flex-wrap gap-2">
               <DownloadButton

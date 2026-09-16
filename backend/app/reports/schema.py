@@ -58,6 +58,7 @@ class Metric(ReportContentModel):
     value: float
     unit: str = Field(min_length=1)
     previous_value: float | None = Field(default=None, alias="previousValue")
+    previous_label: str | None = Field(default=None, alias="previousLabel")
     change_rate: float | None = Field(default=None, alias="changeRate")
     trend: Literal["up", "down", "flat", "unknown"] = "unknown"
     evidence_artifact_ids: list[str] = Field(alias="evidenceArtifactIds")
@@ -107,6 +108,8 @@ class ChartSpec(ReportContentModel):
     width: Literal["half", "full"] = "half"
     height: Literal["compact", "standard", "focus"] = "standard"
     accent: Literal["default", "ocean", "teal", "violet", "graphite"] = "default"
+    composition_allowed: bool = Field(default=False, alias="compositionAllowed")
+    comparison_state: Literal["ready", "empty", "unavailable", "error"] | None = Field(default=None, alias="comparisonState")
 
 
 class Anomaly(ReportContentModel):

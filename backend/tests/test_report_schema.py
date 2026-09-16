@@ -423,6 +423,7 @@ def test_agent_selects_pareto_chart_and_calculates_cumulative_share():
                 "metricId": "defect_count",
                 "name": "不良数量",
                 "unit": "件",
+                "semantics": {"compositionAllowed": True},
             },
         },
     )
@@ -436,6 +437,7 @@ def test_agent_selects_pareto_chart_and_calculates_cumulative_share():
     )
 
     assert content["charts"][0]["type"] == "pareto"
+    assert content["charts"][0]["compositionAllowed"] is True
     assert content["charts"][0]["colorRole"] == "quality"
     assert content["charts"][0]["points"] == [
         {"label": "划伤", "value": 60.0, "secondaryValue": 60.0},
@@ -461,7 +463,7 @@ def test_agent_selects_pareto_from_a_concentrated_defect_distribution_without_a_
                 "columns": ["缺陷类型", "不良数量"],
                 "rows": [["划伤", 70], ["脏污", 15], ["尺寸", 8], ["色差", 4], ["其他", 3]],
             },
-            "metricResolution": {"metricId": "defect_count", "name": "不良数量", "unit": "件"},
+            "metricResolution": {"metricId": "defect_count", "name": "不良数量", "unit": "件", "semantics": {"compositionAllowed": True}},
         },
     )
 
@@ -651,7 +653,7 @@ def test_agent_requires_a_repeated_cross_dimension_before_using_heatmap():
                     ["L03", "三线", 4], ["L04", "四线", 2],
                 ],
             },
-            "metricResolution": {"metricId": "defect_count", "name": "不良数量", "unit": "件"},
+            "metricResolution": {"metricId": "defect_count", "name": "不良数量", "unit": "件", "semantics": {"compositionAllowed": True}},
         },
     )
 
@@ -678,7 +680,12 @@ def test_pareto_keeps_full_population_in_the_cumulative_share():
         confidence=95, artifact_ids_json=["artifact-quality"],
         content_json={
             "result": {"columns": ["缺陷类型", "不良数量"], "rows": rows},
-            "metricResolution": {"metricId": "defect_count", "name": "不良数量", "unit": "件"},
+            "metricResolution": {
+                "metricId": "defect_count",
+                "name": "不良数量",
+                "unit": "件",
+                "semantics": {"compositionAllowed": True},
+            },
         },
     )
 

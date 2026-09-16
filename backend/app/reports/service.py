@@ -460,7 +460,7 @@ def _composition_section(block, metric: dict) -> dict:
         "metrics": [metric["name"]],
         "dimensions": [dimension] if dimension else [],
         "question": question,
-        "presentation": block.model_dump(mode="json"),
+        "presentation": {**block.model_dump(mode="json"), "semantics": metric.get("semantics", {})},
     }
 
 
@@ -663,16 +663,16 @@ def _composition_compare_context(session, report: Report, version: ReportVersion
     }
 
 
-def _trend_previous_rows(compare_context: dict | None, section, presentation: dict) -> list | None:
+def _trend_previous_rows(compare_context: dict | None, section, presentation: dict) -> dict:
     if not compare_context or str(presentation.get("kind")) != "trend" or not presentation.get("compare"):
-        return None
+        return {"state": "unavailable"}
     block = compare_context["blocks"].get(str(section.code))
     if not block:
-        return None
-    from app.reports.composition import previous_period_rows
+        return {"state": "unavailable"}
+    from app.reports.composition import previous_period_result
 
     try:
-        return previous_period_rows(
+        return previous_period_result(
             compare_context["source_id"],
             compare_context["tenant_id"],
             compare_context["user_id"],
@@ -681,7 +681,7 @@ def _trend_previous_rows(compare_context: dict | None, section, presentation: di
             compare_context["period_end"],
         )
     except Exception:
-        return None
+        return {"state": "error"}
 
 
 def _finalize_report(session, report: Report, run: AnalysisRun) -> None:
@@ -724,9 +724,14 @@ def _finalize_report(session, report: Report, run: AnalysisRun) -> None:
         section.artifact_ids_json = [item.id for item in artifacts]
         presentation = (section.content_json or {}).get("presentation")
         if presentation and result.get("rows"):
-            previous_rows = _trend_previous_rows(compare_context, section, presentation)
-            if previous_rows:
-                result = {**result, "previousRows": previous_rows}
+            previous = _trend_previous_rows(compare_context, section, presentation)
+            if compare_context and presentation.get("kind") == "trend" and presentation.get("compare"):
+                from app.reports.comparison import align_comparison
+                previous_rows = previous.get("rows") if previous.get("state") == "ready" else None
+                comparison = align_comparison(result["rows"], previous_rows, presentation.get("grain", "day"), compare_context["period_start"], compare_context["period_end"])
+                if previous.get("state") != "ready":
+                    comparison["state"] = previous.get("state", "unavailable")
+                result = {**result, "previousRows": previous_rows, "comparison": comparison}
         section.content_json = {
             "question": task.normalized_question,
             "result": result,

@@ -4,6 +4,7 @@ import {
   addMetricBlock,
   BLOCK_LIMIT,
   CHART_OPTIONS,
+  chartOptionsFor,
   filterMetrics,
   fromStarter,
   groupMetricsByTopic,
@@ -15,6 +16,11 @@ import {
 } from "./reportComposerModel";
 
 describe("reportComposerModel", () => {
+  test("only governed additive metrics can choose composition charts", () => {
+    expect(chartOptionsFor({ semantics: { compositionAllowed: false } }, "breakdown").map(([key]) => key)).toEqual(["bar", "table"]);
+    expect(chartOptionsFor({}, "breakdown").map(([key]) => key)).toEqual(["bar", "table"]);
+    expect(chartOptionsFor({ semantics: { compositionAllowed: true } }, "breakdown")).toHaveLength(4);
+  });
   test("keeps starter blocks editable without mutating the catalog", () => {
     const starter = { id: "starter-production", name: "生产起始模板", blocks: [{ id: "a", title: "产量" }] };
     const composition = fromStarter(starter);

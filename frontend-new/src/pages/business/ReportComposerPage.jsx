@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useBlocker, useNavigate } from "react-router-dom";
+import { clearReportDraft, readReportDraft, writeReportDraft } from "../../features/reports/reportDraft";
 
 import { listSources } from "../../api/datasources";
 import {
@@ -25,6 +26,7 @@ import {
   addMetricBlock,
   BLOCK_LIMIT,
   CHART_OPTIONS,
+  chartOptionsFor,
   DEFAULT_COMPOSITION,
   filterMetrics,
   fromStarter,
@@ -128,9 +130,43 @@ export default function ReportComposerPage() {
   const [error, setError] = useState(null);
   const [dragIndex, setDragIndex] = useState(null);
   const [overIndex, setOverIndex] = useState(null);
+  const [mobilePanel, setMobilePanel] = useState("canvas");
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState(null);
+  // 1280–1536px 区间属性面板是覆盖式抽屉：选中内容块时自动打开
+  const selectBlock = (id) => {
+    setSelectedBlockId(id);
+    if (id) setInspectorOpen(true);
+  };
+  const loadSequence = useRef(0);
+  const loadedSource = useRef(null);
+  const latestComposition = useRef(composition);
+  latestComposition.current = composition;
+  const allowNavigation = useRef(false);
+  const blocker = useBlocker(() => dirty && !allowNavigation.current);
   const canvasRef = useRef(null);
 
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const onUnload = (event) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", onUnload);
+    return () => window.removeEventListener("beforeunload", onUnload);
+  }, [dirty]);
+
+  useEffect(() => {
+    if (dirty && catalog && loadedSource.current === sourceId) {
+      if (!writeReportDraft(sourceId, { composition, range, saved })) setNotice("浏览器无法保存草稿，请存为模板后再离开");
+    }
+  }, [dirty, composition, range, saved, sourceId, catalog]);
+
+  const confirmAction = (title, action, always = false) => {
+    if (busy) return;
+    if (dirty || always) setPendingAction({ title, action });
+    else action();
+  };
+
   const loadSource = async (nextSourceId) => {
+    const sequence = ++loadSequence.current;
     setCatalog(null);
     setError(null);
     setPreview(null);
@@ -139,17 +175,21 @@ export default function ReportComposerPage() {
         getReportComposerCatalog(nextSourceId),
         listReportCompositions(nextSourceId),
       ]);
+      if (sequence !== loadSequence.current) return;
+      loadedSource.current = nextSourceId;
+      const draft = readReportDraft(nextSourceId);
       setCatalog(nextCatalog);
       setSavedTemplates(templates);
-      setSaved(null);
-      setDirty(false);
-      setComposition(fromStarter(nextCatalog.starters?.find((item) => item.id === "starter-综合") ?? nextCatalog.starters?.[0] ?? { id: "starter-blank", blocks: [] }));
+      setSaved(draft?.saved ?? null);
+      setDirty(Boolean(draft));
+      setComposition(draft?.composition ?? fromStarter(nextCatalog.starters?.find((item) => item.id === "starter-综合") ?? nextCatalog.starters?.[0] ?? { id: "starter-blank", blocks: [] }));
       setSelectedBlockId("");
       setView("design");
       setMetricQuery("");
-      if (nextCatalog.suggestedRange) setRange(nextCatalog.suggestedRange);
+      if (draft?.range || nextCatalog.suggestedRange) setRange(draft?.range ?? nextCatalog.suggestedRange);
+      if (draft) setNotice("已恢复当前企业、账号及数据源下的未保存草稿；生成前会重新校验指标口径");
     } catch (nextError) {
-      setError(nextError);
+      if (sequence === loadSequence.current) setError(nextError);
     }
   };
 
@@ -167,7 +207,7 @@ export default function ReportComposerPage() {
         return undefined;
       })
       .catch((nextError) => active && setError(nextError));
-    return () => { active = false; };
+    return () => { active = false; loadSequence.current += 1; };
   }, []);
 
   const metricById = useMemo(
@@ -179,19 +219,20 @@ export default function ReportComposerPage() {
   const activeSource = sources.find((source) => source.id === sourceId);
 
   const patch = (next) => {
+    if (busy) return;
     setComposition(next);
     setDirty(true);
     setPreview(null);
   };
 
-  const changeSource = (value) => {
+  const changeSource = (value) => confirmAction("切换数据源？当前修改会保留为该数据源的个人草稿。", () => {
     const next = Number(value);
     setSourceId(next);
     window.sessionStorage.setItem(ACTIVE_SOURCE_KEY, String(next));
     loadSource(next);
-  };
+  });
 
-  const applyStarter = (starter) => {
+  const applyStarter = (starter) => confirmAction("使用起始模板替换当前内容？这会覆盖当前编辑中的草稿。", () => {
     const next = fromStarter(starter);
     setComposition(next);
     setDirty(true);
@@ -199,9 +240,10 @@ export default function ReportComposerPage() {
     setPreview(null);
     setView("design");
     setNotice(starter.id === "starter-blank" ? "已切换为空白周报" : `已载入${starter.name.replace("起始模板", "")}，仍可自由增删内容`);
-  };
+  });
 
   const add = (metric, kind, dimension) => {
+    if (busy) return;
     if (composition.blocks.length >= BLOCK_LIMIT) {
       setNotice(`一份周报最多 ${BLOCK_LIMIT} 项内容，请先精简版面`);
       return;
@@ -210,26 +252,28 @@ export default function ReportComposerPage() {
     if (next === composition) return;
     setComposition(next);
     setDirty(true);
-    setSelectedBlockId(next.blocks.at(-1).id);
+    selectBlock(next.blocks.at(-1).id);
     setPreview(null);
     setView("design");
+    setMobilePanel("canvas");
   };
 
   const focusMetric = (metricId) => {
     const block = composition.blocks.find((item) => item.metricId === metricId);
     if (!block) return;
     setView("design");
-    setSelectedBlockId(block.id);
+    selectBlock(block.id);
     canvasRef.current?.querySelector(`[data-block="${block.id}"]`)?.scrollIntoView({ block: "nearest" });
   };
 
   const save = async () => {
+    const snapshot = composition;
     setBusy("save");
     setNotice("");
     try {
       const result = await saveReportComposition(sourceId, composition, saved);
       setSaved(result);
-      setDirty(false);
+      if (latestComposition.current === snapshot) { setDirty(false); clearReportDraft(sourceId); }
       setSavedTemplates(await listReportCompositions(sourceId));
       setNotice("个人模板已保存，仅在当前企业、账号和数据源下可见");
     } catch (nextError) {
@@ -287,6 +331,7 @@ export default function ReportComposerPage() {
         emailEnabled: true,
         composition,
       });
+      allowNavigation.current = true;
       navigate(`/workspace/reports/${report.id}`);
     } catch (nextError) {
       setNotice(nextError.message);
@@ -295,29 +340,31 @@ export default function ReportComposerPage() {
     }
   };
 
-  const loadSaved = (template) => {
+  const loadSaved = (template) => confirmAction("打开个人模板并替换当前内容？未保存的编辑会被覆盖。", () => {
+    clearReportDraft(sourceId);
     setSaved(template);
     setComposition(template.composition);
     setDirty(false);
     setSelectedBlockId(template.composition.blocks?.[0]?.id ?? "");
     setPreview(null);
     setNotice(`已打开“${template.composition.name}”`);
-  };
+  });
 
-  const removeSaved = async () => {
+  const removeSaved = () => confirmAction("删除这个个人模板？历史周报不受影响，此操作无法撤销。", async () => {
     if (!saved) return;
     setBusy("delete");
     try {
       await deleteReportComposition(sourceId, saved.id);
       setSavedTemplates((items) => items.filter((item) => item.id !== saved.id));
       setSaved(null);
-      setNotice("个人模板已删除，历史周报不受影响");
+      setDirty(true);
+      setNotice("个人模板已删除，当前内容已保留为本地草稿");
     } catch (nextError) {
       setNotice(nextError.message);
     } finally {
       setBusy("");
     }
-  };
+  }, true);
 
   if (error) return <PageFrame><ErrorNotice title="周报工作台加载失败" detail={error.message} onRetry={() => sourceId && loadSource(sourceId)} /></PageFrame>;
   if (!catalog) return <RouteSkeleton />;
@@ -327,8 +374,8 @@ export default function ReportComposerPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-canvas">
-      <header className="flex h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line bg-paper px-3">
-        <button type="button" onClick={() => navigate("/workspace/reports")} className="grid h-7 w-7 shrink-0 place-items-center rounded-control text-muted hover:bg-surface-2 hover:text-ink" aria-label="返回周报中心">
+      <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line bg-paper px-3 py-2">
+        <button type="button" onClick={() => navigate("/workspace/reports")} className="grid h-7 w-7 shrink-0 place-items-center rounded-control text-muted hover:bg-surface-2 hover:text-ink" aria-label="返回本周期报告">
           <Icon name="chevron" size={15} className="rotate-180" />
         </button>
         <span className="h-4 w-px shrink-0 bg-line" />
@@ -343,11 +390,11 @@ export default function ReportComposerPage() {
         <div className="ml-auto flex min-w-0 flex-wrap items-center gap-1.5">
           <label className="relative flex items-center">
             <Icon name="database" size={13} className="pointer-events-none absolute left-2 text-faint" />
-            <select className="input-control h-7 max-w-[150px] appearance-none pl-7 pr-6 text-xs" value={sourceId ?? ""} onChange={(event) => changeSource(event.target.value)} aria-label="数据源">
+            <select disabled={Boolean(busy)} className="input-control h-7 max-w-[150px] appearance-none pl-7 pr-6 text-xs" value={sourceId ?? ""} onChange={(event) => changeSource(event.target.value)} aria-label="数据源">
               {sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
             </select>
           </label>
-          <PeriodButton range={range} suggested={catalog.suggestedRange} open={periodOpen} onOpen={setPeriodOpen} onApply={(next) => { setRange(next); setPreview(null); setPeriodOpen(false); }} />
+          <PeriodButton range={range} suggested={catalog.suggestedRange} open={periodOpen} onOpen={(open) => !busy && setPeriodOpen(open)} onApply={(next) => { if (busy) return; setRange(next); setDirty(true); setPreview(null); setPeriodOpen(false); }} />
           <span className="hidden h-4 w-px bg-line sm:block" />
           <Button size="sm" variant="ghost" onClick={save} disabled={Boolean(busy) || !composition.name.trim()}>{busy === "save" ? "保存中…" : "存为模板"}</Button>
           <Button size="sm" onClick={runPreview} disabled={Boolean(busy)}>{busy === "preview" ? "查询中…" : "预览"}</Button>
@@ -362,8 +409,11 @@ export default function ReportComposerPage() {
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
-        <aside className="flex max-h-[360px] w-full shrink-0 flex-col border-b border-line bg-paper xl:max-h-none xl:w-[268px] xl:border-b-0 xl:border-r">
+      <div className="flex shrink-0 gap-1 border-b border-line bg-paper px-3 py-1 xl:hidden" role="tablist" aria-label="周报工作区面板">
+        {[["metrics", "指标与模板"], ["canvas", "报告画布"], ["properties", selectedBlock ? "内容属性" : "报告概览"]].map(([panel, label]) => <button type="button" role="tab" aria-selected={mobilePanel === panel} key={panel} onClick={() => setMobilePanel(panel)} className={cn("min-h-11 rounded-control px-3 text-xs", mobilePanel === panel ? "bg-primary-soft font-semibold text-primary" : "text-muted")}>{label}</button>)}
+      </div>
+      <div className="relative flex min-h-0 flex-1">
+        <aside className={cn("min-h-0 w-full shrink-0 flex-col overflow-auto border-line bg-paper xl:flex xl:w-[268px] xl:border-r", mobilePanel === "metrics" ? "flex" : "hidden")}>
           <div className="flex h-9 shrink-0 items-center gap-1 border-b border-line px-2">
             <SideTab active={leftMode === "metrics"} onClick={() => setLeftMode("metrics")}>指标库</SideTab>
             <SideTab active={leftMode === "templates"} onClick={() => setLeftMode("templates")}>模板</SideTab>
@@ -384,13 +434,25 @@ export default function ReportComposerPage() {
           )}
         </aside>
 
-        <section className="flex min-h-[420px] min-w-0 flex-1 flex-col xl:min-h-0">
+        <section className={cn("min-h-0 min-w-0 flex-1 flex-col xl:flex", mobilePanel === "canvas" ? "flex" : "hidden")}>
           <div className="flex h-9 shrink-0 items-center justify-between gap-3 border-b border-line bg-paper px-3">
             <div className="flex items-center gap-0.5 rounded-control bg-surface-2 p-0.5">
               <SideTab active={view === "design"} onClick={() => setView("design")}>版面设计</SideTab>
               <SideTab active={view === "preview"} onClick={() => setView("preview")}>数据预览</SideTab>
             </div>
-            <span className="font-mono text-[10px] text-faint">{composition.blocks.length}/{BLOCK_LIMIT} 项内容</span>
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[10px] text-faint">{composition.blocks.length}/{BLOCK_LIMIT} 项内容</span>
+              {/* 1280–1536px：属性面板收进抽屉，手动开关 */}
+              <button
+                type="button"
+                onClick={() => setInspectorOpen((open) => !open)}
+                className="hidden h-6 cursor-pointer items-center gap-1 rounded-tag border border-line bg-surface px-2 text-[11px] text-muted transition-colors hover:border-line-strong hover:text-ink xl:flex 2xl:hidden"
+                aria-expanded={inspectorOpen}
+              >
+                <Icon name="panel" size={12} />
+                {selectedBlock ? "内容属性" : "报告概览"}
+              </button>
+            </div>
           </div>
           <div ref={canvasRef} className="min-h-0 flex-1 overflow-auto bg-surface-2/40 p-4">
             {view === "design" ? (
@@ -401,7 +463,7 @@ export default function ReportComposerPage() {
                 starters={catalog.starters}
                 dragIndex={dragIndex}
                 overIndex={overIndex}
-                onSelect={setSelectedBlockId}
+                onSelect={selectBlock}
                 onDragStart={setDragIndex}
                 onDragOver={setOverIndex}
                 onDrop={(index) => {
@@ -417,7 +479,7 @@ export default function ReportComposerPage() {
                 onToggleWidth={(block) => {
                   const width = block.width === "full" ? "half" : "full";
                   patch(updateBlock(composition, block.id, { width }));
-                  setSelectedBlockId(block.id);
+                  selectBlock(block.id);
                 }}
                 onApplyStarter={applyStarter}
               />
@@ -427,10 +489,29 @@ export default function ReportComposerPage() {
           </div>
         </section>
 
-        <aside className="flex w-full shrink-0 flex-col border-t border-line bg-paper xl:w-[280px] xl:border-t-0 xl:border-l">
-          <div className="flex h-9 shrink-0 items-center justify-between border-b border-line px-3">
+        {/* ≥1536px 固定第三栏；1280–1536px 为覆盖式抽屉；<1280px 走面板切换标签 */}
+        <aside
+          className={cn(
+            "min-h-0 shrink-0 flex-col border-line bg-paper",
+            mobilePanel === "properties" ? "flex w-full" : "hidden",
+            "xl:absolute xl:inset-y-0 xl:right-0 xl:z-20 xl:w-[300px] xl:border-l xl:shadow-card-hover",
+            inspectorOpen ? "xl:flex" : "xl:hidden",
+            "2xl:static 2xl:z-auto 2xl:flex 2xl:w-[280px] 2xl:shadow-none",
+          )}
+        >
+          <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-line px-3">
             <h2 className="text-xs font-semibold text-ink">{selectedBlock ? "内容属性" : "报告概览"}</h2>
-            {selectedBlock && <button type="button" onClick={() => setSelectedBlockId("")} className="text-[10px] font-semibold text-primary hover:underline">返回概览</button>}
+            <div className="flex items-center gap-2">
+              {selectedBlock && <button type="button" onClick={() => setSelectedBlockId("")} className="text-[11px] font-semibold text-primary hover:underline">返回概览</button>}
+              <button
+                type="button"
+                aria-label="关闭属性面板"
+                onClick={() => setInspectorOpen(false)}
+                className="hidden h-5 w-5 cursor-pointer place-items-center rounded-tag text-muted transition-colors hover:bg-surface-2 hover:text-ink xl:grid 2xl:hidden"
+              >
+                <Icon name="close" size={12} />
+              </button>
+            </div>
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
             {selectedBlock ? (
@@ -456,6 +537,16 @@ export default function ReportComposerPage() {
         </aside>
       </div>
 
+      <Modal open={Boolean(pendingAction) || blocker.state === "blocked"} onClose={() => { setPendingAction(null); if (blocker.state === "blocked") blocker.reset(); }} label="确认未保存的修改">
+        <div className="p-5">
+          <h2 className="text-sm font-semibold text-ink">{pendingAction?.title ?? "离开周报工作台？"}</h2>
+          <p className="mt-2 text-xs leading-relaxed text-muted">{pendingAction ? "确认后执行；继续编辑则不改变当前内容。" : "未保存的内容会保留在当前浏览器的个人草稿中，不等同于已保存模板。"}</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button onClick={() => { setPendingAction(null); if (blocker.state === "blocked") blocker.reset(); }}>继续编辑</Button>
+            <Button variant="primary" onClick={() => { if (pendingAction) { const action = pendingAction.action; setPendingAction(null); action(); } else if (blocker.state === "blocked") blocker.proceed(); }}>{pendingAction ? "确认操作" : "保留草稿并离开"}</Button>
+          </div>
+        </div>
+      </Modal>
       <footer className="hidden h-7 shrink-0 items-center gap-3 border-t border-line bg-paper px-3 font-mono text-[10px] text-faint xl:flex">
         <span>{composition.blocks.length} 项内容 · {usedMetrics.size} 个指标</span>
         <span className="h-3 w-px bg-line" />
@@ -663,7 +754,7 @@ function MetricRow({ metric, open, usage, onToggle, onAdd }) {
           {metric.kinds.includes("kpi") && <AddChip onClick={() => onAdd(metric, "kpi")}>指标概览</AddChip>}
           {metric.kinds.includes("trend") && <AddChip onClick={() => onAdd(metric, "trend")}>趋势</AddChip>}
           {metric.kinds.includes("rank") && dimensions.map((dimension) => <AddChip key={dimension} onClick={() => onAdd(metric, "breakdown", dimension)}>按{dimension}</AddChip>)}
-          {!metric.kinds.length && <span className="text-[10px] leading-5 text-faint">该指标暂无可用展示类型，请先在指标管理中完善物理绑定。</span>}
+          {!metric.kinds.length && <span className="text-[11px] leading-5 text-faint">该指标暂无可用展示类型，请先在指标管理中完善物理绑定。</span>}
         </div>
       )}
     </div>
@@ -677,8 +768,8 @@ function AddChip({ onClick, children }) {
 function TemplateLibrary({ starters, savedTemplates, saved, onStarter, onSaved, onDelete, deleting }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-      <p className="px-3 pb-1 pt-2.5 text-[10px] font-semibold text-muted">起始模板</p>
-      <p className="px-3 pb-2 text-[10px] leading-4 text-faint">只负责快速起步，载入后仍可自由混搭内容。</p>
+      <p className="px-3 pb-1 pt-2.5 text-[11px] font-semibold text-muted">起始模板</p>
+      <p className="px-3 pb-2 text-[11px] leading-4 text-faint">只负责快速起步，载入后仍可自由混搭内容。</p>
       <div className="divide-y divide-line/70 border-y border-line">
         {starters.map((starter) => (
           <button key={starter.id} type="button" onClick={() => onStarter(starter)} disabled={!starter.blocks.length && starter.id !== "starter-blank"} className="group w-full px-3 py-2.5 text-left hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40">
@@ -686,12 +777,12 @@ function TemplateLibrary({ starters, savedTemplates, saved, onStarter, onSaved, 
               <strong className="text-xs font-semibold text-ink">{starter.name.replace("起始模板", "周报")}</strong>
               <Icon name="arrow" size={12} className="text-faint group-hover:text-primary" />
             </span>
-            <span className="mt-0.5 block text-[10px] leading-4 text-muted">{starter.description}</span>
+            <span className="mt-0.5 block text-[11px] leading-4 text-muted">{starter.description}</span>
             {starter.blocks.length > 0 && <span className="mt-1 block font-mono text-[10px] text-faint">{starter.blocks.length} 项内容</span>}
           </button>
         ))}
       </div>
-      <p className="px-3 pb-1 pt-3 text-[10px] font-semibold text-muted">我的模板</p>
+      <p className="px-3 pb-1 pt-3 text-[11px] font-semibold text-muted">我的模板</p>
       {savedTemplates.length ? (
         <div className="divide-y divide-line/70 border-y border-line">
           {savedTemplates.map((template) => (
@@ -745,7 +836,7 @@ function DesignCanvas({ composition, metricById, selectedBlockId, starters, drag
           />
         ))}
       </div>
-      <p className="mt-3 px-1 text-[10px] text-faint">卡片尺寸即报告版面：半栏并排、通栏整行；拖动卡片调整阅读顺序，悬停卡片可切换宽度或删除。</p>
+      <p className="mt-3 px-1 text-[11px] text-faint">卡片尺寸即报告版面：半栏并排、通栏整行；拖动卡片调整阅读顺序，悬停卡片可切换宽度或删除。</p>
     </div>
   );
 }
@@ -879,13 +970,14 @@ function BlockSettings({ block, metric, onChange, onRemove }) {
         <p className="mt-0.5 font-mono text-[10px] text-faint">口径 V{metric?.version} · 绑定 V{metric?.bindingVersion} · {metric?.unit || "企业口径"}</p>
       </div>
       <InspectorField label="显示标题"><input className="input-control h-8 text-xs" value={block.title} maxLength={100} onChange={(event) => onChange({ title: event.target.value })} /></InspectorField>
-      {block.kind === "trend" && <InspectorField label="时间粒度"><Segmented value={block.grain} options={[["day", "日"], ["week", "周"], ["month", "月"]]} onChange={(grain) => onChange({ grain })} /></InspectorField>}
+      {block.kind === "trend" && <InspectorField label="时间粒度"><Segmented value={block.grain} options={block.chart === "calendar" ? [["day", "日"]] : [["day", "日"], ["week", "周"], ["month", "月"]]} onChange={(grain) => onChange({ grain })} /></InspectorField>}
       {block.kind === "breakdown" && <InspectorField label="分析维度"><select className="input-control h-8 text-xs" value={block.dimension ?? ""} onChange={(event) => onChange({ dimension: event.target.value, title: `按${event.target.value}分析${metric?.name ?? ""}` })}>{metric?.dimensions?.map((dimension) => <option key={dimension}>{dimension}</option>)}</select></InspectorField>}
       {block.kind === "breakdown" && <InspectorField label="展示数量"><input type="number" min="2" max="40" className="input-control h-8 text-xs" value={block.topN} onChange={(event) => onChange({ topN: Math.max(2, Math.min(40, Number(event.target.value) || 12)) })} /></InspectorField>}
-      <InspectorField label="展示方式"><Segmented value={block.chart} options={CHART_OPTIONS[block.kind]} onChange={(chart) => onChange({ chart, ...(chart === "donut" && block.topN > 12 ? { topN: 12 } : {}), ...(chart === "calendar" ? { grain: "day" } : {}) })} /></InspectorField>
+      <InspectorField label="展示方式"><Segmented value={block.chart} options={chartOptionsFor(metric, block.kind)} onChange={(chart) => onChange({ chart, ...(chart === "donut" && block.topN > 12 ? { topN: 12 } : {}), ...(chart === "calendar" ? { grain: "day", compare: false } : {}) })} /></InspectorField>
+      {block.kind === "breakdown" && !metric?.semantics?.compositionAllowed && <p className="text-[11px] leading-relaxed text-muted">此指标不可证明可加总，保留数值比较与表格，不提供占比和累计贡献图。</p>}
       <InspectorField label="内容宽度"><Segmented value={block.width} options={[["half", "半栏"], ["full", "通栏"]]} onChange={(width) => onChange({ width })} /></InspectorField>
       <InspectorField label="内容高度"><Segmented value={block.height} options={[["compact", "紧凑"], ["standard", "标准"], ["focus", "重点"]]} onChange={(height) => onChange({ height })} /></InspectorField>
-      {(block.kind === "kpi" || block.kind === "trend") && <label className="flex min-h-9 cursor-pointer items-center justify-between gap-3 border-y border-line py-2 text-xs text-ink"><span><strong className="block">与上一周期比较</strong><span className="mt-0.5 block text-[10px] text-muted">{block.kind === "kpi" ? "使用紧邻的等长周期" : "上期趋势以虚线叠加"}</span></span><input type="checkbox" checked={block.compare} onChange={(event) => onChange({ compare: event.target.checked })} /></label>}
+      {(block.kind === "kpi" || (block.kind === "trend" && block.chart !== "calendar")) && <label className="flex min-h-9 cursor-pointer items-center justify-between gap-3 border-y border-line py-2 text-xs text-ink"><span><strong className="block">与上一周期比较</strong><span className="mt-0.5 block text-[11px] text-muted">{block.kind === "kpi" ? "使用紧邻的等长周期" : "上期按日历粒度相对位置对应；缺失不补零"}</span></span><input type="checkbox" checked={block.compare} onChange={(event) => onChange({ compare: event.target.checked })} /></label>}
       <InspectorField label="强调色"><div className="flex flex-wrap gap-1.5">{ACCENTS.map(([key, label, color]) => <button key={key} type="button" onClick={() => onChange({ accent: key })} className={cn("flex h-7 items-center gap-1.5 rounded-control px-2 text-[10px]", block.accent === key ? "bg-surface-3 text-ink" : "text-muted hover:bg-surface-2")}><span className="h-2.5 w-2.5 rounded-full" style={{ background: color }} />{label}</button>)}</div></InspectorField>
       <button type="button" onClick={onRemove} className="mt-1 inline-flex min-h-8 items-center justify-center gap-1.5 rounded-control border border-line text-[11px] font-semibold text-red hover:border-red hover:bg-red-soft"><Icon name="trash" size={12} />删除该内容</button>
     </div>
@@ -902,7 +994,7 @@ function ReportOverview({ composition, metricById, topicCounts, sourceName, rang
   return (
     <div className="grid content-start gap-4 p-3">
       <section>
-        <p className="text-[10px] font-semibold text-muted">主题覆盖</p>
+        <p className="text-[11px] font-semibold text-muted">主题覆盖</p>
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {TOPIC_ORDER.filter((topic) => topic !== "其他" || topicCounts["其他"]).map((topic) => (
             <span key={topic} className={cn("inline-flex items-center gap-1.5 rounded-tag border px-1.5 py-0.5 text-[10px]", topicCounts[topic] ? "border-line bg-surface-2 text-ink" : "border-dashed border-line text-faint")}>
@@ -914,7 +1006,7 @@ function ReportOverview({ composition, metricById, topicCounts, sourceName, rang
       </section>
       <section>
         <div className="flex items-center justify-between">
-          <p className="text-[10px] font-semibold text-muted">结构检查</p>
+          <p className="text-[11px] font-semibold text-muted">结构检查</p>
           <span className="font-mono text-[10px] text-faint">{doneCount}/{checklist.length}</span>
         </div>
         <ul className="mt-1.5 divide-y divide-line/70 rounded-card border border-line bg-surface-2/40">
@@ -925,7 +1017,7 @@ function ReportOverview({ composition, metricById, topicCounts, sourceName, rang
             </li>
           ))}
         </ul>
-        <p className="mt-1 text-[10px] leading-4 text-faint">检查只是建议结构，不限制发布；报告以实际业务问题为准。</p>
+        <p className="mt-1 text-[11px] leading-4 text-faint">检查只是建议结构，不限制发布；报告以实际业务问题为准。</p>
       </section>
       <InspectorField label="报告说明（随模板保存）">
         <textarea className="input-control min-h-16 resize-y py-1.5 text-xs" maxLength={300} placeholder="这份周报给谁看、关注什么，写一句备忘…" value={composition.description} onChange={(event) => onDescription(event.target.value)} />
@@ -936,7 +1028,7 @@ function ReportOverview({ composition, metricById, topicCounts, sourceName, rang
         <p className="mt-1 flex justify-between gap-2"><span>内容 / 指标</span><strong className="shrink-0 font-mono text-[10px] text-ink">{composition.blocks.length} / {usedCount}</strong></p>
         <button type="button" onClick={onOpenRelationships} className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline"><Icon name="model" size={12} />查看数据关系与字段</button>
       </section>
-      <p className="text-[10px] leading-4 text-faint">点击中间版面的一项内容，可在此调整图表、粒度、尺寸和强调色。</p>
+      <p className="text-[11px] leading-4 text-faint">点击中间版面的一项内容，可在此调整图表、粒度、尺寸和强调色。</p>
     </div>
   );
 }
@@ -951,7 +1043,7 @@ function RelationshipBrowser({ catalog, onAdd, onClose }) {
       <div className="min-w-0 overflow-auto border-b border-line lg:border-b-0 lg:border-r"><RelationshipMap tables={catalog.tables ?? []} relations={catalog.relations ?? []} selected={selectedTable} onSelect={setSelectedTable} /></div>
       <div className="flex flex-col">
         <div className="border-b border-line px-4 py-3">
-          <span className="text-[10px] font-semibold text-primary">{activeTable?.topic || "业务对象"}</span>
+          <span className="text-[11px] font-semibold text-primary">{activeTable?.topic || "业务对象"}</span>
           <h3 className="mt-1 truncate text-sm font-semibold text-ink">{activeTable?.cnName || activeTable?.name || "选择对象"}</h3>
           <p className="mt-1 truncate font-mono text-[10px] text-faint">{activeTable?.qualifiedName}</p>
         </div>
@@ -1039,7 +1131,7 @@ function PreviewBlock({ item }) {
   const data = previewSeries(item);
   const color = ACCENT_COLOR[item.block.accent] ?? ACCENT_COLOR.default;
   const height = { compact: 220, standard: 270, focus: 350 }[item.block.height] ?? 270;
-  const fullClass = item.block.width === "full" || item.block.kind !== "kpi" ? "sm:col-span-2" : "";
+  const fullClass = item.block.width === "full" ? "sm:col-span-2" : "";
   if (item.state !== "ready") {
     return <article className={cn("grid min-h-44 place-content-center rounded-card border border-dashed border-line bg-surface-2/30 p-5 text-center", fullClass)}><strong className="text-sm text-ink">{item.block.title}</strong><p className="mt-1 text-xs text-muted">{item.message}</p></article>;
   }
@@ -1051,42 +1143,43 @@ function PreviewBlock({ item }) {
       <article className={cn("rounded-card border border-line p-4", fullClass)}>
         <p className="text-xs font-semibold text-muted">{item.block.title}</p>
         <p className="mt-2.5 font-mono text-[26px] font-semibold leading-none tracking-tight text-ink">{Number(current).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}<span className="ml-1 text-xs font-normal text-muted">{item.metric.unit}</span></p>
-        {change != null && <p className={cn("mt-2 text-xs font-medium", change >= 0 ? "text-success" : "text-red")}>较上一周期 {change >= 0 ? "+" : ""}{change.toFixed(1)}%</p>}
+        {change != null && <p className="mt-2 text-xs font-medium text-muted">较上一周期 {change >= 0 ? "+" : ""}{change.toFixed(1)}% · 变化不代表优劣</p>}
         <p className="mt-2 font-mono text-[10px] text-faint">{item.metric.name} · 口径 V{item.metric.version} · 绑定 V{item.metric.bindingVersion}</p>
       </article>
     );
   }
   let chart;
   if (item.block.kind === "breakdown" && item.block.chart === "table") {
-    chart = <DataTableBars data={data} unit={item.metric.unit} valueName={item.metric.name} categoryName={item.block.dimension || "项目"} color={color} height={height} topN={item.block.topN} />;
+    chart = <DataTableBars data={data} compositionAllowed={item.metric.semantics?.compositionAllowed} unit={item.metric.unit} valueName={item.metric.name} categoryName={item.block.dimension || "项目"} color={color} height={height} topN={item.block.topN} />;
   } else if (item.block.chart === "donut") chart = <ShareDonutChart data={data.map((point) => ({ name: point.label, value: point.value }))} unit={item.metric.unit} centerTitle="合计" centerValue={data.reduce((sum, point) => sum + point.value, 0).toLocaleString("zh-CN")} height={height} />;
   else if (item.block.chart === "pareto") {
     const total = data.reduce((sum, point) => sum + Math.max(point.value, 0), 0);
     let cumulative = 0;
     const pareto = data.map((point) => ({ ...point, secondaryValue: total ? (cumulative += Math.max(point.value, 0)) / total * 100 : 0 }));
     chart = <ComboMetricChart data={pareto} xKey="label" bars={[{ key: "value", name: item.metric.name, color }]} lines={[{ key: "secondaryValue", name: "累计贡献率", color: "var(--color-red)" }]} leftUnit={item.metric.unit} rightUnit="%" height={height} />;
-  } else if (item.block.chart === "column") chart = <RankBarChart data={data} xKey="label" bars={[{ key: "value", name: item.metric.name, color }]} unit={item.metric.unit} height={height} />;
+  } else if (item.block.chart === "column") {
+    const bars = [{ key: "value", name: item.metric.name, color }];
+    if (data.some((point) => point.previousValue != null)) bars.push({ key: "previousValue", name: item.comparison?.label ?? "上一周期", color: "var(--color-faint)" });
+    chart = <RankBarChart data={data} xKey="label" bars={bars} unit={item.metric.unit} height={height} />;
+  }
   else if (item.block.kind === "breakdown") chart = <HorizontalRankChart data={data} color={color} unit={item.metric.unit} valueName={item.metric.name} height={height} />;
   else if (item.block.chart === "calendar") chart = <CalendarHeatmap data={data} unit={item.metric.unit} valueName={item.metric.name} color={color} />;
   else {
-    const previousValues = (item.previousRows ?? []).map((row) => Number(row.at(-1)));
-    const hasPrevious = item.block.compare && previousValues.length > 0;
-    const merged = hasPrevious
-      ? data.map((point, index) => ({ ...point, previousValue: Number.isFinite(previousValues[index]) ? previousValues[index] : null }))
-      : data;
+    const hasPrevious = item.block.compare && data.some((point) => point.previousValue != null);
     const series = [{ key: "value", name: item.metric.name, color, width: 2 }];
-    if (hasPrevious) series.push({ key: "previousValue", name: "上一周期", color: "var(--color-faint)", width: 1.5, dash: true });
-    chart = <TrendLineChart data={merged} xKey="label" series={series} unit={item.metric.unit} area={item.block.chart === "area"} height={height} />;
+    if (hasPrevious) series.push({ key: "previousValue", name: item.comparison?.label ?? "上一周期", color: "var(--color-faint)", width: 1.5, dash: true });
+    chart = <TrendLineChart data={data} xKey="label" series={series} unit={item.metric.unit} area={item.block.chart === "area"} height={height} />;
   }
   return (
     <article className={cn("min-w-0 rounded-card border border-line p-4", fullClass)}>
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0"><h3 className="text-sm font-semibold text-ink">{item.block.title}</h3><p className="mt-1 font-mono text-[10px] text-muted">{item.metric.name} · {item.metric.unit || "企业口径"} · 查询结果 {item.rows.length} 行</p></div>
         {item.block.kind === "trend" && item.block.compare && item.previousRows?.length > 0 && (
-          <span className="flex shrink-0 items-center gap-1 text-[10px] text-faint"><i className="inline-block h-0 w-4 border-t-2 border-dashed border-faint" />上一周期</span>
+          <span className="flex shrink-0 items-center gap-1 text-[11px] text-faint"><i className="inline-block h-0 w-4 border-t-2 border-dashed border-faint" />上一周期</span>
         )}
       </div>
       {chart}
+      {item.block.compare && item.comparison?.state !== "ready" && <p className="mt-2 text-[11px] text-muted">上期对比数据不可用或无法对应，缺失值未补零。</p>}
     </article>
   );
 }

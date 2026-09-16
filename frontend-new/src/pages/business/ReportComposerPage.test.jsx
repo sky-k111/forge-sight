@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import ReportComposerPage from "./ReportComposerPage";
@@ -52,15 +52,39 @@ const catalogFixture = {
 };
 
 function renderPage() {
-  return render(
-    <MemoryRouter initialEntries={["/workspace/reports/composer"]}>
-      <ReportComposerPage />
-    </MemoryRouter>,
-  );
+  const router = createMemoryRouter([{ path: "/workspace/reports/composer", element: <ReportComposerPage /> }, { path: "/workspace/reports", element: <div>周报列表</div> }], { initialEntries: ["/workspace/reports/composer"] });
+  return { ...render(<RouterProvider router={router} />), router };
 }
 
 describe("ReportComposerPage", () => {
+  test("guards navigation and restores the scoped local draft", async () => {
+    const page = renderPage();
+    await screen.findByLabelText("周报名称");
+    fireEvent.change(screen.getByLabelText("周报名称"), { target: { value: "未保存的质量周报" } });
+    fireEvent.click(screen.getByRole("button", { name: "返回本周期报告" }));
+    await screen.findByRole("dialog", { name: "确认未保存的修改" });
+    fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
+    expect(page.router.state.location.pathname).toBe("/workspace/reports/composer");
+    page.unmount();
+    page.router.dispose();
+    renderPage();
+    await waitFor(() => expect(screen.getByLabelText("周报名称").value).toBe("未保存的质量周报"));
+    expect(screen.getByRole("status").textContent).toContain("已恢复");
+  });
+
+  test("starter replacement requires confirmation after edits", async () => {
+    renderPage();
+    await screen.findByLabelText("周报名称");
+    fireEvent.change(screen.getByLabelText("周报名称"), { target: { value: "正在编辑" } });
+    fireEvent.click(screen.getByRole("button", { name: "模板", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: /空白周报/ }));
+    expect(screen.getByLabelText("周报名称").value).toBe("正在编辑");
+    fireEvent.click(screen.getByRole("button", { name: "确认操作" }));
+    await screen.findByText("0/24 项内容");
+  });
+
   beforeEach(() => {
+    window.localStorage.clear();
     vi.mocked(listSources).mockResolvedValue([{ id: 1, name: "制造数据底座", isDefault: true }]);
     vi.mocked(getReportComposerCatalog).mockResolvedValue(catalogFixture);
     vi.mocked(listReportCompositions).mockResolvedValue([]);
@@ -146,7 +170,7 @@ describe("ReportComposerPage", () => {
   });
 
   test("preview renders a data-bar table and a two-period trend overlay", async () => {
-    const tableMetric = { id: "M-001", name: "不良数量", unit: "件", version: 1, bindingVersion: 1 };
+    const tableMetric = { id: "M-001", name: "不良数量", unit: "件", version: 1, bindingVersion: 1, semantics: { compositionAllowed: true } };
     const trendMetric = { id: "M-001", name: "实际产量", unit: "件", version: 3, bindingVersion: 2 };
     vi.mocked(previewReportComposition).mockResolvedValue({
       range: { start: "2026-07-09", end: "2026-07-15" },
@@ -159,6 +183,7 @@ describe("ReportComposerPage", () => {
         {
           state: "ready", metric: trendMetric, columns: ["周", "实际产量"],
           rows: [["2026-28", 600], ["2026-29", 700]], previousRows: [["2026-26", 500], ["2026-27", 550]],
+          comparison: { state: "ready", label: "上一周期", points: [{ label: "2026-28", value: 600, previousValue: 500 }, { label: "2026-29", value: 700, previousValue: 550 }] },
           block: { id: "b-trend", kind: "trend", chart: "line", grain: "week", compare: true, title: "产量趋势", width: "full", height: "standard", accent: "default" },
         },
       ],
@@ -167,8 +192,39 @@ describe("ReportComposerPage", () => {
     await screen.findByLabelText("搜索指标");
     fireEvent.click(screen.getByRole("button", { name: "预览", exact: true }));
     expect(await screen.findByText("缺陷明细")).toBeTruthy();
-    expect(screen.getByText("占比")).toBeTruthy();
+    expect(screen.getByText("展示项占比")).toBeTruthy();
     expect(screen.getByText("累计")).toBeTruthy();
     expect(screen.getByText("上一周期")).toBeTruthy();
+  });
+
+  describe("inspector drawer at 1280–1536px widths", () => {
+    const inspectorAside = (container) => [...container.querySelectorAll("aside")].at(-1);
+    const hasToken = (el, token) => el.className.split(/\s+/).includes(token);
+
+    test("renders the inspector as a closed overlay drawer, not a third column", async () => {
+      const { container } = renderPage();
+      await screen.findByLabelText("搜索指标");
+      const aside = inspectorAside(container);
+      expect(hasToken(aside, "xl:absolute")).toBe(true);
+      expect(hasToken(aside, "xl:hidden")).toBe(true);
+      expect(hasToken(aside, "2xl:static")).toBe(true);
+    });
+
+    test("canvas header toggle opens and closes the drawer", async () => {
+      const { container } = renderPage();
+      await screen.findByLabelText("搜索指标");
+      fireEvent.click(screen.getByRole("button", { name: "报告概览" }));
+      await waitFor(() => expect(hasToken(inspectorAside(container), "xl:flex")).toBe(true));
+      expect(hasToken(inspectorAside(container), "xl:hidden")).toBe(false);
+
+      fireEvent.click(screen.getByRole("button", { name: "关闭属性面板" }));
+      await waitFor(() => expect(hasToken(inspectorAside(container), "xl:hidden")).toBe(true));
+    });
+
+    test("selecting a block auto-opens the drawer for configuration", async () => {
+      const { container } = renderPage();
+      fireEvent.click(await screen.findByRole("button", { name: "编辑实际产量" }));
+      await waitFor(() => expect(hasToken(inspectorAside(container), "xl:flex")).toBe(true));
+    });
   });
 });

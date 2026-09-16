@@ -550,6 +550,11 @@ def _report_chart(spec: ChartSpec) -> Drawing | Table | None:
         chart.height = 132
         chart.width = 390
         chart.data = [[point.value for point in points[:16]]]
+        if any(point.previous_value is not None for point in points[:16]):
+            chart.data.append([point.previous_value for point in points[:16]])
+            chart.bars[1].fillColor = colors.HexColor("#9aa8ac")
+            chart.bars[1].strokeColor = None
+            drawing.add(String(58, 168, "本期 / 上一周期（缺失值留空）", fontName=_register_fonts()[0], fontSize=7, fillColor=BRAND_DARK))
         chart.categoryAxis.categoryNames = [point.label for point in points[:16]]
         chart.categoryAxis.labels.fontName = _register_fonts()[0]
         chart.categoryAxis.labels.fontSize = 7
@@ -600,7 +605,7 @@ def _report_chart(spec: ChartSpec) -> Drawing | Table | None:
     chart.width = 390
     series: list[list[float]] = [[point.value for point in points]]
     if has_previous:
-        series.append([point.previous_value if point.previous_value is not None else 0 for point in points])
+        series.append([point.previous_value for point in points])
     chart.data = series
     chart.categoryAxis.categoryNames = [point.label for point in points]
     chart.categoryAxis.labels.fontName = _register_fonts()[0]
@@ -630,7 +635,7 @@ def _chart_data_table(spec: ChartSpec, styles: dict) -> Table:
     has_previous = any(point.previous_value is not None for point in spec.points)
     secondary_label = "累计贡献率" if spec.type == "pareto" else (spec.secondary_value_label or "次指标")
     headers = [spec.category_label, f"{spec.value_label}（{spec.unit}）"]
-    if spec.type == "table":
+    if spec.type == "table" and spec.composition_allowed:
         headers += ["占比", "累计占比"]
     if has_previous:
         headers.append(f"{spec.comparison_label or '上一周期'}（{spec.unit}）")
@@ -642,7 +647,7 @@ def _chart_data_table(spec: ChartSpec, styles: dict) -> Table:
     for point in spec.points[:12]:
         label = point.label if not point.group else f"{point.label} / {point.group}"
         row = [Paragraph(_pdf_text(label), styles["small"]), f"{point.value:,.2f}"]
-        if spec.type == "table":
+        if spec.type == "table" and spec.composition_allowed:
             share = max(point.value or 0, 0) / table_total * 100
             table_cumulative += share
             row += [f"{share:.1f}%", f"{min(table_cumulative, 100.0):.1f}%"]
@@ -651,7 +656,7 @@ def _chart_data_table(spec: ChartSpec, styles: dict) -> Table:
         if has_secondary:
             row.append("—" if point.secondary_value is None else f"{point.secondary_value:,.2f}")
         rows.append(row)
-    widths = [72 * mm, 48 * mm] + ([26 * mm, 30 * mm] if spec.type == "table" else []) + ([42 * mm] if has_previous else []) + ([50 * mm] if has_secondary else [])
+    widths = [72 * mm, 48 * mm] + ([26 * mm, 30 * mm] if spec.type == "table" and spec.composition_allowed else []) + ([42 * mm] if has_previous else []) + ([50 * mm] if has_secondary else [])
     table = Table(rows, colWidths=widths, repeatRows=1)
     table.setStyle(_pdf_table_style())
     return table

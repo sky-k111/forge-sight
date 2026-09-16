@@ -7,12 +7,13 @@ function formatValue(value, unit = "") {
   return unit === "%" ? `${text}%` : `${text}${unit ? ` ${unit}` : ""}`;
 }
 
-export function DataTableBars({ data = [], unit = "", valueName = "数值", categoryName = "项目", color = "var(--color-primary)", height = 240, topN }) {
+export function DataTableBars({ data = [], unit = "", valueName = "数值", categoryName = "项目", color = "var(--color-primary)", height = 240, topN, compositionAllowed = false }) {
   const rows = (typeof topN === "number" ? data.slice(0, topN) : data).map((item) => ({
     label: item.label ?? item.name ?? "—",
     value: Number(item.value) || 0,
   }));
   const total = rows.reduce((sum, item) => sum + Math.max(item.value, 0), 0);
+  const showShares = compositionAllowed && total > 0 && rows.every((item) => item.value >= 0);
   const max = Math.max(...rows.map((item) => Math.abs(item.value)), 0) || 1;
   let cumulative = 0;
   const enriched = rows.map((item) => {
@@ -30,8 +31,7 @@ export function DataTableBars({ data = [], unit = "", valueName = "数值", cate
               <th className="w-7 py-1.5 pl-1 font-semibold">#</th>
               <th className="py-1.5 font-semibold">{categoryName}</th>
               <th className="w-[34%] py-1.5 font-semibold">{valueName}</th>
-              <th className="w-20 py-1.5 text-right font-semibold">占比</th>
-              <th className="w-20 py-1.5 pr-1 text-right font-semibold">累计</th>
+              {showShares && <><th className="w-20 py-1.5 text-right font-semibold">展示项占比</th><th className="w-20 py-1.5 pr-1 text-right font-semibold">累计</th></>}
             </tr>
           </thead>
           <tbody>
@@ -45,8 +45,7 @@ export function DataTableBars({ data = [], unit = "", valueName = "数值", cate
                     <span className="shrink-0 font-mono text-[11px] text-ink-2">{formatValue(item.value, unit)}</span>
                   </div>
                 </td>
-                <td className="py-1.5 text-right font-mono text-[11px] text-muted">{item.share.toFixed(1)}%</td>
-                <td className={cn("py-1.5 pr-1 text-right font-mono text-[11px]", item.cumulative <= 80 ? "text-primary" : "text-faint")}>{item.cumulative.toFixed(1)}%</td>
+                {showShares && <><td className="py-1.5 text-right font-mono text-[11px] text-muted">{item.share.toFixed(1)}%</td><td className={cn("py-1.5 pr-1 text-right font-mono text-[11px]", item.cumulative <= 80 ? "text-primary" : "text-faint")}>{item.cumulative.toFixed(1)}%</td></>}
               </tr>
             ))}
             {!enriched.length && (

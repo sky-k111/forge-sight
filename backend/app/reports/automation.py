@@ -752,7 +752,7 @@ def _chart_axis_label(column: str) -> str:
 
 
 def _structured_charts(
-    sections: list[ReportSection], *, period_end: datetime
+    sections: list[ReportSection], *, period_end: datetime, period_start: datetime | None = None
 ) -> list[dict]:
     """Convert each frozen section into one safe, evidence-backed chart specification."""
 
@@ -818,6 +818,9 @@ def _structured_charts(
         semantic_text = " ".join(
             (title, str(getattr(section, "code", "")), value_label, *columns)
         ).lower()
+        presentation = content.get("presentation") or {}
+        semantic_contract = presentation.get("semantics") or resolution.get("semantics") or {}
+        governed_composition = semantic_contract.get("compositionAllowed") is True
         temporal = all(_is_temporal_label(row[category_index]) for row in usable_rows)
         secondary_value_label = None
         secondary_unit = None
@@ -957,14 +960,18 @@ def _structured_charts(
             ]
             total = sum(positive_values)
             concentrated_quality_distribution = (
-                len(points) >= 4
+                governed_composition
+                and len(points) >= 4
                 and total > 0
                 and any(marker in semantic_text for marker in ("缺陷", "不良", "故障", "质量", "defect"))
                 and positive_values[0] / total >= 0.5
             )
             if (
-                any(marker in semantic_text for marker in ("pareto", "帕累托", "累计贡献"))
-                or concentrated_quality_distribution
+                governed_composition
+                and (
+                    any(marker in semantic_text for marker in ("pareto", "帕累托", "累计贡献"))
+                    or concentrated_quality_distribution
+                )
             ):
                 chart_type = "pareto"
                 if len(ranked_all) > 12:
@@ -987,7 +994,8 @@ def _structured_charts(
                     item["secondaryValue"] = round(cumulative / total * 100, 2) if total else 0.0
                 description = f"按{category_label}定位{value_label}的主要贡献项。"
             elif (
-                any(
+                governed_composition
+                and any(
                     marker in semantic_text
                     for marker in ("占比", "构成", "份额", "比例", "share", "composition")
                 )
@@ -1003,28 +1011,19 @@ def _structured_charts(
         # A personal composition is a frozen presentation contract.  Automatic
         # inference remains the fallback for legacy templates, but it must not
         # silently replace a compatible chart explicitly chosen by the user.
-        presentation = content.get("presentation") or {}
         requested_chart = str(presentation.get("chart") or "")
         requested_kind = str(presentation.get("kind") or "")
         requested_top_n = max(2, min(int(presentation.get("topN") or 12), 40))
+        composition_allowed = governed_composition
+        comparison = result.get("comparison")
         if requested_kind == "trend" and temporal and requested_chart in {"line", "area", "column", "calendar"}:
             chart_type = requested_chart
-            trend_rows = usable_rows[-min(requested_top_n, 60):]
-            previous_rows = [
-                list(item) for item in (result.get("previousRows") or []) if isinstance(item, (list, tuple))
-            ]
-            points = []
-            for index, row in enumerate(trend_rows):
-                point = {
-                    "label": str(row[category_index]),
-                    "value": _numeric_value(row[value_index]),
-                }
-                if index < len(previous_rows):
-                    previous_value = _numeric_value(previous_rows[index][-1])
-                    if previous_value is not None:
-                        point["previousValue"] = previous_value
-                points.append(point)
+            if presentation.get("compare") and not comparison and period_start is not None:
+                from app.reports.comparison import align_comparison
+                comparison = align_comparison(usable_rows, result.get("previousRows"), presentation.get("grain", "day"), period_start, period_end, category_index, value_index)
+            points = (comparison["points"] if comparison else [{"label": str(row[category_index]), "value": _numeric_value(row[value_index])} for row in usable_rows])[-requested_top_n:]
             has_comparison = any("previousValue" in point for point in points)
+            has_comparison = has_comparison and any(point.get("previousValue") is not None for point in points)
             secondary_value_label = None
             secondary_unit = None
             if chart_type == "calendar":
@@ -1047,19 +1046,22 @@ def _structured_charts(
                 for row in ranked_rows
             ]
             chart_type = requested_chart
+            composition_allowed = composition_allowed and all(point["value"] >= 0 for point in points) and sum(point["value"] for point in points) > 0
+            if chart_type in {"pareto", "donut"} and not composition_allowed:
+                chart_type = "bar"
             secondary_value_label = None
             secondary_unit = None
-            if requested_chart == "pareto":
+            if chart_type == "pareto":
                 total = sum(max(float(item["value"] or 0), 0) for item in points)
                 cumulative = 0.0
                 for item in points:
                     cumulative += max(float(item["value"] or 0), 0)
                     item["secondaryValue"] = round(cumulative / total * 100, 2) if total else 0.0
                 description = f"按{category_label}定位{value_label}的主要贡献项。"
-            elif requested_chart == "donut":
+            elif chart_type == "donut":
                 description = f"展示不同{category_label}的{value_label}构成。"
             elif requested_chart == "table":
-                description = f"按{category_label}列出{value_label}的降序明细，含占比与累计占比。"
+                description = f"按{category_label}列出{value_label}的降序明细。" + ("占比仅针对当前展示项。" if composition_allowed else "不可加总指标不展示占比。")
             else:
                 description = f"按{category_label}对{value_label}进行降序比较。"
 
@@ -1082,18 +1084,24 @@ def _structured_charts(
                 "evidenceArtifactIds": evidence,
                 "colorRole": _chart_color_role(section),
             }
+        if governed_composition:
+            chart["compositionAllowed"] = True
         if presentation:
             chart.update({
                 "width": presentation.get("width", "half"),
                 "height": presentation.get("height", "standard"),
                 "accent": presentation.get("accent", "default"),
+                "compositionAllowed": composition_allowed,
             })
         if secondary_value_label:
             chart["secondaryValueLabel"] = secondary_value_label
         if secondary_unit:
             chart["secondaryUnit"] = secondary_unit
-        if any("previousValue" in point for point in points):
-            chart["comparisonLabel"] = "上一周期"
+        if comparison and presentation.get("compare"):
+            chart["comparisonLabel"] = comparison["label"]
+            chart["comparisonState"] = comparison["state"]
+            if comparison["state"] != "ready":
+                chart["description"] += " 上一周期无可对应数据，缺失值不补零。"
         charts.append(chart)
     return charts
 
@@ -1174,10 +1182,17 @@ def build_structured_content(
     metrics, trends, definitions = _structured_metrics(
         sections, period_end=report.period_end
     )
-    charts = _structured_charts(sections, period_end=report.period_end)
+    charts = _structured_charts(sections, period_end=report.period_end, period_start=report.period_start)
     anomalies, progress, recommendations = _structured_operational_items(sections)
-    period_duration = report.period_end - report.period_start
-    comparison_start = report.period_start - period_duration
+    from app.reports.comparison import period_window
+
+    current_start, _, previous_start = period_window(report.period_start, report.period_end)
+    comparison_start = datetime.combine(
+        previous_start, time.min, tzinfo=report.period_start.tzinfo
+    )
+    comparison_end = datetime.combine(
+        current_start, time.min, tzinfo=report.period_start.tzinfo
+    )
     scope = getattr(report, "scope_json", None) or {}
     scope_hash = getattr(report, "audience_scope_hash", None) or hashlib.sha256(
         json.dumps(
@@ -1197,7 +1212,7 @@ def build_structured_content(
             "periodStart": report.period_start.isoformat(),
             "periodEnd": report.period_end.isoformat(),
             "comparisonPeriodStart": comparison_start.isoformat(),
-            "comparisonPeriodEnd": report.period_start.isoformat(),
+            "comparisonPeriodEnd": comparison_end.isoformat(),
             "timezone": timezone_name,
         },
         "managementSummary": compose_management_summary(raw_summary, sections, metrics),

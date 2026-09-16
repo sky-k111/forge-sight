@@ -16,6 +16,8 @@ from app.db.models import PersonalReportTemplate
 from app.db.platform import PlatformSession
 from app.gateway.executor import execute_readonly
 from app.reports.composition_contracts import ReportComposition
+from app.knowledge.metric_semantics import metric_semantics
+from app.reports.comparison import align_comparison, period_window
 from app.tenancy.service import ensure_source_access
 
 
@@ -26,6 +28,7 @@ def _public_metric(metric: dict[str, Any]) -> dict[str, Any]:
         "definition": metric.get("definition") or "", "dimensions": dimensions,
         "unit": metric.get("unit") or "", "version": metric.get("version"),
         "bindingVersion": metric.get("bindingVersion"),
+        "semantics": metric.get("semantics") or metric_semantics(metric.get("physicalFormula", "")),
         "kinds": _metric_kinds(metric.get("physicalFormula", ""), metric.get("physicalTimeField", ""), dimensions),
         "sourceTables": list(metric.get("sourceTables") or []),
     }
@@ -121,6 +124,11 @@ def _validate_against_metrics(composition: ReportComposition, by_id: dict[str, d
             raise HTTPException(status_code=422, detail=f"{block.title}引用的指标当前不可用于这种展示")
         if block.kind == "breakdown" and block.dimension not in metric["dimensions"]:
             raise HTTPException(status_code=422, detail=f"{block.title}引用的维度未在指标口径中登记")
+        semantics = metric.get("semantics") or metric_semantics(metric.get("physicalFormula", ""))
+        if block.chart in {"donut", "pareto"} and not semantics["compositionAllowed"]:
+            raise HTTPException(status_code=422, detail=f"{block.title}不是可加总指标，不能展示占比或累计贡献")
+        if block.chart == "calendar" and block.grain != "day":
+            raise HTTPException(status_code=422, detail="日历热力图必须使用按日粒度")
 
 
 def list_personal(source_id: int, tenant_id: str, user_id: str) -> list[dict]:
@@ -193,6 +201,10 @@ def _query_block(source, context: dict, metric: dict, block, start: str, end: st
         return {"state": "error", "message": "查询暂时失败，请稍后重试"}
     if not result.rows or all(all(value is None for value in row) for row in result.rows):
         return {"state": "empty", "message": "当前统计区间没有匹配记录", "columns": result.columns, "rows": []}
+    if getattr(block, "chart", None) in {"donut", "pareto"}:
+        values = [row[-1] for row in result.rows]
+        if any(value is None or float(value) < 0 for value in values) or sum(float(value) for value in values) <= 0:
+            return {"state": "unavailable", "message": "构成图需要非负且非零数据，请改用明细表或条形图"}
     return {"state": "ready", "columns": result.columns, "rows": result.rows, "contract": {"metricVersion": metric.get("version"), "bindingVersion": metric.get("bindingVersion"), "groupBy": contract.get("groupBy")}}
 
 
@@ -211,9 +223,14 @@ def preview(composition: ReportComposition, source_id: int, tenant_id: str, user
         try:
             result = _query_block(source, context, metric, block, start, end, user_id)
             if block.kind in {"kpi", "trend"} and block.compare and result.get("state") == "ready":
-                duration = period_end - period_start
-                previous = _query_block(source, context, metric, block, (period_start - duration).date().isoformat(), start, user_id)
+                _, _, previous_start = period_window(period_start, period_end)
+                previous = _query_block(source, context, metric, block, previous_start.isoformat(), start, user_id)
                 result["previousRows"] = previous.get("rows") if previous.get("state") == "ready" else None
+                result["comparisonState"] = previous.get("state", "unavailable")
+                if block.kind == "trend":
+                    result["comparison"] = align_comparison(result["rows"], result["previousRows"], block.grain, period_start, period_end)
+                    if previous.get("state") != "ready":
+                        result["comparison"]["state"] = previous.get("state", "unavailable")
         except Exception:
             result = {"state": "error", "message": "内容查询失败，请检查指标绑定后重试"}
         items.append({"block": block.model_dump(mode="json"), "metric": _public_metric(metric), **result})
@@ -227,25 +244,25 @@ def preview(composition: ReportComposition, source_id: int, tenant_id: str, user
     }
 
 
-def previous_period_rows(
+def previous_period_result(
     source_id: int, tenant_id: str, user_id: str, block: dict, period_start: datetime, period_end: datetime,
-) -> list | None:
+) -> dict:
     """Deterministically fetch the shifted equal-length window for a trend+compare block.
 
     Reuses the same governed read-only compiler as preview so the frozen report's
     comparison series shares the exact metric口径 with the current period.
     """
     if not block or block.get("kind") != "trend" or not block.get("compare") or not block.get("metricId"):
-        return None
+        return {"state": "unavailable"}
     duration = period_end - period_start
     if duration.total_seconds() <= 0:
-        return None
+        return {"state": "unavailable"}
     with PlatformSession() as session:
         source = ensure_source_access(session, source_id, tenant_id)
         context = _context(session, source, tenant_id)
     metric = next((item for item in context["metrics"] if item["id"] == block["metricId"]), None)
     if not metric:
-        return None
+        return {"state": "unavailable"}
     proxy = SimpleNamespace(
         kind="trend",
         grain=block.get("grain", "day"),
@@ -253,7 +270,13 @@ def previous_period_rows(
         topN=block.get("topN", 12),
         title=block.get("title", "趋势"),
     )
-    previous_start = (period_start - duration).date().isoformat()
+    _, _, shifted_start = period_window(period_start, period_end)
+    previous_start = shifted_start.isoformat()
     previous_end = period_start.date().isoformat()
     result = _query_block(source, context, metric, proxy, previous_start, previous_end, user_id)
+    return result
+
+
+def previous_period_rows(source_id, tenant_id, user_id, block, period_start, period_end):
+    result = previous_period_result(source_id, tenant_id, user_id, block, period_start, period_end)
     return result.get("rows") if result.get("state") == "ready" else None

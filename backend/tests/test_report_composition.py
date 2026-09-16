@@ -235,6 +235,7 @@ def test_frozen_composition_keeps_the_selected_chart_layout_and_accent():
         "width": "full",
         "height": "focus",
         "accent": "violet",
+        "compositionAllowed": False,
     }
 
 
@@ -319,10 +320,29 @@ def test_frozen_trend_compare_carries_previous_series():
     content = build_structured_content(report=report, version=version, sections=[section],
                                        raw_summary=section.summary, timezone_name="Asia/Shanghai")
     chart = content["charts"][0]
-    assert chart["comparisonLabel"] == "上一周期"
+    assert chart["comparisonLabel"].startswith("上一周期 2026-05-18")
     assert chart["points"][0]["previousValue"] == 90.0
     assert chart["points"][1]["previousValue"] == 100.0
     assert "叠加紧邻等长上一周期" in chart["description"]
+
+
+def test_nonadditive_metric_rejects_composition_charts():
+    block = ReportBlock(id="rate", metricId="rate", kind="breakdown", dimension="工序", title="良率", chart="donut")
+    with pytest.raises(HTTPException) as exc:
+        service._validate_against_metrics(ReportComposition(blocks=[block]), {"rate": {"id": "rate", "name": "良率", "kinds": ["rank"], "dimensions": ["工序"], "semantics": {"compositionAllowed": False}}})
+    assert exc.value.status_code == 422
+
+
+def test_frozen_trend_comparison_aligns_before_display_limit():
+    from datetime import timedelta
+    report, version = _report_and_version("report-long")
+    report.period_start = datetime(2026, 7, 1)
+    report.period_end = datetime(2026, 7, 21)
+    section = _trend_section("daily-output", compare=True, previous_rows=None, grain="day")
+    section.content_json["result"] = {"columns": ["日期", "产量"], "rows": [[(report.period_start + timedelta(days=i)).date().isoformat(), 100 + i] for i in range(20)], "previousRows": [[(datetime(2026, 6, 11) + timedelta(days=i)).date().isoformat(), i + 1] for i in range(20) if i != 10]}
+    chart = build_structured_content(report=report, version=version, sections=[section], raw_summary=section.summary, timezone_name="Asia/Shanghai")["charts"][0]
+    assert chart["points"][0]["previousValue"] == 9
+    assert chart["points"][2]["previousValue"] is None
 
 
 def test_frozen_trend_without_compare_has_no_previous():

@@ -10,6 +10,7 @@ const base = {
   valueLabel: "数量",
   evidenceArtifactIds: ["artifact-1"],
   colorRole: "quality",
+  compositionAllowed: true,
 };
 
 describe("weekly report chart orchestration", () => {
@@ -50,7 +51,7 @@ describe("weekly report chart orchestration", () => {
     );
     expect(screen.getByText("明细数据表")).toBeTruthy();
     expect(screen.getByText("尺寸")).toBeTruthy();
-    expect(screen.getByText("占比")).toBeTruthy();
+    expect(screen.getByText("展示项占比")).toBeTruthy();
     expect(screen.getByText("累计")).toBeTruthy();
     expect(screen.queryByText("查看精确数据")).toBeNull();
   });

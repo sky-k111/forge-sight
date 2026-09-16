@@ -83,6 +83,10 @@ export const CHART_OPTIONS = {
   breakdown: [["bar", "横向条形图"], ["donut", "环形图"], ["pareto", "帕累托图"], ["table", "数据条表格"]],
 };
 
+export function chartOptionsFor(metric, kind) {
+  return (CHART_OPTIONS[kind] ?? []).filter(([chart]) => !["donut", "pareto"].includes(chart) || metric?.semantics?.compositionAllowed === true);
+}
+
 const defaults = {
   kpi: { chart: "number", width: "half", height: "compact", compare: true },
   trend: { chart: "line", width: "full", height: "standard", compare: false },
@@ -135,10 +139,12 @@ export function moveBlock(composition, from, to) {
 }
 
 export function previewSeries(item) {
+  if (item.block.kind === "trend" && item.comparison?.points) return item.comparison.points.slice(-Math.max(2, Math.min(item.block.topN || 12, 40)));
   const columns = item.columns ?? [];
   const rows = item.rows ?? [];
   if (!rows.length) return [];
   const numericIndex = columns.length - 1;
   if (item.block.kind === "kpi") return [{ label: columns[numericIndex], value: Number(rows[0]?.[numericIndex]) }];
-  return rows.map((row) => ({ label: String(row[0] ?? "—"), value: Number(row[numericIndex]) || 0 }));
+  const data = rows.filter((row) => row[numericIndex] != null && Number.isFinite(Number(row[numericIndex]))).map((row) => ({ label: String(row[0] ?? "—"), value: Number(row[numericIndex]) }));
+  return item.block.kind === "trend" ? data.slice(-(item.block.topN || 12)) : data;
 }

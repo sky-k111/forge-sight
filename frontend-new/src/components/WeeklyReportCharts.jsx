@@ -83,10 +83,12 @@ function ChartVisual({ chart }) {
   const height = CHART_HEIGHTS[chart.height] ?? CHART_HEIGHTS.standard;
   const data = chart.points ?? [];
   if (chart.type === "table") {
-    return <DataTableBars data={data} unit={chart.unit} valueName={chart.valueLabel} categoryName={chart.categoryLabel} color={color} height={height} />;
+    return <DataTableBars data={data} compositionAllowed={chart.compositionAllowed} unit={chart.unit} valueName={chart.valueLabel} categoryName={chart.categoryLabel} color={color} height={height} />;
   }
   if (chart.type === "column") {
-    return <RankBarChart data={data} xKey="label" bars={[{ key: "value", name: chart.valueLabel, color }]} unit={chart.unit} height={height} />;
+    const bars = [{ key: "value", name: chart.valueLabel, color }];
+    if (data.some((point) => point.previousValue != null)) bars.push({ key: "previousValue", name: chart.comparisonLabel ?? "上一周期", color: "var(--color-faint)" });
+    return <RankBarChart data={data} xKey="label" bars={bars} unit={chart.unit} height={height} />;
   }
   if (chart.type === "bar") {
     return <HorizontalRankChart data={data} unit={chart.unit} color={color} height={height} />;
@@ -185,6 +187,7 @@ function ChartVisual({ chart }) {
 
 function ChartDataTable({ chart }) {
   const hasSecondary = chart.points?.some((item) => item.secondaryValue != null);
+  const hasPrevious = Boolean(chart.comparisonLabel);
   const secondaryLabel = chart.type === "pareto"
     ? "累计贡献率"
     : `${chart.secondaryValueLabel ?? "次指标"}${chart.secondaryUnit ? `（${chart.secondaryUnit}）` : ""}`;
@@ -199,6 +202,7 @@ function ChartDataTable({ chart }) {
               {chart.points?.some((item) => item.group) && <th>分组</th>}
               <th className="text-right">{chart.valueLabel}（{chart.unit}）</th>
               {hasSecondary && <th className="text-right">{secondaryLabel}</th>}
+              {hasPrevious && <><th>对应上一期</th><th className="text-right">{chart.comparisonLabel}（{chart.unit}）</th></>}
             </tr>
           </thead>
           <tbody>
@@ -207,6 +211,7 @@ function ChartDataTable({ chart }) {
                 <td>{item.label}</td>
                 {chart.points.some((point) => point.group) && <td>{item.group ?? "—"}</td>}
                 <td className="text-right font-mono">{formatValue(item.value)}</td>
+                {hasPrevious && <><td>{item.previousLabel ?? "—"}</td><td className="text-right font-mono">{item.previousValue == null ? "—" : formatValue(item.previousValue)}</td></>}
                 {hasSecondary && (
                   <td className="text-right font-mono">
                     {formatValue(item.secondaryValue, chart.type === "pareto" ? "%" : chart.secondaryUnit)}

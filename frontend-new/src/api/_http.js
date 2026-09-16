@@ -9,7 +9,7 @@ export function apiUrl(path) {
 }
 
 async function request(path, options = {}) {
-  const { headers: optionHeaders, ...requestOptions } = options;
+  const { headers: optionHeaders, responseType, ...requestOptions } = options;
   const token = getToken();
   const response = await fetch(apiUrl(path), {
     ...requestOptions,
@@ -46,7 +46,7 @@ async function request(path, options = {}) {
     if (retryAfterSeconds !== undefined) error.retryAfterSeconds = retryAfterSeconds;
     throw error;
   }
-  return response.json();
+  return responseType === "blob" ? response.blob() : response.json();
 }
 
 export function httpRequest(path, options = {}) {

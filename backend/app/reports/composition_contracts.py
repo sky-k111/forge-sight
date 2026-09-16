@@ -43,6 +43,8 @@ class ReportBlock(CompositionModel):
             raise ValueError("环形图最多展示 12 个分类，请改用条形图或数据条表格查看更多项目")
         if self.kind == "breakdown" and self.compare:
             raise ValueError("上一周期对比仅用于指标概览与趋势，不能对分组数值直接求和")
+        if self.chart == "calendar" and (self.grain != "day" or self.compare):
+            raise ValueError("日历热力图仅支持按日展示本期分布，请使用折线或柱形图对比上一周期")
         return self
 
 
