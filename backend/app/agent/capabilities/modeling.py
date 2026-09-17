@@ -83,7 +83,11 @@ def _predict(context: CapabilityContext, arguments: dict) -> CapabilityResult:
     records = list(arguments.get("records") or [])
     if not task_id or not records:
         return CapabilityResult(status="failed", summary="模型推理缺少 taskId 或 records", reason_code="PREDICTION_ARGUMENTS_MISSING")
-    result = predict(task_id, records, context.user_id)
+    if task_id.startswith("mcp-"):
+        from app.modeling.remote import context_for_user, invoke
+        result = invoke(task_id, context_for_user(context.user_id, context.source_id), records, source_id=context.source_id)
+    else:
+        result = predict(task_id, records, context.user_id)
     return CapabilityResult(status="succeeded", summary=f"已完成 {len(records)} 条记录的模型推理。", payload=result)
 
 

@@ -41,7 +41,11 @@ def _run(context: CapabilityContext, arguments: dict) -> CapabilityResult:
         )
     best = matches[0]
     try:
-        card = run_prediction(best["taskId"], context.user_id)
+        if best.get("executionType") == "mcp":
+            from app.modeling.remote import context_for_user, invoke
+            card = invoke(best["modelId"], context_for_user(context.user_id, context.source_id), source_id=context.source_id)
+        else:
+            card = run_prediction(best["taskId"], context.user_id)
     except (ModelNotFoundError, TaskNotTrainedError) as exc:
         return CapabilityResult(
             status="failed",

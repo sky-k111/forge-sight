@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
+import RemoteModelsPanel from "./RemoteModelsPanel";
 import {
   diagnoseModelingTask,
   getModelingEvaluation,
@@ -14,7 +15,7 @@ import {
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
 import { getCachedUser } from "../../lib/auth";
-import { Button, Card, EmptyState, ErrorNotice, PageFrame, RouteSkeleton, StatusPill } from "../../components/ui";
+import { Button, Card, EmptyState, ErrorNotice, Modal, PageFrame, RouteSkeleton, StatusPill } from "../../components/ui";
 import { RankBarChart } from "../../components/charts";
 
 const MODELING_DRAFT_KEY = "forgesight:modeling-draft";
@@ -88,6 +89,7 @@ function metricLine(model) {
 
 export default function ModelingPage() {
   const { navigatePage } = useOutletContext();
+  const [remoteOpen, setRemoteOpen] = useState(false);
   const [catalog, setCatalog] = useState(null);
   const [tasks, setTasks] = useState(null);
   const [error, setError] = useState(null);
@@ -153,25 +155,34 @@ export default function ModelingPage() {
 
   // 管理员工作区没有智能问析页，跳转入口对管理员隐藏
   const viewerIsAdmin = getCachedUser()?.role === "admin";
+  const remoteDialog = (
+    <Modal open={remoteOpen} onClose={() => setRemoteOpen(false)} maxWidth={1040} label="MCP 远程模型配置">
+      <RemoteModelsPanel embedded onClose={() => setRemoteOpen(false)} />
+    </Modal>
+  );
 
   if (!tasks.length) {
     return (
-      <PageFrame className="max-w-[1360px] gap-4">
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-1">
-          <h2 className="text-sm font-semibold tracking-tight text-ink">智能建模</h2>
-          <div className="ml-auto flex items-center gap-1.5">
-            {!viewerIsAdmin && <Button size="sm" variant="primary" onClick={() => navigatePage("analysis")}><Icon name="plus" size={13} />描述预测需求</Button>}
-          </div>
-        </header>
-        <EmptyState
-          title="还没有建模任务"
-          description={viewerIsAdmin
-            ? "在上方选择数据源与目标字段直接发起训练；训练通过后管理员可免审直发为生产版本。"
-            : "先在智能问析中描述预测、分类、聚类或异常识别需求；Agent 形成方案后，任务会进入这里等待确认。"}
-          action={viewerIsAdmin ? null : <Button variant="primary" className="mt-3" onClick={() => navigatePage("analysis")}><Icon name="message" size={15} />描述建模需求</Button>}
-          className="min-h-44 place-content-center rounded-panel border border-line bg-surface"
-        />
-      </PageFrame>
+      <>
+        <PageFrame className="max-w-[1360px] gap-4">
+          <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-1">
+            <h2 className="text-sm font-semibold tracking-tight text-ink">智能建模</h2>
+            <div className="ml-auto flex items-center gap-1.5">
+              <Button size="sm" variant="primary" onClick={() => setRemoteOpen(true)}><Icon name="plus" size={13} />MCP 远程模型</Button>
+              {!viewerIsAdmin && <Button size="sm" variant="primary" onClick={() => navigatePage("analysis")}><Icon name="plus" size={13} />描述预测需求</Button>}
+            </div>
+          </header>
+          <EmptyState
+            title="还没有建模任务"
+            description={viewerIsAdmin
+              ? "在上方选择数据源与目标字段直接发起训练；训练通过后管理员可免审直发为生产版本。"
+              : "先在智能问析中描述预测、分类、聚类或异常识别需求；Agent 形成方案后，任务会进入这里等待确认。"}
+            action={viewerIsAdmin ? null : <Button variant="primary" className="mt-3" onClick={() => navigatePage("analysis")}><Icon name="message" size={15} />描述建模需求</Button>}
+            className="min-h-44 place-content-center rounded-panel border border-line bg-surface"
+          />
+        </PageFrame>
+        {remoteDialog}
+      </>
     );
   }
 
@@ -269,6 +280,7 @@ export default function ModelingPage() {
   const sampleCount = task.sampleCount || diagnostics?.sampleCount;
 
   return (
+    <>
     <PageFrame className="max-w-[1360px]">
       {/* 风格基线：整页只有一个工作区容器，内部用 1px 分隔线衔接 */}
       <div className="overflow-hidden rounded-panel border border-line bg-surface shadow-card">
@@ -288,9 +300,8 @@ export default function ModelingPage() {
         </label>
         <StatusPill tone={task.tone}>{task.statusLabel}</StatusPill>
         <span className="hidden truncate font-mono text-[11px] text-faint lg:inline">{task.sourceLabel} · 更新 {formatDateTime(task.updatedAt)}</span>
-        <div className="ml-auto flex items-center gap-1.5">
-          {!isAdmin && <Button size="sm" variant="ghost" onClick={() => navigatePage("analysis")}><Icon name="message" size={13} />回到智能问析</Button>}
-          {!isAdmin && <Button size="sm" variant="primary" onClick={() => navigatePage("analysis")}><Icon name="plus" size={13} />描述预测需求</Button>}
+        <div className="ml-auto flex shrink-0 items-center">
+          <Button size="sm" variant="primary" onClick={() => setRemoteOpen(true)}><Icon name="plus" size={13} />MCP 远程模型</Button>
         </div>
       </header>
 
@@ -440,6 +451,8 @@ export default function ModelingPage() {
       </div>
       </div>
     </PageFrame>
+    {remoteDialog}
+    </>
   );
 }
 

@@ -26,6 +26,7 @@ describe("role-aware navigation", () => {
     expect(routeByPage["admin-messages"]).toBe("/admin/messages");
     expect(routeByPage.memory).toBe("/workspace/memory");
     expect(routeByPage.profile).toBe("/workspace/profile");
+    expect(routeByPage["admin-profile"]).toBe("/admin/profile");
     expect(routeByPage.alerts).toBe("/workspace/alerts");
     expect(routeByPage["monitoring-rules"]).toBe("/admin/monitoring-rules");
   });

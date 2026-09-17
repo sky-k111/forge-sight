@@ -17,9 +17,13 @@ pdfplumber==0.11.10
 sqlglot==30.15.0
 openai==2.53.0
 scikit-learn==1.9.0
+flaml[automl]==2.6.0
+lightgbm==4.6.0
+xgboost==2.1.4
 pandas==3.0.5
 joblib==1.5.3
 httpx==0.28.1
+jsonschema==4.23.0
 socksio==1.0.0
 pytest==9.1.1
 langgraph==1.2.10

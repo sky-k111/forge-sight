@@ -22,6 +22,7 @@ from app.api import (
     monitoring,
     model_governance,
     modeling,
+    remote_models,
     model_settings,
     operations,
     overview,
@@ -206,6 +207,7 @@ app.include_router(overview.router)
 app.include_router(operations.router)
 app.include_router(reports.router)
 app.include_router(modeling.router)
+app.include_router(remote_models.router)
 app.include_router(model_settings.router)
 app.include_router(model_governance.router)
 

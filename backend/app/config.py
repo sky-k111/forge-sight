@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     business_db_url: str
     platform_db_url: str
     admin_db_url: str = ""
+    # Exact MCP origins approved by the operator, including private enterprise hosts.
+    mcp_model_allowed_origins: list[str] = []
+    mcp_model_credentials: dict[str, str] = {}
 
     llm_base_url: str = "https://api.deepseek.com"
     llm_api_key: str = ""

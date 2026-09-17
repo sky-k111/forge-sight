@@ -151,6 +151,11 @@ export const pageMeta = {
     title: "个人主页",
     subtitle: "管理登录方式、外部账号与个人分析记忆",
   },
+  "admin-profile": {
+    eyebrow: "管理员个人空间",
+    title: "个人主页",
+    subtitle: "管理登录方式、模型服务配置与个人账号安全",
+  },
   "skill-governance": {
     eyebrow: "管理员工作区",
     title: "分析技能",

@@ -38,11 +38,11 @@ export function PredictionResultCard({ card }) {
         )}
         {card.kind === "group" && (
           <div className="sm:col-span-2">
-            <span className="block text-[11px] text-muted">群分布</span>
+            <span className="block text-[11px] text-muted">{card.taskType === "classification" ? "类别分布" : "群分布"}</span>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {(card.groups ?? []).map((group) => (
                 <span key={group.cluster} className="rounded-tag border border-line bg-surface px-2 py-1 font-mono text-[10px] text-ink-2">
-                  群 {group.cluster} · {group.size} 条 · {group.share}%
+                  {card.taskType === "classification" ? "类别" : "群"} {group.cluster} · {group.size} 条 · {group.share}%
                 </span>
               ))}
             </div>
@@ -61,11 +61,11 @@ export function PredictionResultCard({ card }) {
               <span key={factor.name} className={cn("rounded-tag border border-line bg-surface px-2 py-1 text-[10px] text-ink-2")}>
                 {factor.name} <b className="font-mono">{factor.importance}%</b>
               </span>
-            )) : <span className="text-[11px] text-faint">该算法不提供原生特征重要性</span>}
+            )) : <span className="text-[11px] text-faint">{card.executionType === "mcp" ? "远程接口未提供特征重要性" : "该算法不提供原生特征重要性"}</span>}
           </div>
         </div>
         <p className="text-[10px] text-faint sm:col-span-2">
-          {card.algorithmName} · 目标「{card.targetLabel}」 · 基于最近 {card.sampleCount} 条真实记录 · 模型 {card.modelId}
+          {card.algorithmName} · 目标「{card.targetLabel}」 · {card.executionType === "mcp" ? `基于 ${card.sampleCount} 条${card.dataOrigin === "sample" ? "输入样例" : "查询记录"}` : `基于最近 ${card.sampleCount} 条真实记录`} · 模型 {card.modelId}
         </p>
       </div>
     </section>

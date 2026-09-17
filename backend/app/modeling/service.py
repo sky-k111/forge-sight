@@ -1133,6 +1133,8 @@ def find_reusable_models(question: str, source_id: int, task_type: str = "", vie
             "scope": "personal" if model.status == "personal" else "published",
             "status": model.status,
         })
+    from app.modeling.remote import find_models
+    matches.extend(find_models(question, source_id, task_type, viewer_id))
     matches.sort(key=lambda item: (item["matchScore"], item["version"]), reverse=True)
     return matches[:3]
 

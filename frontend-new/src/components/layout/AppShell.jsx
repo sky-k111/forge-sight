@@ -360,7 +360,7 @@ export default function AppShell() {
           onOpenNavigation={() => setMobileNavOpen(true)}
           unreadCount={unreadCount}
           onOpenMessages={() => navigate(role === "admin" ? routeByPage["admin-messages"] : routeByPage.messages)}
-          onOpenProfile={() => navigate(routeByPage.profile)}
+          onOpenProfile={() => navigate(role === "admin" ? routeByPage["admin-profile"] : routeByPage.profile)}
           onToggleEvidence={() => setEvidenceOpen((value) => !value)}
           activeTenant={activeTenant}
           tenants={tenants}

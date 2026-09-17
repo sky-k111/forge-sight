@@ -1177,6 +1177,39 @@ describe("ForgeSight application routes", () => {
     expect(window.location.pathname).toBe("/admin/security");
   });
 
+  test("keeps administrators in the admin workspace when opening the personal profile", async () => {
+    window.history.replaceState({}, "", "/admin/overview");
+    render(<App />);
+    await screen.findByRole("heading", { name: "治理工作台" });
+
+    fireEvent.click(screen.getByRole("button", { name: "打开个人主页" }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/admin/profile"));
+    expect(await screen.findByRole("heading", { name: "个人主页" })).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "管理员导航" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "业务人员导航" })).toBeNull();
+  });
+
+  test("redirects an administrator's legacy workspace profile link to the admin profile", async () => {
+    window.localStorage.setItem(
+      "forgesight:auth-user",
+      JSON.stringify({
+        id: "u-admin",
+        username: "admin",
+        displayName: "林涛",
+        role: "admin",
+        title: "系统管理员",
+        emailStatus: "verified",
+      }),
+    );
+    window.localStorage.setItem("forgesight:auth-token", "token-demo");
+    window.history.replaceState({}, "", "/workspace/profile");
+    render(<App />);
+
+    await waitFor(() => expect(window.location.pathname).toBe("/admin/profile"));
+    expect(await screen.findByRole("navigation", { name: "管理员导航" })).toBeTruthy();
+  });
+
   test("keeps the evidence chain available when an analysis has no result", async () => {
     window.history.replaceState({}, "", "/workspace/analysis");
     analysisRuns["run-real"] = {
@@ -1253,6 +1286,30 @@ describe("ForgeSight application routes", () => {
     expect(screen.queryByText("2026-07-16T10:32:00")).toBeNull();
     expect(screen.queryByText(/TASK \/ mt-demo/)).toBeNull();
     expect(screen.queryByText("赛题必须项")).toBeNull();
+    expect(screen.queryByRole("button", { name: "回到智能问析" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "描述预测需求" })).toBeNull();
+  });
+
+  test.each([
+    ["业务端", "/workspace/modeling"],
+    ["管理端", "/admin/model-training"],
+  ])("opens MCP configuration in a masked dialog from the %s", async (_, path) => {
+    window.history.replaceState({}, "", path);
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "智能建模" });
+    const entry = await screen.findByRole("button", { name: "MCP 远程模型" });
+    expect(entry.dataset.variant).toBe("primary");
+    expect(entry.querySelector('[data-icon="plus"]')).toBeTruthy();
+
+    fireEvent.click(entry);
+    const dialog = await screen.findByRole("dialog", { name: "MCP 远程模型配置" });
+    expect(screen.getByRole("heading", { name: "接入 MCP 远程模型" })).toBeTruthy();
+    expect(dialog.parentElement.className).toContain("bg-ink/40");
+    expect(window.location.pathname).toBe(path);
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭 MCP 远程模型配置" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "MCP 远程模型配置" })).toBeNull());
   });
 
   test("submits a new question through the real analysis run contract", async () => {

@@ -1345,6 +1345,34 @@ class LlmModelPrice(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class RemoteModelAsset(Base):
+    """Remote inference contract; weights stay on the enterprise MCP server."""
+
+    __tablename__ = "remote_model_asset"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(40), index=True)
+    source_id: Mapped[int] = mapped_column(Integer, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    config_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    validation_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class RemoteModelCall(Base):
+    """Bounded metadata only: credentials and raw enterprise records are not logged."""
+
+    __tablename__ = "remote_model_call"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    model_id: Mapped[str] = mapped_column(String(40), index=True)
+    user_id: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20))
+    record_count: Mapped[int] = mapped_column(Integer)
+    duration_ms: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class ModelingTask(Base):
     """建模任务：目标、取数 SQL、特征与候选算法；训练产物登记在 GovernedModel。"""
 

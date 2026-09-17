@@ -83,6 +83,7 @@ function normalizeLlmSettings(value) {
 export default function ProfilePage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const profilePath = location.pathname.startsWith("/admin") ? "/admin/profile" : "/workspace/profile";
   const [user] = useState(() => ({ ...fallbackUser, ...(getCachedUser() ?? {}) }));
   const [bindings, setBindings] = useState({ dingtalk: null, feishu: null });
   const [memories, setMemories] = useState([]);
@@ -122,8 +123,8 @@ export default function ProfilePage() {
     const status = params.get("dingtalkBind") || params.get("feishuBind");
     if (!provider || !status) return;
     setNotice(status === "success" ? `${provider}账号绑定成功，已同步到个人主页。` : `${provider}账号绑定未完成：${params.get("message") || "请重新尝试授权。"}`);
-    navigate("/workspace/profile", { replace: true });
-  }, [location.search, navigate]);
+    navigate(profilePath, { replace: true });
+  }, [location.search, navigate, profilePath]);
 
   const memoryCounts = useMemo(() => memories.reduce((counts, item) => ({ ...counts, [item.kind]: (counts[item.kind] ?? 0) + 1 }), {}), [memories]);
   const displayName = user.displayName || user.username;
@@ -133,13 +134,13 @@ export default function ProfilePage() {
 
   const bindProvider = async (provider) => {
     if (provider === "email") {
-      navigate("/verify-email", { state: { from: "/workspace/profile", allowEmailChange: true } });
+      navigate("/verify-email", { state: { from: profilePath, allowEmailChange: true } });
       return;
     }
     setBusy(provider);
     setError("");
     try {
-      const body = provider === "feishu" ? await startFeishuBind("/workspace/profile") : await startDingTalkBind("/workspace/profile");
+      const body = provider === "feishu" ? await startFeishuBind(profilePath) : await startDingTalkBind(profilePath);
       if (!body?.authUrl) throw new Error(`未获取到${provider === "feishu" ? "飞书" : "钉钉"}授权地址，请检查后端配置`);
       window.location.href = body.authUrl;
     } catch (reason) {

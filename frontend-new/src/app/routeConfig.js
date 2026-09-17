@@ -5,6 +5,7 @@ export const routeByPage = {
   modeling: "/workspace/modeling",
   memory: "/workspace/memory",
   profile: "/workspace/profile",
+  "admin-profile": "/admin/profile",
   reports: "/workspace/reports",
   alerts: "/workspace/alerts",
   messages: "/workspace/messages",

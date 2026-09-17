@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import RemoteModelsPanel from "../business/RemoteModelsPanel";
 import { createThresholdVariant, listGovernedModels, publishModel, retireModel, reviewModel, rollbackModel } from "../../api/modeling";
 import Icon from "../../components/ui/Icon";
 import cn from "../../lib/cn";
@@ -21,6 +23,7 @@ const FILTERS = [
 ];
 
 export default function ModelGovernancePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [models, setModels] = useState(null);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState("");
@@ -76,6 +79,8 @@ export default function ModelGovernancePage() {
     }
   };
 
+  if (searchParams.get("mode") === "mcp") return <RemoteModelsPanel onBack={() => setSearchParams({})} backLabel="本地模型资产" />;
+
   if (error) {
     return <PageFrame><ErrorNotice title="模型目录加载失败" detail="请检查建模服务后重试。" onRetry={load} /></PageFrame>;
   }
@@ -98,6 +103,7 @@ export default function ModelGovernancePage() {
     <PageFrame className="max-w-[1360px]">
       {/* 风格基线：一个工作区容器；事实条、表格、详情全部贴附在同一边框内 */}
       <div className="overflow-hidden rounded-panel border border-line bg-surface shadow-card">
+      <header className="flex items-center justify-between border-b border-line px-5 py-3"><h2 className="text-sm font-semibold">模型资产 · 本地模型</h2><Button size="sm" onClick={() => setSearchParams({ mode: "mcp" })}>MCP 远程模型资产</Button></header>
       <div className="grid grid-cols-2 divide-y divide-line border-b border-line bg-paper/60 sm:grid-cols-4 sm:divide-y-0 sm:divide-x">
         <div className="px-4 py-3"><span className="block text-[11px] text-muted">登记模型</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-ink">{models.length}</strong><small className="mt-1.5 block text-[11px] text-faint">覆盖分类、回归、聚类与异常检测</small></div>
         <div className="px-4 py-3"><span className="block text-[11px] text-muted">已发布</span><strong className="mt-1 block font-mono text-base font-semibold leading-none text-teal">{published}</strong><small className="mt-1.5 block text-[11px] text-faint">可被业务人员用于推理</small></div>

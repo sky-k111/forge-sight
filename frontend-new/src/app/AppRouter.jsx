@@ -122,6 +122,12 @@ function AppGuard() {
   const outletContext = useOutletContext();
   const user = getCachedUser();
   if (
+    user?.role === "admin" &&
+    location.pathname === "/workspace/profile"
+  ) {
+    return <Navigate to="/admin/profile" replace />;
+  }
+  if (
     user &&
     user.role === "business" &&
     location.pathname.startsWith("/admin")
@@ -188,6 +194,7 @@ export default function AppRouter() {
                 element={<MessagesPage />}
               />
               <Route path="admin/overview" element={<AdminOverviewPage />} />
+              <Route path="admin/profile" element={<ProfilePage />} />
               <Route path="admin/tenants" element={<TenantManagementPage />} />
               <Route path="admin/messages" element={<MessagesPage />} />
               <Route
