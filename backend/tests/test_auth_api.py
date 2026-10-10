@@ -92,6 +92,7 @@ def test_register_creates_business_user_with_token(auth_session):
     assert body["user"]["displayName"] == "张三"
     assert body["user"]["emailMasked"] == "Z***@example.com"
     assert body["user"]["emailStatus"] == "pending_verification"
+    assert body["user"]["emailVerificationRequired"] is False
     assert body["nextAction"] == "verify_email"
     assert auth_service.decode_token(body["token"])["auth_scope"] == "restricted"
     assert "email" not in body["user"]

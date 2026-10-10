@@ -1,0 +1,28 @@
+{
+  "schema": "ppt-master.source_to_md.profile.v1",
+  "converter": "ppt_to_md.py",
+  "conversion_type": "pptx",
+  "source": {
+    "path": "D:/projects/forge-sight-business-dashboard-20260914/docs/ppt-work/forge_sight_features_20260919/sources/source.pptx",
+    "name": "source.pptx",
+    "suffix": ".pptx",
+    "kind": "file",
+    "exists": true,
+    "size_bytes": 9402886
+  },
+  "outputs": {
+    "markdown": "source_readback.md",
+    "asset_dir": "source_readback_files",
+    "image_manifest": "source_readback_files/image_manifest.json",
+    "image_count": 2
+  },
+  "markdown": {
+    "line_count": 220,
+    "char_count": 1580,
+    "heading_count": 4,
+    "table_count": 0,
+    "image_ref_count": 6,
+    "link_count": 0
+  },
+  "warnings": []
+}

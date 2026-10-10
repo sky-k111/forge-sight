@@ -91,6 +91,20 @@ def test_resolve_intent_llm_path_uses_agent_semantics():
     assert intent.comparison is not None and intent.comparison.top_diff_k == 2
 
 
+def test_missing_model_key_has_actionable_failure_message():
+    def missing_key(*_args):
+        from app.llm.provider import LLMError
+
+        raise LLMError("未配置 LLM_API_KEY")
+
+    intent, producer, error = resolve_intent("统计产量", generate_text=missing_key)
+    assert producer == "fallback"
+    assert error == "LLMError"
+    assert intent.failure["code"] == "INTENT_MODEL_NOT_CONFIGURED"
+    assert intent.failure["retryable"] is False
+    assert "API Key" in intent.failure["userSafeMessage"]
+
+
 def _fake_bad_llm(state, step_key, system, user):  # noqa: ANN001
     return "这不是 JSON"
 

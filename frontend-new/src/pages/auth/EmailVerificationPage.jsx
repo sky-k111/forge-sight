@@ -3,20 +3,21 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import {
   changeEmail,
+  fetchMe,
   requestEmailChallenge,
   verifyEmail,
 } from "../../api/auth";
 import forgeSightLogo from "../../assets/forgesight-logo.png";
 import { Button, Card } from "../../components/ui";
 import Icon from "../../components/ui/Icon";
-import { getCachedUser } from "../../lib/auth";
+import { getCachedUser, getToken, setSession } from "../../lib/auth";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function EmailVerificationPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const user = getCachedUser();
+  const [user, setUser] = useState(getCachedUser);
   const initialEmail = user?.email ?? "";
   const isEmailChange = Boolean(location.state?.allowEmailChange);
   const [email, setEmail] = useState(initialEmail);
@@ -26,6 +27,24 @@ export default function EmailVerificationPage() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    if (!user || typeof user.emailVerificationRequired === "boolean") return undefined;
+    let active = true;
+    fetchMe()
+      .then((freshUser) => {
+        if (!active) return;
+        const token = getToken();
+        if (token) setSession(token, freshUser);
+        setUser(freshUser);
+      })
+      .catch(() => {
+        // 网络故障时保留现有验证页，不放行未知的邮箱门禁状态。
+      });
+    return () => {
+      active = false;
+    };
+  }, [user]);
 
   useEffect(() => {
     if (!countdown) return undefined;
@@ -48,7 +67,7 @@ export default function EmailVerificationPage() {
   if (!user) {
     return <Navigate to="/login" replace />;
   }
-  if (user.emailStatus === "verified" && !location.state?.allowEmailChange) {
+  if ((user.emailVerificationRequired === false || user.emailStatus === "verified") && !location.state?.allowEmailChange) {
     return <Navigate to={destination} replace />;
   }
 

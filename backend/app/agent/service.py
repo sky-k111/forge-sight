@@ -287,8 +287,16 @@ def create_run(
         ):
             request_kind = "conversation"
         report_request = is_report_request(normalized_question)
-        # With unified intent enabled all entries are parsed once by the worker.
-        inline_conversation = (not settings.agent_intent_enabled) and request_kind in {"conversation", "utility", "unknown"}
+        # Fixed greetings and role answers need no model, even when unified intent
+        # is enabled. Keep business and mixed requests on the governed worker path.
+        known_reply = (
+            inline_conversation_reply(normalized_question)
+            if request_kind == "conversation" and not report_request else None
+        )
+        inline_conversation = (
+            (not settings.agent_intent_enabled and request_kind in {"conversation", "utility", "unknown"})
+            or known_reply is not None
+        )
         sequence_no = (
             session.query(func.coalesce(func.max(AnalysisMessage.sequence_no), 0))
             .filter_by(session_id=session_id)
@@ -407,7 +415,7 @@ def create_run(
         else:
             execute_inline_conversation(
                 run_id,
-                inline_conversation_reply(normalized_question),
+                known_reply,
             )
         with PlatformSession() as session:
             completed = session.query(AnalysisRun).filter_by(id=run_id).one()

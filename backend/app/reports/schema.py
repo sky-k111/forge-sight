@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.reports.comparison import period_window
+
 
 class ReportContentModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
@@ -353,14 +355,17 @@ def validate_for_publish(content: dict) -> dict:
     ]
     comparison_start = report.identity.comparison_period_start
     comparison_end = report.identity.comparison_period_end
+    current_start, current_end_exclusive, _ = period_window(
+        report.identity.period_start, report.identity.period_end
+    )
     comparison_invalid = bool(comparative_metrics) and (
         comparison_start is None
         or comparison_end is None
         or comparison_end != report.identity.period_start
         or comparison_start >= comparison_end
         or (
-            comparison_end - comparison_start
-            != report.identity.period_end - report.identity.period_start
+            comparison_end.date() - comparison_start.date()
+            != current_end_exclusive - current_start
         )
     )
     if comparison_invalid:

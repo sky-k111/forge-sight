@@ -89,6 +89,8 @@ def test_create_and_finalize_topic_report_reuses_agent_artifacts(analysis_sessio
     with analysis_session() as session:
         created = session.get(Report, report["id"])
         assert created.scope_json["emailEnabled"] is True
+        version = session.get(ReportVersion, created.current_version_id)
+        assert version.data_quality_json["coverageScore"] == created.scope_json["templateCoverage"]["score"]
     with analysis_session() as session:
         run = AnalysisRun(
             id="run-report",

@@ -279,6 +279,43 @@ AOI检测 | 99.21%`);
     expect(run.chart.unit).toBe("%");
   });
 
+  test("makes categorical rate differences visible without hiding the axis range", () => {
+    const run = adaptAnalysisRun(snapshotWithResult({
+      question: "各工序良率从低到高排序，用柱状图展示",
+      columns: ["工序", "工序良率"],
+      rows: [["功能测试", 95.79], ["老化测试", 96.19], ["包装入库", 99.22]],
+    }));
+
+    expect(run.chart.type).toBe("bar");
+    expect(run.chart.yDomain[0]).toBeGreaterThan(90);
+    expect(run.chart.yDomain[1]).toBeLessThanOrEqual(100);
+    expect(run.chart.unit).toBe("%");
+    expect(run.chart.note).toContain("纵轴");
+  });
+
+  test("focuses the axis of a rate chart supplied by the analysis service", () => {
+    const snapshot = snapshotWithResult({
+      question: "按工序比较良率",
+      columns: ["工序", "工序良率"],
+      rows: [["功能测试", 95.79], ["包装入库", 99.22]],
+    });
+    snapshot.artifacts.push({
+      id: "interpretation-1", taskId: "task-1", type: "interpretation",
+      content: { chart: {
+        type: "bar", title: "工序良率", xKey: "工序", valueKey: "工序良率",
+        bars: [{ key: "工序良率", name: "工序良率" }],
+        data: [{ 工序: "功能测试", 工序良率: 95.79 }, { 工序: "包装入库", 工序良率: 99.22 }],
+        yDomain: [0, 100], note: "图表展示全部 2 条返回记录。",
+      } },
+    });
+
+    const run = adaptAnalysisRun(snapshot);
+
+    expect(run.chart.yDomain[0]).toBeGreaterThan(90);
+    expect(run.chart.yDomain[1]).toBeLessThanOrEqual(100);
+    expect(run.chart.note).toContain("纵轴从");
+  });
+
   test("uses a donut chart for small categorical share results", () => {
     const run = adaptAnalysisRun(snapshotWithResult({
       question: "查看各缺陷类型占比",

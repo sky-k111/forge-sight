@@ -652,7 +652,16 @@ def _structured_metrics(
             continue
         seen_keys.add(key)
         values = [_numeric_value(row[numeric_index]) for row in numeric_rows]
-        previous = values[-2] if len(values) >= 2 else None
+        presentation = content.get("presentation") or {}
+        previous_rows = result.get("previousRows") or []
+        if presentation.get("kind") == "kpi" and result.get("source") == "governed-composition":
+            previous = (
+                _numeric_value(previous_rows[0][numeric_index])
+                if previous_rows and numeric_index < len(previous_rows[0])
+                else None
+            )
+        else:
+            previous = values[-2] if len(values) >= 2 else None
         change_rate = (
             (values[-1] - previous) / abs(previous)
             if previous not in {None, 0}

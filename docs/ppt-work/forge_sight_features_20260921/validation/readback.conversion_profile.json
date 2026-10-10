@@ -1,0 +1,28 @@
+{
+  "schema": "ppt-master.source_to_md.profile.v1",
+  "converter": "ppt_to_md.py",
+  "conversion_type": "pptx",
+  "source": {
+    "path": "C:/Users/ASUS/Desktop/ForgeSight_产品特色_3.2_3.4_3.5_技术细节增强版.pptx",
+    "name": "ForgeSight_产品特色_3.2_3.4_3.5_技术细节增强版.pptx",
+    "suffix": ".pptx",
+    "kind": "file",
+    "exists": true,
+    "size_bytes": 9614103
+  },
+  "outputs": {
+    "markdown": "readback.md",
+    "asset_dir": "readback_files",
+    "image_manifest": "readback_files/image_manifest.json",
+    "image_count": 5
+  },
+  "markdown": {
+    "line_count": 154,
+    "char_count": 1629,
+    "heading_count": 4,
+    "table_count": 0,
+    "image_ref_count": 9,
+    "link_count": 0
+  },
+  "warnings": []
+}

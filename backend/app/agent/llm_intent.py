@@ -410,10 +410,18 @@ def resolve_intent(
             return intent.model_copy(update={"producer": "llm", "question": question, "failure": None}), "llm", None
         except Exception as exc:  # noqa: BLE001 - 非法/失败必须安全降级
             format_error = isinstance(exc, (ValueError, TypeError))
+            configuration_missing = "未配置 LLM_API_KEY" in str(exc) or "所选模型配置已失效" in str(exc)
             failure = {
-                "code": "INTENT_OUTPUT_INVALID" if format_error else "INTENT_SERVICE_UNAVAILABLE",
-                "retryable": True,
-                "userSafeMessage": "分析服务返回的格式未通过校验，请重试。" if format_error else "分析服务暂时不可用，请稍后重试。",
+                "code": "INTENT_MODEL_NOT_CONFIGURED" if configuration_missing else (
+                    "INTENT_OUTPUT_INVALID" if format_error else "INTENT_SERVICE_UNAVAILABLE"
+                ),
+                "retryable": not configuration_missing,
+                "userSafeMessage": (
+                    "尚未配置可用的 AI 模型，请在“个人资料 → 模型配置”中填写 API Key，或联系管理员配置服务端密钥。"
+                    if configuration_missing else
+                    "分析服务返回的格式未通过校验，请重试。" if format_error else
+                    "分析服务暂时不可用，请稍后重试。"
+                ),
             }
             fallback = AgentIntent(kind=IntentKind.CLARIFY, question=question, producer="fallback",
                 failure=failure, reasons=["意图解析未完成"])

@@ -1,0 +1,160 @@
+{
+  "schema": "ppt-master.svg-quality-report.v1",
+  "stage": "final",
+  "target": "D:\\projects\\forge-sight-business-dashboard-20260914\\docs\\ppt-work\\forge_sight_features_20260919",
+  "source_fingerprint": {
+    "algorithm": "sha256",
+    "digest": "d2aa7b4f84a05a4a8b8a08f1ccb13c8e740f615f22a90658f9b768d196659286",
+    "file_count": 3,
+    "files": [
+      {
+        "file": "authoring-svg-flat/slide_01.svg",
+        "sha256": "2212ccf991d1f4c2ce6f211902b257bce113e81ba34aece36f44cbfbd6661ecd"
+      },
+      {
+        "file": "authoring-svg-flat/slide_02.svg",
+        "sha256": "fead15f24f45321daf8397a2d52dcaa379dc9c6b04adbf19f99f0accdd67bde7"
+      },
+      {
+        "file": "authoring-svg-flat/slide_03.svg",
+        "sha256": "c2d4b404a6a44cea19fbd6cd5b2abb48df63a6c8e1b5314fd01e54a20b6dc2a7"
+      }
+    ]
+  },
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "warnings": 0,
+    "errors": 0
+  },
+  "issue_types": {},
+  "categories": {
+    "blocking": {
+      "count": 0,
+      "issues": []
+    },
+    "introduced": {
+      "count": 0,
+      "issues": []
+    },
+    "inherited": {
+      "count": 0,
+      "issues": []
+    },
+    "source-import": {
+      "count": 0,
+      "summary": {
+        "warning_count": 0,
+        "by_code": {}
+      }
+    }
+  },
+  "drift": {
+    "colors": {},
+    "fonts": {},
+    "sizes": {}
+  },
+  "carrier_receipt": {
+    "scope": "informational-not-a-quota",
+    "pages": 0,
+    "totals": {
+      "text_elements": 0,
+      "image_placements": 0,
+      "icons": 0,
+      "svg_geometry_elements": 0,
+      "preset_shapes": 0,
+      "page_frame_elements": 0,
+      "marker_uses": 0,
+      "inline_emphasis_runs": 0,
+      "gradient_uses": 0,
+      "filter_uses": 0,
+      "text_effects": 0
+    },
+    "pages_with": {
+      "images": 0,
+      "icons": 0,
+      "presets": 0,
+      "charts": 0,
+      "tables": 0,
+      "formulas": 0,
+      "inline_emphasis_runs": 0,
+      "gradient_uses": 0,
+      "filter_uses": 0,
+      "text_effects": 0
+    },
+    "relationship_pages": null,
+    "geometry_elements": {},
+    "preset_names": {},
+    "native_objects": {},
+    "image_page_max_frame_share_range": []
+  },
+  "project_issues": {
+    "template": [],
+    "animation": [],
+    "illustration": [],
+    "communication_trace": [],
+    "pptx_structure": []
+  },
+  "files": [
+    {
+      "file": "slide_01.svg",
+      "path": "D:\\projects\\forge-sight-business-dashboard-20260914\\docs\\ppt-work\\forge_sight_features_20260919\\authoring-svg-flat\\slide_01.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [],
+      "info": {
+        "output_page": 1,
+        "source_slide": 1,
+        "viewbox": "0 0 1280 720",
+        "edited_text_elements": 0,
+        "roundtrip_text_calibration": {
+          "factor": 0.0,
+          "measured_unchanged": 22,
+          "positive_unchanged": 0
+        }
+      },
+      "passed": true,
+      "source_sha256": "2212ccf991d1f4c2ce6f211902b257bce113e81ba34aece36f44cbfbd6661ecd"
+    },
+    {
+      "file": "slide_02.svg",
+      "path": "D:\\projects\\forge-sight-business-dashboard-20260914\\docs\\ppt-work\\forge_sight_features_20260919\\authoring-svg-flat\\slide_02.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [],
+      "info": {
+        "output_page": 2,
+        "source_slide": 2,
+        "viewbox": "0 0 1280 720",
+        "edited_text_elements": 0,
+        "roundtrip_text_calibration": {
+          "factor": 0.0,
+          "measured_unchanged": 21,
+          "positive_unchanged": 0
+        }
+      },
+      "passed": true,
+      "source_sha256": "fead15f24f45321daf8397a2d52dcaa379dc9c6b04adbf19f99f0accdd67bde7"
+    },
+    {
+      "file": "slide_03.svg",
+      "path": "D:\\projects\\forge-sight-business-dashboard-20260914\\docs\\ppt-work\\forge_sight_features_20260919\\authoring-svg-flat\\slide_03.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [],
+      "info": {
+        "output_page": 3,
+        "source_slide": 3,
+        "viewbox": "0 0 1280 720",
+        "edited_text_elements": 3,
+        "roundtrip_text_calibration": {
+          "factor": 0.0,
+          "measured_unchanged": 18,
+          "positive_unchanged": 0
+        }
+      },
+      "passed": true,
+      "source_sha256": "c2d4b404a6a44cea19fbd6cd5b2abb48df63a6c8e1b5314fd01e54a20b6dc2a7"
+    }
+  ]
+}

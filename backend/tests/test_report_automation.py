@@ -1,6 +1,7 @@
 """R 智能周报：调度、编排、校验和自动发布。"""
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from app.db.models import (
     AnalysisArtifact,
@@ -18,6 +19,29 @@ from app.reports import automation, service
 from app.reports.templates import seed_report_templates
 
 UTC = UTC
+
+
+def test_governed_composition_kpi_uses_period_total_and_equal_previous_period():
+    section = SimpleNamespace(
+        code="output", confidence=90, artifact_ids_json=["art-governed"],
+        content_json={
+            "presentation": {"kind": "kpi"},
+            "metricResolution": {"id": "output", "name": "产量", "unit": "件"},
+            "result": {
+                "source": "governed-composition", "columns": ["产量"],
+                "rows": [[600771]], "previousRows": [[583227]],
+            },
+        },
+    )
+
+    metrics, _, _ = automation._structured_metrics(
+        [section], period_end=datetime(2026, 7, 19, 23, 59, 59)
+    )
+
+    assert metrics[0]["value"] == 600771
+    assert metrics[0]["previousValue"] == 583227
+    assert metrics[0]["changeRate"] == (600771 - 583227) / 583227
+    assert metrics[0]["evidenceArtifactIds"] == ["art-governed"]
 
 
 def _subscription(session_factory, *, next_run_at: datetime) -> str:

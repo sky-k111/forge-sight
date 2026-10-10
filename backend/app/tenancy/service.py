@@ -81,11 +81,12 @@ def seed_legacy_memberships() -> None:
             (DataSource.tenant_id.is_(None)) | (DataSource.tenant_id == "")
         ).update({DataSource.tenant_id: DEFAULT_TENANT_ID}, synchronize_session=False)
         for user in session.query(PlatformUser).all():
-            exists = session.query(TenantMembership.id).filter_by(
-                tenant_id=DEFAULT_TENANT_ID,
+            # Only pre-migration users without any membership belong to the
+            # compatibility tenant. New registrations own an isolated tenant.
+            existing_membership = session.query(TenantMembership.id).filter_by(
                 user_id=user.id,
             ).first()
-            if exists:
+            if existing_membership:
                 continue
             session.add(
                 TenantMembership(

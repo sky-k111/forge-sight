@@ -143,7 +143,11 @@ def source_index_status(session, source_id: int) -> dict:
         "sourceName": source.name,
         "enabled": settings.retrieval_semantic_enabled,
         "status": status,
-        "statusLabel": serialized["statusLabel"] if serialized else STATUS_LABELS["not_started"],
+        "statusLabel": (
+            "语义索引未启用"
+            if not settings.retrieval_semantic_enabled
+            else serialized["statusLabel"] if serialized else STATUS_LABELS["not_started"]
+        ),
         "latestJob": serialized,
         "registeredTables": int(registered_tables),
         "documents": int(sum(document_counts.values()) or result.get("documents", 0)),

@@ -422,9 +422,9 @@ export default function ResourcesPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2 rounded-control border border-line bg-surface-2 px-2.5 py-1.5">
-            <span className={cn("h-1.5 w-1.5 rounded-full", semanticIndex?.status === "failed" ? "bg-red" : semanticIndex?.status === "succeeded" ? "bg-green" : "bg-amber")} />
+            <span className={cn("h-1.5 w-1.5 rounded-full", semanticIndex?.enabled === false ? "bg-muted" : semanticIndex?.status === "failed" ? "bg-red" : semanticIndex?.status === "succeeded" ? "bg-green" : "bg-amber")} />
             <span className="text-[11px] font-semibold text-ink-2">{semanticIndex?.statusLabel ?? "正在读取索引状态"}</span>
-            {semanticIndex?.status === "failed" ? (
+            {semanticIndex?.enabled === false ? null : semanticIndex?.status === "failed" ? (
               <Button size="sm" variant="ghost" onClick={retryIndex} disabled={indexAction}>重试</Button>
             ) : (
               <Button size="sm" variant="ghost" onClick={queueFullIndex} disabled={indexAction} title="重新生成当前数据源的全部语义向量">

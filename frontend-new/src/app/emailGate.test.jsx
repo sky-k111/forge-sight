@@ -37,6 +37,33 @@ test("redirects an authenticated unverified user before rendering workspace cont
   expect(screen.queryByText("敏感工作台")).toBeNull();
 });
 
+test("allows an unverified account when the server disables the email gate", async () => {
+  window.localStorage.setItem("forgesight:auth-token", "demo-token");
+  window.localStorage.setItem(
+    "forgesight:auth-user",
+    JSON.stringify({
+      username: "demo",
+      role: "business",
+      emailStatus: "pending_verification",
+      emailVerificationRequired: false,
+    }),
+  );
+
+  render(
+    <MemoryRouter initialEntries={["/workspace/reports"]}>
+      <Routes>
+        <Route element={<EmailGate allowDemo={false} />}>
+          <Route path="/workspace/reports" element={<div>业务工作台</div>} />
+        </Route>
+        <Route path="/verify-email" element={<div>验证邮箱</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findByText("业务工作台")).toBeTruthy();
+  expect(screen.queryByText("验证邮箱")).toBeNull();
+});
+
 test("redirects an anonymous user to login when demo access is disabled", async () => {
   render(
     <MemoryRouter initialEntries={["/workspace/reports"]}>

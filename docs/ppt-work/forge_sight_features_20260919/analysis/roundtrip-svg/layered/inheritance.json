@@ -1,0 +1,76 @@
+{
+  "masters": [
+    {
+      "file": "master_01_slideMaster1.svg",
+      "partPath": "ppt/slideMasters/slideMaster1.xml",
+      "themePath": "ppt/theme/theme1.xml"
+    },
+    {
+      "file": "master_02_slideMaster2.svg",
+      "partPath": "ppt/slideMasters/slideMaster2.xml",
+      "themePath": "ppt/theme/theme2.xml"
+    },
+    {
+      "file": "master_03_slideMaster3.svg",
+      "partPath": "ppt/slideMasters/slideMaster3.xml",
+      "themePath": "ppt/theme/theme3.xml"
+    }
+  ],
+  "layouts": [
+    {
+      "file": "layout_01_slideLayout1.svg",
+      "partPath": "ppt/slideLayouts/slideLayout1.xml",
+      "master": "master_01_slideMaster1.svg",
+      "parentPartPath": "ppt/slideMasters/slideMaster1.xml",
+      "themePath": "ppt/theme/theme1.xml",
+      "showMasterShapes": true
+    },
+    {
+      "file": "layout_02_slideLayout2.svg",
+      "partPath": "ppt/slideLayouts/slideLayout2.xml",
+      "master": "master_02_slideMaster2.svg",
+      "parentPartPath": "ppt/slideMasters/slideMaster2.xml",
+      "themePath": "ppt/theme/theme2.xml",
+      "showMasterShapes": true
+    },
+    {
+      "file": "layout_03_slideLayout3.svg",
+      "partPath": "ppt/slideLayouts/slideLayout3.xml",
+      "master": "master_03_slideMaster3.svg",
+      "parentPartPath": "ppt/slideMasters/slideMaster3.xml",
+      "themePath": "ppt/theme/theme3.xml",
+      "showMasterShapes": true
+    },
+    {
+      "file": "layout_04_slideLayout4.svg",
+      "partPath": "ppt/slideLayouts/slideLayout4.xml",
+      "master": "master_03_slideMaster3.svg",
+      "parentPartPath": "ppt/slideMasters/slideMaster3.xml",
+      "themePath": "ppt/theme/theme3.xml",
+      "showMasterShapes": true
+    }
+  ],
+  "slides": [
+    {
+      "file": "slide_01.svg",
+      "index": 1,
+      "layout": "layout_03_slideLayout3.svg",
+      "master": "master_03_slideMaster3.svg",
+      "showInheritedShapes": true
+    },
+    {
+      "file": "slide_02.svg",
+      "index": 2,
+      "layout": "layout_03_slideLayout3.svg",
+      "master": "master_03_slideMaster3.svg",
+      "showInheritedShapes": true
+    },
+    {
+      "file": "slide_03.svg",
+      "index": 3,
+      "layout": "layout_03_slideLayout3.svg",
+      "master": "master_03_slideMaster3.svg",
+      "showInheritedShapes": true
+    }
+  ]
+}

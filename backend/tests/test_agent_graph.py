@@ -13,7 +13,7 @@ from app.agent.graph import (
     build_analysis_graph,
 )
 from app.agent.intent import build_intent_plan, has_write_intent
-from app.db.models import AuditLog
+from app.db.models import AuditLog, LlmCallAttempt
 from app.gateway.cost_guard import ExplainCheckResult
 from app.gateway.executor import ExecutionResult
 from app.gateway.sql_validator import SqlCheckResult
@@ -359,6 +359,21 @@ def test_runner_persists_smalltalk_as_a_plain_assistant_message(analysis_session
     assert [step["stepKey"] for step in snapshot["steps"]] == ["intent.route"]
     assert "ForgeSight" in snapshot["assistantMessage"]["content"]
     assert calls == []
+
+
+def test_greeting_succeeds_without_model_key_when_unified_intent_is_enabled(analysis_session, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "agent_intent_enabled", True)
+    monkeypatch.setattr(settings, "llm_api_key", "")
+    created = service.create_session("问候免模型测试", 1, "u-greeting")
+    accepted = service.create_run(created["id"], "你好", "greeting-no-key")
+
+    snapshot = service.get_run(accepted["runId"])
+    assert snapshot["status"] == "succeeded"
+    assert "ForgeSight" in snapshot["assistantMessage"]["content"]
+    with analysis_session() as session:
+        assert session.query(LlmCallAttempt).filter_by(run_id=accepted["runId"]).count() == 0
 
 
 def test_known_role_question_is_completed_before_the_worker_poll(analysis_session):

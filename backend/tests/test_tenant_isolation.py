@@ -76,6 +76,25 @@ def test_membership_rejects_cross_tenant_selection(tenant_session):
     assert exc.value.status_code == 403
 
 
+def test_legacy_backfill_keeps_new_users_in_their_private_tenant(tenant_session):
+    with tenant_session() as session:
+        session.add(
+            PlatformUser(
+                id="legacy-user", username="legacy_user", password_hash="test",
+                role="business", enabled=True,
+            )
+        )
+        session.commit()
+
+    tenancy.seed_legacy_memberships()
+
+    with tenant_session() as session:
+        private_memberships = session.query(TenantMembership).filter_by(user_id="user-a").all()
+        legacy_memberships = session.query(TenantMembership).filter_by(user_id="legacy-user").all()
+        assert [(row.tenant_id, row.is_default) for row in private_memberships] == [("tenant-a", True)]
+        assert [(row.tenant_id, row.is_default) for row in legacy_memberships] == [("tenant-default", True)]
+
+
 def test_sources_and_analysis_sessions_are_tenant_scoped(tenant_session):
     assert [item["id"] for item in datasources.list_sources("tenant-a")] == [11]
     assert [item["id"] for item in datasources.list_sources("tenant-b")] == [22]

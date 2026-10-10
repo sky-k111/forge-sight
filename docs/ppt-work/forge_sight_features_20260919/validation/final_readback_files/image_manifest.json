@@ -1,0 +1,241 @@
+[
+  {
+    "index": 1,
+    "filename": "image5.png",
+    "original_filename": "image5.png",
+    "asset_kind": "bitmap",
+    "svg_renderable": true,
+    "pptx_native_supported": true,
+    "source_kind": "pptx_picture",
+    "source_ext": ".png",
+    "source_target": "ppt/media/image5.png",
+    "content_type": "image/png",
+    "display_left_emu": 0,
+    "display_top_emu": 0,
+    "display_width_emu": 12192000,
+    "display_height_emu": 6858000,
+    "display_width_in": 13.3333,
+    "display_height_in": 7.5,
+    "display_ratio": 1.777778,
+    "pixel_width": 1672,
+    "pixel_height": 941,
+    "pixel_ratio": 1.776833,
+    "occurrences": [
+      {
+        "slide_index": 1,
+        "shape_name": "图片 10",
+        "display_left_emu": 0,
+        "display_top_emu": 0,
+        "display_width_emu": 12192000,
+        "display_height_emu": 6858000,
+        "display_width_in": 13.3333,
+        "display_height_in": 7.5,
+        "display_ratio": 1.777778
+      },
+      {
+        "slide_index": 2,
+        "shape_name": "图片 10",
+        "display_left_emu": 0,
+        "display_top_emu": 0,
+        "display_width_emu": 12192000,
+        "display_height_emu": 6858000,
+        "display_width_in": 13.3333,
+        "display_height_in": 7.5,
+        "display_ratio": 1.777778
+      },
+      {
+        "slide_index": 3,
+        "shape_name": "图片 10",
+        "display_left_emu": 0,
+        "display_top_emu": 0,
+        "display_width_emu": 12192000,
+        "display_height_emu": 6858000,
+        "display_width_in": 13.3333,
+        "display_height_in": 7.5,
+        "display_ratio": 1.777778
+      }
+    ],
+    "usage_count": 3,
+    "display_ratio_variants": [
+      1.777778
+    ]
+  },
+  {
+    "index": 2,
+    "filename": "image2.png",
+    "original_filename": "image2.png",
+    "asset_kind": "bitmap",
+    "svg_renderable": true,
+    "pptx_native_supported": true,
+    "source_kind": "pptx_picture",
+    "source_ext": ".png",
+    "source_target": "ppt/media/image2.png",
+    "content_type": "image/png",
+    "display_left_emu": 552450,
+    "display_top_emu": 28575,
+    "display_width_emu": 419100,
+    "display_height_emu": 419100,
+    "display_width_in": 0.4583,
+    "display_height_in": 0.4583,
+    "display_ratio": 1.0,
+    "pixel_width": 256,
+    "pixel_height": 256,
+    "pixel_ratio": 1.0,
+    "occurrences": [
+      {
+        "slide_index": 1,
+        "shape_name": "图片 11",
+        "display_left_emu": 552450,
+        "display_top_emu": 28575,
+        "display_width_emu": 419100,
+        "display_height_emu": 419100,
+        "display_width_in": 0.4583,
+        "display_height_in": 0.4583,
+        "display_ratio": 1.0
+      },
+      {
+        "slide_index": 2,
+        "shape_name": "图片 11",
+        "display_left_emu": 552450,
+        "display_top_emu": 28575,
+        "display_width_emu": 419100,
+        "display_height_emu": 419100,
+        "display_width_in": 0.4583,
+        "display_height_in": 0.4583,
+        "display_ratio": 1.0
+      },
+      {
+        "slide_index": 3,
+        "shape_name": "图片 11",
+        "display_left_emu": 552450,
+        "display_top_emu": 28575,
+        "display_width_emu": 419100,
+        "display_height_emu": 419100,
+        "display_width_in": 0.4583,
+        "display_height_in": 0.4583,
+        "display_ratio": 1.0
+      }
+    ],
+    "usage_count": 3,
+    "display_ratio_variants": [
+      1.0
+    ]
+  },
+  {
+    "index": 3,
+    "filename": "image_75bf3d8d6384c1b0.png",
+    "original_filename": "image_75bf3d8d6384c1b0.png",
+    "asset_kind": "bitmap",
+    "svg_renderable": true,
+    "pptx_native_supported": true,
+    "source_kind": "pptx_picture",
+    "source_ext": ".png",
+    "source_target": "ppt/media/image_75bf3d8d6384c1b0.png",
+    "content_type": "image/png",
+    "display_left_emu": 5800725,
+    "display_top_emu": 1751724,
+    "display_width_emu": 5562600,
+    "display_height_emu": 3449802,
+    "display_width_in": 6.0833,
+    "display_height_in": 3.7727,
+    "display_ratio": 1.61244,
+    "pixel_width": 1348,
+    "pixel_height": 836,
+    "pixel_ratio": 1.61244,
+    "occurrences": [
+      {
+        "slide_index": 1,
+        "shape_name": "Image 73",
+        "display_left_emu": 5800725,
+        "display_top_emu": 1751724,
+        "display_width_emu": 5562600,
+        "display_height_emu": 3449802,
+        "display_width_in": 6.0833,
+        "display_height_in": 3.7727,
+        "display_ratio": 1.61244
+      }
+    ],
+    "usage_count": 1,
+    "display_ratio_variants": [
+      1.61244
+    ]
+  },
+  {
+    "index": 4,
+    "filename": "image_4d2522761621a3e7.png",
+    "original_filename": "image_4d2522761621a3e7.png",
+    "asset_kind": "bitmap",
+    "svg_renderable": true,
+    "pptx_native_supported": true,
+    "source_kind": "pptx_picture",
+    "source_ext": ".png",
+    "source_target": "ppt/media/image_4d2522761621a3e7.png",
+    "content_type": "image/png",
+    "display_left_emu": 6152122,
+    "display_top_emu": 1600200,
+    "display_width_emu": 4859806,
+    "display_height_emu": 3752850,
+    "display_width_in": 5.3147,
+    "display_height_in": 4.1042,
+    "display_ratio": 1.294964,
+    "pixel_width": 720,
+    "pixel_height": 556,
+    "pixel_ratio": 1.294964,
+    "occurrences": [
+      {
+        "slide_index": 2,
+        "shape_name": "Image 71",
+        "display_left_emu": 6152122,
+        "display_top_emu": 1600200,
+        "display_width_emu": 4859806,
+        "display_height_emu": 3752850,
+        "display_width_in": 5.3147,
+        "display_height_in": 4.1042,
+        "display_ratio": 1.294964
+      }
+    ],
+    "usage_count": 1,
+    "display_ratio_variants": [
+      1.294964
+    ]
+  },
+  {
+    "index": 5,
+    "filename": "image_a3e567eee8059ab5.png",
+    "original_filename": "image_a3e567eee8059ab5.png",
+    "asset_kind": "bitmap",
+    "svg_renderable": true,
+    "pptx_native_supported": true,
+    "source_kind": "pptx_picture",
+    "source_ext": ".png",
+    "source_target": "ppt/media/image_a3e567eee8059ab5.png",
+    "content_type": "image/png",
+    "display_left_emu": 5800725,
+    "display_top_emu": 1751724,
+    "display_width_emu": 5562600,
+    "display_height_emu": 3449802,
+    "display_width_in": 6.0833,
+    "display_height_in": 3.7727,
+    "display_ratio": 1.61244,
+    "pixel_width": 1348,
+    "pixel_height": 836,
+    "pixel_ratio": 1.61244,
+    "occurrences": [
+      {
+        "slide_index": 3,
+        "shape_name": "Image 71",
+        "display_left_emu": 5800725,
+        "display_top_emu": 1751724,
+        "display_width_emu": 5562600,
+        "display_height_emu": 3449802,
+        "display_width_in": 6.0833,
+        "display_height_in": 3.7727,
+        "display_ratio": 1.61244
+      }
+    ],
+    "usage_count": 1,
+    "display_ratio_variants": [
+      1.61244
+    ]
+  }
+]

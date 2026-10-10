@@ -1,0 +1,1337 @@
+{
+  "schema": "ppt-master.svg-authoring-ir.v1",
+  "projection_kind": "flat",
+  "source_root": "../analysis/roundtrip-svg/flat",
+  "authoring_root": ".",
+  "source_ref_attribute": "data-pptx-source-ref",
+  "file_count": 3,
+  "source_ref_count": 186,
+  "documents": [
+    {
+      "source": "slide_01.svg",
+      "authoring": "slide_01.svg",
+      "source_sha256": "5d1b6467caa1e1a9397e2698ae031ad58203f3ae5a1b03b8bafde6f2dc117835",
+      "initial_authoring_sha256": "fa15e0e1b1f3311f8ac3312a51752972a8ca2c1c360b27affc018127b7947cfe",
+      "source_refs": {
+        "layout:15": {
+          "source_path": [
+            1
+          ],
+          "initial_authoring_subtree_sha256": "53695f2062a8c9499cc59fb7679bdeb7deb524df08f53d9dab1be318b111a1f3",
+          "representation": "inline"
+        },
+        "slide:10": {
+          "source_path": [
+            11
+          ],
+          "initial_authoring_subtree_sha256": "30e3d9362b8703fe69f24f4bb623b27d04ce104f8d6be2963513d2551a8ffac3",
+          "representation": "inline"
+        },
+        "slide:11": {
+          "source_path": [
+            2
+          ],
+          "initial_authoring_subtree_sha256": "dfe8160518263a3456ba3a42a0109ceca733954ef55918e9b0a13ed8cd5ea23a",
+          "representation": "inline"
+        },
+        "slide:12": {
+          "source_path": [
+            3
+          ],
+          "initial_authoring_subtree_sha256": "6cab218532e1b88141e812501ddc5d5a29e48c0abd9b1d860de953a0a3c245e1",
+          "representation": "inline"
+        },
+        "slide:22": {
+          "source_path": [
+            12
+          ],
+          "initial_authoring_subtree_sha256": "8369a7fb0c5d002b17817f0885f588e929c30758bbd78dd31ce675870aa12f29",
+          "representation": "inline"
+        },
+        "slide:23": {
+          "source_path": [
+            13
+          ],
+          "initial_authoring_subtree_sha256": "590bfae2875d91cde1adea7ffcc9d0715117a85ac2850886b0bca868dc6aab36",
+          "representation": "inline"
+        },
+        "slide:24": {
+          "source_path": [
+            14
+          ],
+          "initial_authoring_subtree_sha256": "b8823c50e56e9978cfce6d0bc6a1db034ca2b025d8a7dfd34a74155e5ebb18d0",
+          "representation": "inline"
+        },
+        "slide:25": {
+          "source_path": [
+            15
+          ],
+          "initial_authoring_subtree_sha256": "2fce15313b3a1830c09c60c88fce371a3429ed91436da56e354bbef0548dd8b2",
+          "representation": "inline"
+        },
+        "slide:26": {
+          "source_path": [
+            16
+          ],
+          "initial_authoring_subtree_sha256": "80d32004bb4333a522cb1260fd2efaa344c3a906f6357b33daa6ff7125c5d1fc",
+          "representation": "inline"
+        },
+        "slide:27": {
+          "source_path": [
+            17
+          ],
+          "initial_authoring_subtree_sha256": "ce22ababdbb67f41fd789476b93b34a626d3b260bf483386eb97cfbc180d6cf4",
+          "representation": "inline"
+        },
+        "slide:28": {
+          "source_path": [
+            18
+          ],
+          "initial_authoring_subtree_sha256": "70165b5fe91f9cbd6402e39b450aa7336d3fc20430d49b2725d22478d395c4d3",
+          "representation": "inline"
+        },
+        "slide:29": {
+          "source_path": [
+            19
+          ],
+          "initial_authoring_subtree_sha256": "3510949bac6d6d54996fca11b6a0aee885345c5e909b0a0580efb12d091710b2",
+          "representation": "inline"
+        },
+        "slide:3": {
+          "source_path": [
+            4
+          ],
+          "initial_authoring_subtree_sha256": "f20135fb9f7b4396b230d414084b7a22800fa02a6b71fffe90bd4a1aece8d461",
+          "representation": "inline"
+        },
+        "slide:30": {
+          "source_path": [
+            20
+          ],
+          "initial_authoring_subtree_sha256": "460b971fc397dfa394b5e00687aff56b5241ba15877d776f3749449374e0b93a",
+          "representation": "inline"
+        },
+        "slide:31": {
+          "source_path": [
+            21
+          ],
+          "initial_authoring_subtree_sha256": "b45641afeb0864274287a50952081826493557c440ff312d554619b02ebb25b4",
+          "representation": "inline"
+        },
+        "slide:32": {
+          "source_path": [
+            22
+          ],
+          "initial_authoring_subtree_sha256": "180c4464a279ce8cab63c1a52b6196b21c1086fd616fb887e3bef5562a5769eb",
+          "representation": "inline"
+        },
+        "slide:33": {
+          "source_path": [
+            23
+          ],
+          "initial_authoring_subtree_sha256": "4cec886a29d9ca1ddd1f1e14cf7cbbf04cac455de52a44a78097342a542dfc83",
+          "representation": "inline"
+        },
+        "slide:34": {
+          "source_path": [
+            24
+          ],
+          "initial_authoring_subtree_sha256": "32ef1147d430e4a83a958d4d12ee8c1b87b296434986c074fedb48ed588d85cf",
+          "representation": "inline"
+        },
+        "slide:35": {
+          "source_path": [
+            25
+          ],
+          "initial_authoring_subtree_sha256": "6ca4990d1ba39b7548d5524c9af491e23c1af14842207a3e1b85db8015353570",
+          "representation": "inline"
+        },
+        "slide:36": {
+          "source_path": [
+            26
+          ],
+          "initial_authoring_subtree_sha256": "9f282bbae864f2f5ca179774f2b91d4063f4fd7bd1175ff04c55747338ef3a0c",
+          "representation": "inline"
+        },
+        "slide:37": {
+          "source_path": [
+            27
+          ],
+          "initial_authoring_subtree_sha256": "7e0b26ca4c65ce76e04be6195386f59bb72669c2e426fb1dfffc1a0b641f06a5",
+          "representation": "inline"
+        },
+        "slide:38": {
+          "source_path": [
+            28
+          ],
+          "initial_authoring_subtree_sha256": "f51ab1bfb416bbcba30779a347dd889dccb398cd871b6acb00709f73f9266c57",
+          "representation": "inline"
+        },
+        "slide:39": {
+          "source_path": [
+            29
+          ],
+          "initial_authoring_subtree_sha256": "5f9582be0015430eecd52160c8abd8923cf8cb0954f0c1206072b48562a64d2f",
+          "representation": "inline"
+        },
+        "slide:4": {
+          "source_path": [
+            5
+          ],
+          "initial_authoring_subtree_sha256": "cb35a4759100c546f8b1e00f7388a65fa5d1c6d07fd1842b17903408f51079d5",
+          "representation": "inline"
+        },
+        "slide:40": {
+          "source_path": [
+            30
+          ],
+          "initial_authoring_subtree_sha256": "a45196c940f3edcef4b4ae9a54e4342d7d1670d45044e0cfe68b02a1f46ce5e0",
+          "representation": "inline"
+        },
+        "slide:41": {
+          "source_path": [
+            31
+          ],
+          "initial_authoring_subtree_sha256": "94760b7e3a4755ebcbc680c36945ab0bb302140926e36f628105b6aeafd048a0",
+          "representation": "inline"
+        },
+        "slide:42": {
+          "source_path": [
+            32
+          ],
+          "initial_authoring_subtree_sha256": "47d0c7f8b26cf227fca1bb385ed9d5fc0cb3cdf344e7ffc0df5ed2332c2c82f5",
+          "representation": "inline"
+        },
+        "slide:43": {
+          "source_path": [
+            33
+          ],
+          "initial_authoring_subtree_sha256": "a7c230ed5cdfc121f257a9223746ab431cf06c9e61b049b53585f9bddfeae2f9",
+          "representation": "inline"
+        },
+        "slide:44": {
+          "source_path": [
+            34
+          ],
+          "initial_authoring_subtree_sha256": "109deba33df5f0b22dc1757a11c6293016158b6a390622f4fcbffc209f7aab51",
+          "representation": "inline"
+        },
+        "slide:45": {
+          "source_path": [
+            35
+          ],
+          "initial_authoring_subtree_sha256": "cd6944041776c480bdb24da626a9b0a7d025d68a510276bcf75fa5d56c546d5a",
+          "representation": "inline"
+        },
+        "slide:46": {
+          "source_path": [
+            36
+          ],
+          "initial_authoring_subtree_sha256": "6543b8b2dc1949d50701e44fd098420af128df7111cb8299f674efb990f3cd74",
+          "representation": "inline"
+        },
+        "slide:47": {
+          "source_path": [
+            37
+          ],
+          "initial_authoring_subtree_sha256": "0575cb988aadd5195238d8e516c3cf98138223528b6bc4c8240e8aa0602270f3",
+          "representation": "inline"
+        },
+        "slide:48": {
+          "source_path": [
+            38
+          ],
+          "initial_authoring_subtree_sha256": "18334478f5d57724ca77d522c642d0ec53e9a962939a67ee05bb6dc98eb713b7",
+          "representation": "inline"
+        },
+        "slide:49": {
+          "source_path": [
+            39
+          ],
+          "initial_authoring_subtree_sha256": "4dca8e3759cf6d1b9f87af75ebd34b66cd76370ca448904ddedc606a688c1bad",
+          "representation": "inline"
+        },
+        "slide:5": {
+          "source_path": [
+            6
+          ],
+          "initial_authoring_subtree_sha256": "05c351bba42e1ec57121a28418b7f11e05257b8de9eccacd3c8d2d9bf82e80b9",
+          "representation": "inline"
+        },
+        "slide:50": {
+          "source_path": [
+            40
+          ],
+          "initial_authoring_subtree_sha256": "767e0062ffc705cea5fefb4665e65151a9f357fe8f25cad87bef07014c91dc2d",
+          "representation": "inline"
+        },
+        "slide:51": {
+          "source_path": [
+            41
+          ],
+          "initial_authoring_subtree_sha256": "6fd604434cae8467230aac2799fae1235e86eea8d42a0c5101e4767da887cdda",
+          "representation": "inline"
+        },
+        "slide:52": {
+          "source_path": [
+            42
+          ],
+          "initial_authoring_subtree_sha256": "96396fd0d45b35ba6f16721de99341005b2fc05581ad1885c59a269ae3b51be0",
+          "representation": "inline"
+        },
+        "slide:53": {
+          "source_path": [
+            43
+          ],
+          "initial_authoring_subtree_sha256": "4387cf32c0931c67ef229261135301da9af7afacfaba6acc303fef889cfa688d",
+          "representation": "inline"
+        },
+        "slide:54": {
+          "source_path": [
+            44
+          ],
+          "initial_authoring_subtree_sha256": "3153bfee001036627a85b5fe6d8b2bdfabe39c9ce64cfc0c08dc2145350f1a22",
+          "representation": "inline"
+        },
+        "slide:55": {
+          "source_path": [
+            45
+          ],
+          "initial_authoring_subtree_sha256": "4ffc6eb040575a9bfd660604d394a5ed1f672fd13d056b9434d1fb83367b9656",
+          "representation": "inline"
+        },
+        "slide:56": {
+          "source_path": [
+            46
+          ],
+          "initial_authoring_subtree_sha256": "aa5f3dab0c3aaea5658c7ce9b33d494687c89d3777a312350d9c3fbdb9524f86",
+          "representation": "inline"
+        },
+        "slide:57": {
+          "source_path": [
+            47
+          ],
+          "initial_authoring_subtree_sha256": "c31f78de106e5d84d3c107ccd0285a96a330adf3e0b0e9d386219525b7d4cd23",
+          "representation": "inline"
+        },
+        "slide:58": {
+          "source_path": [
+            48
+          ],
+          "initial_authoring_subtree_sha256": "a5fd69283231eba5cfc419acdab73bac76ca223a9cd2dd97c92494e47814f3a5",
+          "representation": "inline"
+        },
+        "slide:59": {
+          "source_path": [
+            49
+          ],
+          "initial_authoring_subtree_sha256": "089057afa21f5bac573925ab46c61f8af961e59913276224e70e2630272e549e",
+          "representation": "inline"
+        },
+        "slide:6": {
+          "source_path": [
+            7
+          ],
+          "initial_authoring_subtree_sha256": "4bdeba0bac8a48e0ee068061529bb1b8523fd49e7e78bad61dd49e46afddc03f",
+          "representation": "inline"
+        },
+        "slide:60": {
+          "source_path": [
+            50
+          ],
+          "initial_authoring_subtree_sha256": "674441dcf3e8802f03bf74c219c788758909625b1dcae236bd211182fe2b6425",
+          "representation": "inline"
+        },
+        "slide:61": {
+          "source_path": [
+            51
+          ],
+          "initial_authoring_subtree_sha256": "f14a54dcb8a76d22a53b14a8ce416840c7e2380b79a968633f51be03798f87b3",
+          "representation": "inline"
+        },
+        "slide:62": {
+          "source_path": [
+            52
+          ],
+          "initial_authoring_subtree_sha256": "a965fa9d1dcaf598fd5a8d0e3267b9904f630c33174dc6c4d900ae0340fa5485",
+          "representation": "inline"
+        },
+        "slide:63": {
+          "source_path": [
+            53
+          ],
+          "initial_authoring_subtree_sha256": "5c3fd9af49d48cfa277a8f33ed81de26244120d7a06ec90c8ea7da91c68ba189",
+          "representation": "inline"
+        },
+        "slide:64": {
+          "source_path": [
+            54
+          ],
+          "initial_authoring_subtree_sha256": "b6372c4a7db0bb47ccf48d1e5d55bfbfb7859bbc517ce4a260556866b54e0a57",
+          "representation": "inline"
+        },
+        "slide:65": {
+          "source_path": [
+            55
+          ],
+          "initial_authoring_subtree_sha256": "f159c710d843a51b6e26b9638b7052cab9ddca2bc8d41ba46ad53fc125a06722",
+          "representation": "inline"
+        },
+        "slide:66": {
+          "source_path": [
+            56
+          ],
+          "initial_authoring_subtree_sha256": "8fa7fbf0b1abd3f1d6384d3090eed3718b98ff8754165f7757c91b11939b614a",
+          "representation": "inline"
+        },
+        "slide:67": {
+          "source_path": [
+            57
+          ],
+          "initial_authoring_subtree_sha256": "740951364e9934827fe7683e5eae4a0bce46542919abf09b791d5a4511d8fed8",
+          "representation": "inline"
+        },
+        "slide:68": {
+          "source_path": [
+            58
+          ],
+          "initial_authoring_subtree_sha256": "c148b2d3bc1e51bc715afa9e6a272128236b6439035254d7e889ad8d81e9c0b5",
+          "representation": "inline"
+        },
+        "slide:69": {
+          "source_path": [
+            59
+          ],
+          "initial_authoring_subtree_sha256": "b27657f1fe779e4225f67b542d87c553ab0df8e160846047cc50533665f5701f",
+          "representation": "inline"
+        },
+        "slide:7": {
+          "source_path": [
+            8
+          ],
+          "initial_authoring_subtree_sha256": "010c39e2f991b95c8515a52c4c88a6533f72e1f36a6768fa79667b902d2c3301",
+          "representation": "inline"
+        },
+        "slide:8": {
+          "source_path": [
+            9
+          ],
+          "initial_authoring_subtree_sha256": "4e4061d7be3276381f18d5de91672fbb2a47af97a17b2bb42041bfe4124ede73",
+          "representation": "inline"
+        },
+        "slide:9": {
+          "source_path": [
+            10
+          ],
+          "initial_authoring_subtree_sha256": "8b68220353df19c84a7dbe26ab034320c574548887b8421cb31c23f334c335f4",
+          "representation": "inline"
+        }
+      }
+    },
+    {
+      "source": "slide_02.svg",
+      "authoring": "slide_02.svg",
+      "source_sha256": "dec0b87559f90cf4bec86f9b7abb737d23c2fa2cb03f25d4cbd778a5a62112b8",
+      "initial_authoring_sha256": "4d76d00d4c4744bfb732f70302f85e9e17f58131d7fefdcf1d287f39ee9c1e5f",
+      "source_refs": {
+        "layout:15": {
+          "source_path": [
+            1
+          ],
+          "initial_authoring_subtree_sha256": "53695f2062a8c9499cc59fb7679bdeb7deb524df08f53d9dab1be318b111a1f3",
+          "representation": "inline"
+        },
+        "slide:10": {
+          "source_path": [
+            11
+          ],
+          "initial_authoring_subtree_sha256": "30e3d9362b8703fe69f24f4bb623b27d04ce104f8d6be2963513d2551a8ffac3",
+          "representation": "inline"
+        },
+        "slide:11": {
+          "source_path": [
+            2
+          ],
+          "initial_authoring_subtree_sha256": "dfe8160518263a3456ba3a42a0109ceca733954ef55918e9b0a13ed8cd5ea23a",
+          "representation": "inline"
+        },
+        "slide:12": {
+          "source_path": [
+            3
+          ],
+          "initial_authoring_subtree_sha256": "6cab218532e1b88141e812501ddc5d5a29e48c0abd9b1d860de953a0a3c245e1",
+          "representation": "inline"
+        },
+        "slide:22": {
+          "source_path": [
+            12
+          ],
+          "initial_authoring_subtree_sha256": "e3e253c58ad845966b65d543c16bfb309e75fb9bd5800d544c2d9dda398a9d36",
+          "representation": "inline"
+        },
+        "slide:23": {
+          "source_path": [
+            13
+          ],
+          "initial_authoring_subtree_sha256": "9a7a4873495114a4f0530ac2621f2a8acf3a650a93ce5ce20b5badf9e078e195",
+          "representation": "inline"
+        },
+        "slide:24": {
+          "source_path": [
+            14
+          ],
+          "initial_authoring_subtree_sha256": "b8823c50e56e9978cfce6d0bc6a1db034ca2b025d8a7dfd34a74155e5ebb18d0",
+          "representation": "inline"
+        },
+        "slide:25": {
+          "source_path": [
+            15
+          ],
+          "initial_authoring_subtree_sha256": "2fce15313b3a1830c09c60c88fce371a3429ed91436da56e354bbef0548dd8b2",
+          "representation": "inline"
+        },
+        "slide:26": {
+          "source_path": [
+            16
+          ],
+          "initial_authoring_subtree_sha256": "80d32004bb4333a522cb1260fd2efaa344c3a906f6357b33daa6ff7125c5d1fc",
+          "representation": "inline"
+        },
+        "slide:27": {
+          "source_path": [
+            17
+          ],
+          "initial_authoring_subtree_sha256": "ce22ababdbb67f41fd789476b93b34a626d3b260bf483386eb97cfbc180d6cf4",
+          "representation": "inline"
+        },
+        "slide:28": {
+          "source_path": [
+            18
+          ],
+          "initial_authoring_subtree_sha256": "70165b5fe91f9cbd6402e39b450aa7336d3fc20430d49b2725d22478d395c4d3",
+          "representation": "inline"
+        },
+        "slide:29": {
+          "source_path": [
+            19
+          ],
+          "initial_authoring_subtree_sha256": "3510949bac6d6d54996fca11b6a0aee885345c5e909b0a0580efb12d091710b2",
+          "representation": "inline"
+        },
+        "slide:3": {
+          "source_path": [
+            4
+          ],
+          "initial_authoring_subtree_sha256": "f20135fb9f7b4396b230d414084b7a22800fa02a6b71fffe90bd4a1aece8d461",
+          "representation": "inline"
+        },
+        "slide:30": {
+          "source_path": [
+            20
+          ],
+          "initial_authoring_subtree_sha256": "3ad0383cce438f5bc1df31284b51617e43bb6fea1bbb0409630bad130a4fb7e5",
+          "representation": "inline"
+        },
+        "slide:31": {
+          "source_path": [
+            21
+          ],
+          "initial_authoring_subtree_sha256": "6d162d2ee5e4e6e19eb49d798ca96f2d62b19ceb5d3db54fea3cbb886abfb211",
+          "representation": "inline"
+        },
+        "slide:32": {
+          "source_path": [
+            22
+          ],
+          "initial_authoring_subtree_sha256": "d275d5c324b5f2acf300763d9300b3a5e5d5a487bf45a2c4dae071842c1870ef",
+          "representation": "inline"
+        },
+        "slide:33": {
+          "source_path": [
+            23
+          ],
+          "initial_authoring_subtree_sha256": "2935baefb3653e2b60875a5877a72da8123a526478e0c11b3e15f97fe3aade9c",
+          "representation": "inline"
+        },
+        "slide:34": {
+          "source_path": [
+            24
+          ],
+          "initial_authoring_subtree_sha256": "d117f0d065b603ec3840a5bfbac88a49da0e3528edb5409ee9127eba599d2908",
+          "representation": "inline"
+        },
+        "slide:35": {
+          "source_path": [
+            25
+          ],
+          "initial_authoring_subtree_sha256": "67019aeb95012a4bf96a914fbd79be824c53a63cc0b71b147ba2795522b22a93",
+          "representation": "inline"
+        },
+        "slide:36": {
+          "source_path": [
+            26
+          ],
+          "initial_authoring_subtree_sha256": "d29ed211e2c11d9df74146321a774c974f65e9fe09c3ff8f0026d8683f6e2a4d",
+          "representation": "inline"
+        },
+        "slide:37": {
+          "source_path": [
+            27
+          ],
+          "initial_authoring_subtree_sha256": "b02f74d4e745cfc0956047a9f910d1367014c1507e25b935673d6888e15272b9",
+          "representation": "inline"
+        },
+        "slide:38": {
+          "source_path": [
+            28
+          ],
+          "initial_authoring_subtree_sha256": "b8041f1313d5507961079c4fab3970e0bfd17a322ddedbac9c99d864cdc962b3",
+          "representation": "inline"
+        },
+        "slide:39": {
+          "source_path": [
+            29
+          ],
+          "initial_authoring_subtree_sha256": "d5d538d04296e593d96b57ac9f7e65d3835e8ef1f3c0aeabdc72e6de3d6326bf",
+          "representation": "inline"
+        },
+        "slide:4": {
+          "source_path": [
+            5
+          ],
+          "initial_authoring_subtree_sha256": "cb35a4759100c546f8b1e00f7388a65fa5d1c6d07fd1842b17903408f51079d5",
+          "representation": "inline"
+        },
+        "slide:40": {
+          "source_path": [
+            30
+          ],
+          "initial_authoring_subtree_sha256": "23375350fd276678dfceead8170324ccb04238417abb53011b4dd031a883855e",
+          "representation": "inline"
+        },
+        "slide:41": {
+          "source_path": [
+            31
+          ],
+          "initial_authoring_subtree_sha256": "def3224e3145687231239eb6fe0331d34a8511058b4c2f1939cf96467938fa73",
+          "representation": "inline"
+        },
+        "slide:42": {
+          "source_path": [
+            32
+          ],
+          "initial_authoring_subtree_sha256": "08db68bf91a0b9f4fd3f8b56a3e491bfa1aa9ff2985bb8710a2a5f3fdd10f592",
+          "representation": "inline"
+        },
+        "slide:43": {
+          "source_path": [
+            33
+          ],
+          "initial_authoring_subtree_sha256": "0afd3a7490ceac196ce1960d491cd72790227d25b45519fec3bb4c9413c732b3",
+          "representation": "inline"
+        },
+        "slide:44": {
+          "source_path": [
+            34
+          ],
+          "initial_authoring_subtree_sha256": "04f14db9e01111d4ca579facc632e61e2a9a3ab6e199d0775cbbcb7a038f36f3",
+          "representation": "inline"
+        },
+        "slide:45": {
+          "source_path": [
+            35
+          ],
+          "initial_authoring_subtree_sha256": "f8b8990145bdba196694976f6352213d664985377d74d4e53cddf8812f713323",
+          "representation": "inline"
+        },
+        "slide:46": {
+          "source_path": [
+            36
+          ],
+          "initial_authoring_subtree_sha256": "8e59940bfa5b8656fc83500436192eb85dc0df5ef7d9fa7b3b72c5b7201b68ae",
+          "representation": "inline"
+        },
+        "slide:47": {
+          "source_path": [
+            37
+          ],
+          "initial_authoring_subtree_sha256": "b1812dffd48a4e2ea049b32c0ffbf85ef9e7c917bd38fcdb4b1ced79c3294377",
+          "representation": "inline"
+        },
+        "slide:48": {
+          "source_path": [
+            38
+          ],
+          "initial_authoring_subtree_sha256": "924c2246fa04f43a3dfe3d9231634abe7062b6d425cb2941313888dc5da180be",
+          "representation": "inline"
+        },
+        "slide:49": {
+          "source_path": [
+            39
+          ],
+          "initial_authoring_subtree_sha256": "60b3540675df0d67524731a5d20fb7d4dfcd719740521338cf3377694300131d",
+          "representation": "inline"
+        },
+        "slide:5": {
+          "source_path": [
+            6
+          ],
+          "initial_authoring_subtree_sha256": "05c351bba42e1ec57121a28418b7f11e05257b8de9eccacd3c8d2d9bf82e80b9",
+          "representation": "inline"
+        },
+        "slide:50": {
+          "source_path": [
+            40
+          ],
+          "initial_authoring_subtree_sha256": "e75de508ee248c65344360c783c1dd0f4f252f85971d41ea83efc316583906f7",
+          "representation": "inline"
+        },
+        "slide:51": {
+          "source_path": [
+            41
+          ],
+          "initial_authoring_subtree_sha256": "afcaafc8b510560c56305a9eaed64506ea5ba6b1e7b47d47078f83882d74ab2d",
+          "representation": "inline"
+        },
+        "slide:52": {
+          "source_path": [
+            42
+          ],
+          "initial_authoring_subtree_sha256": "2917c26518d3cf4a9f782fe2531eba594ad9ce7b625d63126fe307694f7c4c86",
+          "representation": "inline"
+        },
+        "slide:53": {
+          "source_path": [
+            43
+          ],
+          "initial_authoring_subtree_sha256": "49c44b282262d6df1be5024f432ecc46349210773d6a61c3482cb8b858198f9d",
+          "representation": "inline"
+        },
+        "slide:54": {
+          "source_path": [
+            44
+          ],
+          "initial_authoring_subtree_sha256": "7d5a5237889810269580b9dd4a41f9ad8112489f5d8452f1f821fcd3bf2134e3",
+          "representation": "inline"
+        },
+        "slide:55": {
+          "source_path": [
+            45
+          ],
+          "initial_authoring_subtree_sha256": "3f27e064df323e1eefaa2e7f23e206cd899b687994adc86481595af137e33654",
+          "representation": "inline"
+        },
+        "slide:56": {
+          "source_path": [
+            46
+          ],
+          "initial_authoring_subtree_sha256": "d1356523a6d50bb2e09478f4b47aa0c7aba8daae3e3fd49236eeb3e903527fb4",
+          "representation": "inline"
+        },
+        "slide:57": {
+          "source_path": [
+            47
+          ],
+          "initial_authoring_subtree_sha256": "0f7b299e6748b27df8f014a17359f2eeda49d7952a9bd9c896dea473d7c62c44",
+          "representation": "inline"
+        },
+        "slide:58": {
+          "source_path": [
+            48
+          ],
+          "initial_authoring_subtree_sha256": "1588d3ac8ef2ea223fef27f4540bd32d77648c584f58eed9ff6261f59cb84129",
+          "representation": "inline"
+        },
+        "slide:59": {
+          "source_path": [
+            49
+          ],
+          "initial_authoring_subtree_sha256": "6d622c1c24159c6be0641b81708583ee438031485bea145645b328f029767ee0",
+          "representation": "inline"
+        },
+        "slide:6": {
+          "source_path": [
+            7
+          ],
+          "initial_authoring_subtree_sha256": "4bdeba0bac8a48e0ee068061529bb1b8523fd49e7e78bad61dd49e46afddc03f",
+          "representation": "inline"
+        },
+        "slide:60": {
+          "source_path": [
+            50
+          ],
+          "initial_authoring_subtree_sha256": "d164e7377ca573c7f8ad999b2912cd2d67a0d4904f6982e7593857d2b467df63",
+          "representation": "inline"
+        },
+        "slide:61": {
+          "source_path": [
+            51
+          ],
+          "initial_authoring_subtree_sha256": "573e9f7022bce79f2826d6f21d069e65862fbb0159967182a2cfff2dcea41bab",
+          "representation": "inline"
+        },
+        "slide:62": {
+          "source_path": [
+            52
+          ],
+          "initial_authoring_subtree_sha256": "314014a58cb0ce1de6e4517ed9dfcff8c050cedfbde8cfbd74c8772a804b3fa9",
+          "representation": "inline"
+        },
+        "slide:63": {
+          "source_path": [
+            53
+          ],
+          "initial_authoring_subtree_sha256": "6d423f3f585cb36c3a310fcd94301c20247c5792f79adbe463fd7cc6fc60fbee",
+          "representation": "inline"
+        },
+        "slide:64": {
+          "source_path": [
+            54
+          ],
+          "initial_authoring_subtree_sha256": "c0d1611376255c2e97909f44a9f839c051aa92c689ddd82ec0069a5627c36f9d",
+          "representation": "inline"
+        },
+        "slide:65": {
+          "source_path": [
+            55
+          ],
+          "initial_authoring_subtree_sha256": "1e2c43af429c530ea8e8e220a7c178f535d5e05b8d9db444e2c0aa82748d9e8e",
+          "representation": "inline"
+        },
+        "slide:66": {
+          "source_path": [
+            56
+          ],
+          "initial_authoring_subtree_sha256": "3d96bdeef0bfda335c3541c21d696afaa4fdef6e11fab5e41b25263cfafab501",
+          "representation": "inline"
+        },
+        "slide:67": {
+          "source_path": [
+            57
+          ],
+          "initial_authoring_subtree_sha256": "4e00518f419777eb220aa4f847c933437a7ec89292e8f9d97981f7366b9491ee",
+          "representation": "inline"
+        },
+        "slide:68": {
+          "source_path": [
+            58
+          ],
+          "initial_authoring_subtree_sha256": "a0513ea924a0dad4d1df200fe8826225891cdb34fa54ee3fe7e0af5008c772d0",
+          "representation": "inline"
+        },
+        "slide:69": {
+          "source_path": [
+            59
+          ],
+          "initial_authoring_subtree_sha256": "d3d965be16eb45fee24fe6a9aa8df6cb9d7edbc2c3ad77052f35be7e1b22526e",
+          "representation": "inline"
+        },
+        "slide:7": {
+          "source_path": [
+            8
+          ],
+          "initial_authoring_subtree_sha256": "010c39e2f991b95c8515a52c4c88a6533f72e1f36a6768fa79667b902d2c3301",
+          "representation": "inline"
+        },
+        "slide:70": {
+          "source_path": [
+            60
+          ],
+          "initial_authoring_subtree_sha256": "3d8ab74f663259a03f1cce8c090e684b7128040d76aa922759ef6e4e8b900c8c",
+          "representation": "inline"
+        },
+        "slide:71": {
+          "source_path": [
+            61
+          ],
+          "initial_authoring_subtree_sha256": "22638ada915b3154b45ae626ac0f8209755965578885fdf8fd301a95a0a05284",
+          "representation": "inline"
+        },
+        "slide:72": {
+          "source_path": [
+            62
+          ],
+          "initial_authoring_subtree_sha256": "217f57fb2090101ecd749180f6096eec204fbc02e7823bc0494de60768b6e409",
+          "representation": "inline"
+        },
+        "slide:73": {
+          "source_path": [
+            63
+          ],
+          "initial_authoring_subtree_sha256": "645f94d5b6b70ef307a2518e1e49137a276ff8e9b6b7779bed1e2737dee54570",
+          "representation": "inline"
+        },
+        "slide:74": {
+          "source_path": [
+            64
+          ],
+          "initial_authoring_subtree_sha256": "30f76f534845f30d04d7e97a198e788cd929a5354086b7fac79d056fa12fa8fa",
+          "representation": "inline"
+        },
+        "slide:75": {
+          "source_path": [
+            65
+          ],
+          "initial_authoring_subtree_sha256": "8972310d68c145cd3da6d73f8e7fd9845dc187d354f949b2ed58dec338ac2db1",
+          "representation": "inline"
+        },
+        "slide:8": {
+          "source_path": [
+            9
+          ],
+          "initial_authoring_subtree_sha256": "4e4061d7be3276381f18d5de91672fbb2a47af97a17b2bb42041bfe4124ede73",
+          "representation": "inline"
+        },
+        "slide:9": {
+          "source_path": [
+            10
+          ],
+          "initial_authoring_subtree_sha256": "8b68220353df19c84a7dbe26ab034320c574548887b8421cb31c23f334c335f4",
+          "representation": "inline"
+        }
+      }
+    },
+    {
+      "source": "slide_03.svg",
+      "authoring": "slide_03.svg",
+      "source_sha256": "ad48044785b1816a32ccb15f7a51276410254a4cfd643b8bf2045e1fdb9400b9",
+      "initial_authoring_sha256": "59e54a6182ba099072a1afbc8e61d1259dc0ac8b669cd306c5c3e06f134a5dd1",
+      "source_refs": {
+        "layout:15": {
+          "source_path": [
+            1
+          ],
+          "initial_authoring_subtree_sha256": "53695f2062a8c9499cc59fb7679bdeb7deb524df08f53d9dab1be318b111a1f3",
+          "representation": "inline"
+        },
+        "slide:10": {
+          "source_path": [
+            11
+          ],
+          "initial_authoring_subtree_sha256": "30e3d9362b8703fe69f24f4bb623b27d04ce104f8d6be2963513d2551a8ffac3",
+          "representation": "inline"
+        },
+        "slide:11": {
+          "source_path": [
+            2
+          ],
+          "initial_authoring_subtree_sha256": "dfe8160518263a3456ba3a42a0109ceca733954ef55918e9b0a13ed8cd5ea23a",
+          "representation": "inline"
+        },
+        "slide:12": {
+          "source_path": [
+            3
+          ],
+          "initial_authoring_subtree_sha256": "6cab218532e1b88141e812501ddc5d5a29e48c0abd9b1d860de953a0a3c245e1",
+          "representation": "inline"
+        },
+        "slide:22": {
+          "source_path": [
+            12
+          ],
+          "initial_authoring_subtree_sha256": "af96461ba7a42ac938a1bdd404332220cc3f30678ea80e3532895b9c1275dc57",
+          "representation": "inline"
+        },
+        "slide:23": {
+          "source_path": [
+            13
+          ],
+          "initial_authoring_subtree_sha256": "3b5f869d64f2986c4f07987dc67f00f09ccc804d1ce070636919805c87db28e2",
+          "representation": "inline"
+        },
+        "slide:24": {
+          "source_path": [
+            14
+          ],
+          "initial_authoring_subtree_sha256": "b8823c50e56e9978cfce6d0bc6a1db034ca2b025d8a7dfd34a74155e5ebb18d0",
+          "representation": "inline"
+        },
+        "slide:25": {
+          "source_path": [
+            15
+          ],
+          "initial_authoring_subtree_sha256": "2fce15313b3a1830c09c60c88fce371a3429ed91436da56e354bbef0548dd8b2",
+          "representation": "inline"
+        },
+        "slide:26": {
+          "source_path": [
+            16
+          ],
+          "initial_authoring_subtree_sha256": "80d32004bb4333a522cb1260fd2efaa344c3a906f6357b33daa6ff7125c5d1fc",
+          "representation": "inline"
+        },
+        "slide:27": {
+          "source_path": [
+            17
+          ],
+          "initial_authoring_subtree_sha256": "ce22ababdbb67f41fd789476b93b34a626d3b260bf483386eb97cfbc180d6cf4",
+          "representation": "inline"
+        },
+        "slide:28": {
+          "source_path": [
+            18
+          ],
+          "initial_authoring_subtree_sha256": "70165b5fe91f9cbd6402e39b450aa7336d3fc20430d49b2725d22478d395c4d3",
+          "representation": "inline"
+        },
+        "slide:29": {
+          "source_path": [
+            19
+          ],
+          "initial_authoring_subtree_sha256": "3510949bac6d6d54996fca11b6a0aee885345c5e909b0a0580efb12d091710b2",
+          "representation": "inline"
+        },
+        "slide:3": {
+          "source_path": [
+            4
+          ],
+          "initial_authoring_subtree_sha256": "f20135fb9f7b4396b230d414084b7a22800fa02a6b71fffe90bd4a1aece8d461",
+          "representation": "inline"
+        },
+        "slide:30": {
+          "source_path": [
+            20
+          ],
+          "initial_authoring_subtree_sha256": "f1ce13dec5243c537fde453583ea6bcf02e2b28bf1c108dfd9b86a0f367f7fee",
+          "representation": "inline"
+        },
+        "slide:31": {
+          "source_path": [
+            21
+          ],
+          "initial_authoring_subtree_sha256": "3dbf0a403452f829cb78fa1f8d482444854cf448821846e7d4d740f19b71357a",
+          "representation": "inline"
+        },
+        "slide:32": {
+          "source_path": [
+            22
+          ],
+          "initial_authoring_subtree_sha256": "d275d5c324b5f2acf300763d9300b3a5e5d5a487bf45a2c4dae071842c1870ef",
+          "representation": "inline"
+        },
+        "slide:33": {
+          "source_path": [
+            23
+          ],
+          "initial_authoring_subtree_sha256": "2935baefb3653e2b60875a5877a72da8123a526478e0c11b3e15f97fe3aade9c",
+          "representation": "inline"
+        },
+        "slide:34": {
+          "source_path": [
+            24
+          ],
+          "initial_authoring_subtree_sha256": "d117f0d065b603ec3840a5bfbac88a49da0e3528edb5409ee9127eba599d2908",
+          "representation": "inline"
+        },
+        "slide:35": {
+          "source_path": [
+            25
+          ],
+          "initial_authoring_subtree_sha256": "67019aeb95012a4bf96a914fbd79be824c53a63cc0b71b147ba2795522b22a93",
+          "representation": "inline"
+        },
+        "slide:36": {
+          "source_path": [
+            26
+          ],
+          "initial_authoring_subtree_sha256": "d8d2e1f1c7fa4c6a026ce195112636cac9245cf3cd9333c81ed1f5cdf766f7dd",
+          "representation": "inline"
+        },
+        "slide:37": {
+          "source_path": [
+            27
+          ],
+          "initial_authoring_subtree_sha256": "b02f74d4e745cfc0956047a9f910d1367014c1507e25b935673d6888e15272b9",
+          "representation": "inline"
+        },
+        "slide:38": {
+          "source_path": [
+            28
+          ],
+          "initial_authoring_subtree_sha256": "b8041f1313d5507961079c4fab3970e0bfd17a322ddedbac9c99d864cdc962b3",
+          "representation": "inline"
+        },
+        "slide:39": {
+          "source_path": [
+            29
+          ],
+          "initial_authoring_subtree_sha256": "456084f239c2d93b8cb72bf27212a1364cf605cbbc92745b964f023410b514a7",
+          "representation": "inline"
+        },
+        "slide:4": {
+          "source_path": [
+            5
+          ],
+          "initial_authoring_subtree_sha256": "cb35a4759100c546f8b1e00f7388a65fa5d1c6d07fd1842b17903408f51079d5",
+          "representation": "inline"
+        },
+        "slide:40": {
+          "source_path": [
+            30
+          ],
+          "initial_authoring_subtree_sha256": "23375350fd276678dfceead8170324ccb04238417abb53011b4dd031a883855e",
+          "representation": "inline"
+        },
+        "slide:41": {
+          "source_path": [
+            31
+          ],
+          "initial_authoring_subtree_sha256": "def3224e3145687231239eb6fe0331d34a8511058b4c2f1939cf96467938fa73",
+          "representation": "inline"
+        },
+        "slide:42": {
+          "source_path": [
+            32
+          ],
+          "initial_authoring_subtree_sha256": "d382fc05f059045b58ce30644c232f327cba8ec1b5d0b9db30654804718b1093",
+          "representation": "inline"
+        },
+        "slide:43": {
+          "source_path": [
+            33
+          ],
+          "initial_authoring_subtree_sha256": "3861509c897ba25981859c2337f4e95715389b9e307fdfc716907ee49fe5d2eb",
+          "representation": "inline"
+        },
+        "slide:44": {
+          "source_path": [
+            34
+          ],
+          "initial_authoring_subtree_sha256": "04f14db9e01111d4ca579facc632e61e2a9a3ab6e199d0775cbbcb7a038f36f3",
+          "representation": "inline"
+        },
+        "slide:45": {
+          "source_path": [
+            35
+          ],
+          "initial_authoring_subtree_sha256": "65cea562417486a1dbc6e65f5c4ee32350875f1be3511f5b8fb79c417632aaa4",
+          "representation": "inline"
+        },
+        "slide:46": {
+          "source_path": [
+            36
+          ],
+          "initial_authoring_subtree_sha256": "b68cb566a1784bcdc14134ee53621e9f381fcb5ca52a5eaf4e4fc87209ff4d56",
+          "representation": "inline"
+        },
+        "slide:47": {
+          "source_path": [
+            37
+          ],
+          "initial_authoring_subtree_sha256": "612d18bbbf3ef470636b102a9ad2430c3289ea488a56ab183704bdbe1a74a2f6",
+          "representation": "inline"
+        },
+        "slide:48": {
+          "source_path": [
+            38
+          ],
+          "initial_authoring_subtree_sha256": "53b544a174f5695fe87a50657f7896d360e02e773086f7b94e09da7449739c78",
+          "representation": "inline"
+        },
+        "slide:49": {
+          "source_path": [
+            39
+          ],
+          "initial_authoring_subtree_sha256": "94bb55c70052ff3b4f6cd82c1535a65b565f49a213a4c3e78e7e14cb84e1d6d7",
+          "representation": "inline"
+        },
+        "slide:5": {
+          "source_path": [
+            6
+          ],
+          "initial_authoring_subtree_sha256": "05c351bba42e1ec57121a28418b7f11e05257b8de9eccacd3c8d2d9bf82e80b9",
+          "representation": "inline"
+        },
+        "slide:50": {
+          "source_path": [
+            40
+          ],
+          "initial_authoring_subtree_sha256": "9cbcf342d314a4001d74818cd51a673a12dba725fa921bcc69938c5e0d05acb5",
+          "representation": "inline"
+        },
+        "slide:51": {
+          "source_path": [
+            41
+          ],
+          "initial_authoring_subtree_sha256": "63ff52b6c4c979884e617855b771faba686ec5628ab6a52aefe8d67e63635e3a",
+          "representation": "inline"
+        },
+        "slide:52": {
+          "source_path": [
+            42
+          ],
+          "initial_authoring_subtree_sha256": "0e394f6f999e071c8ef61b860a9084062313d020ed020454601a1ba7a5ef0873",
+          "representation": "inline"
+        },
+        "slide:53": {
+          "source_path": [
+            43
+          ],
+          "initial_authoring_subtree_sha256": "cbe83a4f8aba5cbf07c94aff86277f44fc6402643e3a58f7b757ee13b668ebbd",
+          "representation": "inline"
+        },
+        "slide:54": {
+          "source_path": [
+            44
+          ],
+          "initial_authoring_subtree_sha256": "4144340c2789a20714a404cac1558848054c5c608cb333909688031cf7a14537",
+          "representation": "inline"
+        },
+        "slide:55": {
+          "source_path": [
+            45
+          ],
+          "initial_authoring_subtree_sha256": "03ad6f1fa63597537e1b15052bd8e4d0baf00ffbcc3d4d9e0009bce4efc5ff47",
+          "representation": "inline"
+        },
+        "slide:56": {
+          "source_path": [
+            46
+          ],
+          "initial_authoring_subtree_sha256": "9aeeb47d225dfbb7caf1f2e069d72dfdb3146b29dff4b3abe636ca7c265944a6",
+          "representation": "inline"
+        },
+        "slide:57": {
+          "source_path": [
+            47
+          ],
+          "initial_authoring_subtree_sha256": "089066dde4237a048ecde3948f0e2222ff223fedf0b1a195f145c14fa9aeb413",
+          "representation": "inline"
+        },
+        "slide:58": {
+          "source_path": [
+            48
+          ],
+          "initial_authoring_subtree_sha256": "3ea3aac9728c343b1ae0d8013ec342097900076438337393a8c49b8f3496839b",
+          "representation": "inline"
+        },
+        "slide:59": {
+          "source_path": [
+            49
+          ],
+          "initial_authoring_subtree_sha256": "621e58db005bd7140db599e2e87798c082a2d10c912afb3c202bfacedaf1ef45",
+          "representation": "inline"
+        },
+        "slide:6": {
+          "source_path": [
+            7
+          ],
+          "initial_authoring_subtree_sha256": "4bdeba0bac8a48e0ee068061529bb1b8523fd49e7e78bad61dd49e46afddc03f",
+          "representation": "inline"
+        },
+        "slide:60": {
+          "source_path": [
+            50
+          ],
+          "initial_authoring_subtree_sha256": "af37a4651874c6c4e71081f03d57094226317ee71432c9c0f9d4b6b6a603b520",
+          "representation": "inline"
+        },
+        "slide:61": {
+          "source_path": [
+            51
+          ],
+          "initial_authoring_subtree_sha256": "592a91224dfaa93f9247bec74a6715e16642ae00ae9d31a9396ad27fa80f8d95",
+          "representation": "inline"
+        },
+        "slide:62": {
+          "source_path": [
+            52
+          ],
+          "initial_authoring_subtree_sha256": "610985e753dece970d02c47d5e4ed8a4bce6bf6e61dc1319726d00289f0e7b15",
+          "representation": "inline"
+        },
+        "slide:63": {
+          "source_path": [
+            53
+          ],
+          "initial_authoring_subtree_sha256": "2828cb83ca0a581fc6db8be6cddef9dab86eb0f2dc3c6339df48bd4d28d95c7a",
+          "representation": "inline"
+        },
+        "slide:64": {
+          "source_path": [
+            54
+          ],
+          "initial_authoring_subtree_sha256": "3b8f94ab965c01deb10c0a446bb482aec8481302ca1c8a62d185ab3ac795b5c9",
+          "representation": "inline"
+        },
+        "slide:65": {
+          "source_path": [
+            55
+          ],
+          "initial_authoring_subtree_sha256": "26b8860de2bce52959a4faafc09a06e4f4e48848d41201720ce9f397f57fbf72",
+          "representation": "inline"
+        },
+        "slide:66": {
+          "source_path": [
+            56
+          ],
+          "initial_authoring_subtree_sha256": "23b4340c1330f3911af9ac2e0efea22ba634ac3fb8f136bbf5e7f6b3836f5681",
+          "representation": "inline"
+        },
+        "slide:67": {
+          "source_path": [
+            57
+          ],
+          "initial_authoring_subtree_sha256": "51eb89d971264b56ffcafc0000ad703e54e196d965b34883d8bf37f83e4e0ad7",
+          "representation": "inline"
+        },
+        "slide:68": {
+          "source_path": [
+            58
+          ],
+          "initial_authoring_subtree_sha256": "71eb9bef05c7266ecc56236a6273dadbe4792d40125757f6620ad32f2a47eeb1",
+          "representation": "inline"
+        },
+        "slide:69": {
+          "source_path": [
+            59
+          ],
+          "initial_authoring_subtree_sha256": "16264f44b629e26670f95b607e5839c3afc06a24118e03ea7ebd9c6b8dde621f",
+          "representation": "inline"
+        },
+        "slide:7": {
+          "source_path": [
+            8
+          ],
+          "initial_authoring_subtree_sha256": "010c39e2f991b95c8515a52c4c88a6533f72e1f36a6768fa79667b902d2c3301",
+          "representation": "inline"
+        },
+        "slide:70": {
+          "source_path": [
+            60
+          ],
+          "initial_authoring_subtree_sha256": "58cbe80d60bda0df4fdbea2cea415244941ea1c4836131767051a2fb24aedeab",
+          "representation": "inline"
+        },
+        "slide:71": {
+          "source_path": [
+            61
+          ],
+          "initial_authoring_subtree_sha256": "abf5071ccc8c6100101639c1f4632ff39fc5dcb4bc67672886ef8cd551a9b030",
+          "representation": "inline"
+        },
+        "slide:72": {
+          "source_path": [
+            62
+          ],
+          "initial_authoring_subtree_sha256": "d5b842e8032f7a86df66a807607ffa178f58dfe73222b9cfb024dbca85623163",
+          "representation": "inline"
+        },
+        "slide:8": {
+          "source_path": [
+            9
+          ],
+          "initial_authoring_subtree_sha256": "4e4061d7be3276381f18d5de91672fbb2a47af97a17b2bb42041bfe4124ede73",
+          "representation": "inline"
+        },
+        "slide:9": {
+          "source_path": [
+            10
+          ],
+          "initial_authoring_subtree_sha256": "8b68220353df19c84a7dbe26ab034320c574548887b8421cb31c23f334c335f4",
+          "representation": "inline"
+        }
+      }
+    }
+  ]
+}

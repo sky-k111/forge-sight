@@ -167,6 +167,7 @@ def user_payload(user: PlatformUser) -> dict:
         "title": user.title,
         "emailMasked": mask_email(user.email) if user.email else None,
         "emailStatus": email_status,
+        "emailVerificationRequired": settings.auth_email_gate_enabled,
         "externalIdentityRequired": identity["required"],
         "externalIdentityBound": identity["bound"],
         "externalIdentityProvider": identity["provider"],

@@ -7,6 +7,7 @@ import html
 import json
 from datetime import datetime
 
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import func
 
 from app.agent import service as analysis_service
@@ -209,6 +210,10 @@ def create_report(payload, session_factory=PlatformSession, tenant_id: str | Non
             version=1,
             status="generating",
             content_json={"templateId": template.id, "sections": []},
+            data_quality_json={
+                "coverageScore": coverage["score"],
+                "missingMetrics": coverage["missingMetrics"],
+            },
             data_snapshot_json={
                 "sourceId": source.id,
                 "coverage": coverage,
@@ -663,6 +668,32 @@ def _composition_compare_context(session, report: Report, version: ReportVersion
     }
 
 
+def _composition_kpi_results(compare_context: dict | None) -> dict[str, dict]:
+    """Resolve composed KPI totals through the same governed compiler as preview."""
+
+    if not compare_context:
+        return {}
+    blocks = [block for block in compare_context["blocks"].values() if block.get("kind") == "kpi"]
+    if not blocks:
+        return {}
+    from app.reports.composition import preview
+    from app.reports.composition_contracts import ReportComposition
+
+    composition = ReportComposition.model_validate({"name": "周报指标", "blocks": blocks})
+    result = preview(
+        composition,
+        compare_context["source_id"],
+        compare_context["tenant_id"],
+        compare_context["user_id"],
+        compare_context["period_start"],
+        compare_context["period_end"],
+    )
+    return {
+        str(item["block"]["id"]): jsonable_encoder(item)
+        for item in result["items"]
+    }
+
+
 def _trend_previous_rows(compare_context: dict | None, section, presentation: dict) -> dict:
     if not compare_context or str(presentation.get("kind")) != "trend" or not presentation.get("compare"):
         return {"state": "unavailable"}
@@ -707,6 +738,7 @@ def _finalize_report(session, report: Report, run: AnalysisRun) -> None:
     # 个人组合报告的趋势对比：在冻结前用同一受治理只读口径补查紧邻等长上一周期，
     # 使站内预览、PDF、Excel 的双序列与本期数值口径一致；失败时静默省略对比。
     compare_context = _composition_compare_context(session, report, version)
+    kpi_results = _composition_kpi_results(compare_context)
     for section, task in zip(sections, tasks, strict=False):
         section.analysis_task_id = task.id
         artifacts = by_task.get(task.id, [])
@@ -723,6 +755,48 @@ def _finalize_report(session, report: Report, run: AnalysisRun) -> None:
         section.confidence = score
         section.artifact_ids_json = [item.id for item in artifacts]
         presentation = (section.content_json or {}).get("presentation")
+        if presentation and presentation.get("kind") == "kpi" and compare_context:
+            governed = kpi_results.get(str(section.code), {})
+            current_rows = governed.get("rows") or []
+            previous_rows = governed.get("previousRows") or []
+            if governed.get("state") != "ready" or len(current_rows) != 1 or (presentation.get("compare") and len(previous_rows) != 1):
+                section.status = "failed"
+                section.error_json = {
+                    "code": "REPORT_KPI_QUERY_FAILED",
+                    "message": "受治理指标汇总未取得完整本期与上期数据。",
+                }
+            else:
+                result = {
+                    "columns": governed["columns"],
+                    "rows": current_rows,
+                    "previousRows": previous_rows if presentation.get("compare") else None,
+                    "contract": governed.get("contract"),
+                    "source": "governed-composition",
+                }
+                evidence_content = {
+                    "result": result,
+                    "sourceId": report.source_id,
+                    "metricId": presentation.get("metricId"),
+                    "periodStart": report.period_start.isoformat(),
+                    "periodEnd": report.period_end.isoformat(),
+                }
+                checksum = hashlib.sha256(json.dumps(evidence_content, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
+                artifact = AnalysisArtifact(
+                    id=new_id("art"), run_id=run.id, task_id=task.id,
+                    type="governed_kpi", content_json=evidence_content,
+                    summary_json={"source": "governed-composition", "metricId": presentation.get("metricId")},
+                    checksum=checksum,
+                )
+                session.add(artifact)
+                section.artifact_ids_json.append(artifact.id)
+                version.data_snapshot_json = {
+                    **(version.data_snapshot_json or {}),
+                    "governedKpiArtifactChecksums": {
+                        **(version.data_snapshot_json or {}).get("governedKpiArtifactChecksums", {}),
+                        artifact.id: checksum,
+                    },
+                }
+                section.summary = f"{section.title}：本期汇总 {current_rows[0][-1]}，上期汇总 {previous_rows[0][-1]}。" if previous_rows else f"{section.title}：本期汇总 {current_rows[0][-1]}。"
         if presentation and result.get("rows"):
             previous = _trend_previous_rows(compare_context, section, presentation)
             if compare_context and presentation.get("kind") == "trend" and presentation.get("compare"):

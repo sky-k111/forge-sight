@@ -24,6 +24,7 @@ import {
   setSession,
   setPendingRegistrationBinding,
 } from "../../lib/auth";
+import { getActiveTenantId, setActiveTenantId } from "../../lib/tenant";
 
 const INPUT_CLASS =
   "h-8 w-full rounded-tag border border-line bg-surface px-2.5 text-xs text-ink outline-none placeholder:text-faint focus:border-primary/40";
@@ -112,6 +113,7 @@ export default function LoginPage() {
   const [bindingLoading, setBindingLoading] = useState(false);
   const [bindingSubmitting, setBindingSubmitting] = useState(false);
   const [bindingSources, setBindingSources] = useState([]);
+  const [activeTenantId, setActiveTenant] = useState(getActiveTenantId);
   const [sourceSubmitting, setSourceSubmitting] = useState(false);
   const [introComplete, setIntroComplete] = useState(false);
   const activeUser = registrationUser || cachedUser;
@@ -122,6 +124,7 @@ export default function LoginPage() {
       : selectedProvider === "dingtalk"
         ? dingtalkBinding
         : null;
+  const selectedSourceInTenant = bindingSources.some((source) => source.id === binding?.sourceId);
 
   const handleProviderSelection = (provider) => {
     setSelectedProvider(provider);
@@ -132,9 +135,12 @@ export default function LoginPage() {
   };
 
   const switchMode = (next) => {
-    if (registerStage === "binding" && registrationUser && next !== "register") {
+    if (registerStage === "binding" && registrationUser && next !== "register" && !binding?.bound) {
       setError("请先完成第三方账号绑定，当前注册流程不能跳过");
       return;
+    }
+    if (next === "login" && binding?.bound) {
+      clearPendingRegistrationBinding();
     }
     setMode(next);
     setError(null);
@@ -185,6 +191,25 @@ export default function LoginPage() {
   }, [location.pathname, location.search, location.state, navigate]);
 
   useEffect(() => {
+    if (!registrationBindingRequired || !getToken()) return undefined;
+    let cancelled = false;
+    fetchMe()
+      .then((user) => {
+        if (cancelled) return;
+        setRegistrationUser(user);
+        const token = getToken();
+        if (token) setSession(token, user);
+        setActiveTenant(getActiveTenantId());
+      })
+      .catch(() => {
+        // 授权后的绑定状态仍由下方各绑定接口读取。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [registrationBindingRequired]);
+
+  useEffect(() => {
     let cancelled = false;
 
     if (!activeUser) {
@@ -223,13 +248,13 @@ export default function LoginPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeUser?.username, selectedProvider]);
+  }, [activeUser?.username, selectedProvider, activeTenantId]);
 
   const afterAuth = (user) => {
     const from = location.state?.from;
     const fallback = user.role === "admin" ? "/admin/overview" : "/workspace/overview";
     const destination = typeof from === "string" ? from : fallback;
-    navigate(user.emailStatus && user.emailStatus !== "verified" ? "/verify-email" : destination, {
+    navigate(user.emailVerificationRequired !== false && user.emailStatus !== "verified" ? "/verify-email" : destination, {
       replace: true,
       state: { from: destination },
     });
@@ -365,7 +390,7 @@ export default function LoginPage() {
       setError("请先完成钉钉或飞书账号绑定");
       return;
     }
-    if (!binding.sourceId) {
+    if (bindingSources.length > 0 && !selectedSourceInTenant) {
       setError("请先选择机器人可使用的数据源");
       return;
     }
@@ -672,12 +697,34 @@ export default function LoginPage() {
                 授权成功后，机器人将使用当前平台账号的数据权限，并可识别该账号的历史会话与周报订阅。
               </p>
 
-              {binding?.bound && (
+              {activeUser?.tenants?.length > 1 && (
                 <label className="mt-3 flex flex-col gap-1 text-[11px] font-medium text-ink">
-                  机器人使用的数据源（必选）
+                  使用哪个企业空间的数据源
                   <select
                     className={INPUT_CLASS}
-                    value={binding.sourceId ?? ""}
+                    value={activeTenantId}
+                    onChange={(event) => {
+                      setActiveTenantId(event.target.value);
+                      setActiveTenant(event.target.value);
+                      setBindingSources([]);
+                      setError(null);
+                    }}
+                  >
+                    {activeUser.tenants.map((tenant) => (
+                      <option key={tenant.id} value={tenant.id}>
+                        {tenant.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              {binding?.bound && (
+                <label className="mt-3 flex flex-col gap-1 text-[11px] font-medium text-ink">
+                  机器人使用的数据源{bindingSources.length ? "（必选）" : "（稍后配置）"}
+                  <select
+                    className={INPUT_CLASS}
+                    value={selectedSourceInTenant ? binding.sourceId : ""}
                     onChange={handleSelectBindingSource}
                     disabled={sourceSubmitting || bindingSources.length === 0}
                   >
@@ -689,6 +736,12 @@ export default function LoginPage() {
                     ))}
                   </select>
                 </label>
+              )}
+
+              {binding?.bound && !bindingLoading && bindingSources.length === 0 && (
+                <p className="mt-2 text-[11px] leading-5 text-muted">
+                  当前企业空间还没有可用的数据源。可以先完成注册；机器人问析需管理员先配置并授权数据源。
+                </p>
               )}
 
               {error && (
@@ -721,7 +774,7 @@ export default function LoginPage() {
                 className="mt-2 w-full"
                 disabled={
                   !binding?.bound ||
-                  !binding?.sourceId ||
+                  (bindingSources.length > 0 && !selectedSourceInTenant) ||
                   bindingLoading ||
                   bindingSubmitting ||
                   sourceSubmitting

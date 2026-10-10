@@ -103,7 +103,7 @@ export function EmailGate({
     );
   }
   if (!user) return <Navigate to="/login" replace />;
-  if (user.emailStatus !== "verified") {
+  if (user.emailVerificationRequired !== false && user.emailStatus !== "verified") {
     return (
       <Navigate
         to="/verify-email"

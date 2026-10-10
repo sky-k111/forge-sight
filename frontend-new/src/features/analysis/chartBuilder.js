@@ -80,7 +80,7 @@ function niceAxisStep(rawStep) {
   return niceFraction * magnitude;
 }
 
-function buildAutoYAxis(data, keys) {
+export function buildAutoYAxis(data, keys) {
   const values = data
     .flatMap((row) => keys.map((key) => Number(row[key])))
     .filter(Number.isFinite);
@@ -359,16 +359,21 @@ export function buildChart(snapshot, execution) {
     };
   }
 
+  const barKeys = numeric.slice(0, 3);
+  const rateAxis = barKeys.every(isRateMetric) ? buildAutoYAxis(chartRows, barKeys) : {};
   return {
     type: "bar",
     kicker: "查询结果 · 实时生成",
     title: chartTitleFor(snapshot, xKey, numeric),
     data: chartRows,
     xKey,
-    bars: numeric.slice(0, 3).map((key) => ({ key, name: key })),
+    bars: barKeys.map((key) => ({ key, name: key })),
     valueKey: numeric[0],
-    unit: "",
+    ...rateAxis,
+    unit: rateAxis.unit ?? "",
     xTickFormatter: axisFormatter,
-    note,
+    note: rateAxis.yDomain?.[0] > 0
+      ? `${note} 纵轴从 ${rateAxis.yDomain[0]}% 起，便于比较接近的比率。`
+      : note,
   };
 }

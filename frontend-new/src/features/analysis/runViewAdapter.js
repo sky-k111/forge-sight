@@ -1,5 +1,5 @@
 import { conciseFindingTitle, parseAnalysisNarrative } from "../../lib/narrative";
-import { buildBusinessKpis, buildChart } from "./chartBuilder";
+import { buildAutoYAxis, buildBusinessKpis, buildChart } from "./chartBuilder";
 
 export { parseAnalysisNarrative } from "../../lib/narrative";
 
@@ -194,6 +194,16 @@ function hydrateChart(chart) {
       minimumFractionDigits: digits,
       maximumFractionDigits: digits,
     });
+  }
+  if (next.type === "bar" && next.bars?.length && next.data?.length) {
+    const keys = next.bars.map((bar) => bar.key);
+    const focused = buildAutoYAxis(next.data, keys);
+    if (focused.unit === "%" && focused.yDomain?.[0] > 0) {
+      next.yDomain = focused.yDomain;
+      next.yTickFormatter = focused.yTickFormatter;
+      next.unit = "%";
+      next.note = `${next.note || ""} 纵轴从 ${focused.yDomain[0]}% 起，便于比较接近的比率。`.trim();
+    }
   }
   return next;
 }

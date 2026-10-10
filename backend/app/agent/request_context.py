@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import date, datetime
 from decimal import Decimal
 import json
+import re
 from typing import Any
 
 from app.agent.ids import new_id
@@ -175,7 +176,17 @@ def merge_intent(intent: AgentIntent, previous: dict[str, Any] | None) -> AgentI
             notes.append({"metrics": "指标", "time": "时间范围", "chart": "展示方式", "comparison": "比较条件", "filters": "筛选条件", "sort": "排序", "topN": "数量限制"}[name])
     old = [Dimension.model_validate(d) for d in prior.get("dimensions", [])]
     key = lambda d: (d.semantic, d.grain)
-    if intent.operation == "add_dimension":
+    # A short "那各工序呢" switches the grouping axis. Model patches can
+    # misclassify it as add_dimension and produce an unwanted 产线×工序 matrix.
+    explicit_axes = re.findall(r"各(工序|产线|产品|设备|车间|班次|缺陷类型)", intent.question)
+    switches_axis = (
+        len(explicit_axes) == 1
+        and not any(word in intent.question for word in ("同时", "再加上", "以及", "和各", "与各"))
+        and bool(old)
+    )
+    if switches_axis:
+        result.dimensions = [Dimension(semantic=explicit_axes[0], label=explicit_axes[0])]
+    elif intent.operation == "add_dimension":
         result.dimensions = old + [d for d in intent.dimensions if key(d) not in {key(o) for o in old}]
     elif intent.operation == "remove_dimension":
         result.dimensions = [d for d in old if key(d) not in {key(n) for n in intent.dimensions}]

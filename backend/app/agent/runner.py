@@ -524,6 +524,19 @@ def _persist_update(run_id: str, node: str, update: dict, state: dict) -> None:
 
         if node == "plan_tasks":
             planned = update.get("tasks") or []
+            # A rejected business plan can fall back to the fast task planner.
+            # Its provisional rows use the same (run_id, task_order) values but
+            # different task IDs, so remove only those unused plan rows first.
+            planned_ids = {item["id"] for item in planned}
+            provisional = session.query(AnalysisTask).filter_by(run_id=run.id).all()
+            for existing in provisional:
+                if (
+                    existing.id not in planned_ids
+                    and existing.status == "pending"
+                    and (existing.intent_json or {}).get("planStepId")
+                ):
+                    session.delete(existing)
+            session.flush()
             for item in planned:
                 if session.query(AnalysisTask).filter_by(id=item["id"]).first() is None:
                     session.add(

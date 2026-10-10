@@ -190,6 +190,15 @@ def test_publish_validation_recomputes_change_rate_and_requires_adjacent_compari
     assert {"V-HARD-006", "V-HARD-010"} <= codes
 
 
+def test_publish_validation_accepts_equal_calendar_weeks_with_inclusive_end():
+    content = _content()
+    content["identity"]["periodEnd"] = "2026-08-09T23:59:59"
+
+    result = validate_for_publish(content)
+
+    assert "V-HARD-006" not in {item["code"] for item in result["rules"]}
+
+
 def test_publish_validation_requires_previous_value_for_change_rate():
     content = _content()
     content["metrics"][0]["previousValue"] = None

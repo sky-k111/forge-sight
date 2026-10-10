@@ -29,6 +29,26 @@ def test_add_dimension_preserves_absolute_time_and_month():
     assert task["metricHint"] == "产量"
 
 
+def test_each_process_followup_replaces_line_even_if_model_calls_it_addition():
+    prior = {"runId": "r1", "agentIntent": AgentIntent.model_validate({
+        "kind": "analysis", "question": "按产线查看工序良率",
+        "metrics": [{"semantic": "工序良率"}],
+        "dimensions": [{"semantic": "产线"}],
+        "time": {"mode": "absolute", "start": "2026-06-01", "end": "2026-07-01"},
+    }).model_dump(mode="json")}
+    intent = AgentIntent(
+        kind="analysis", question="那各工序呢？也按从低到高排序。",
+        relation="refine_previous", operation="add_dimension",
+        changedFields=["dimensions"], dimensions=[{"semantic": "工序"}],
+    )
+
+    merged = merge_intent(intent, prior)
+
+    assert [dimension.semantic for dimension in merged.dimensions] == ["工序"]
+    assert merged.metrics[0].semantic == "工序良率"
+    assert merged.time.start == "2026-06-01"
+
+
 def test_replace_and_presentation_do_not_drop_unmentioned_fields():
     intent = AgentIntent(kind="analysis", question="改按车间", relation="refine_previous", operation="replace_dimension", dimensions=[{"semantic": "车间"}])
     assert [d.semantic for d in merge_intent(intent, previous()).dimensions] == ["车间"]
